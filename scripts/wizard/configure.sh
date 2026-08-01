@@ -199,13 +199,15 @@ section_secrets() {
   cfg_set MONGO_PASSWORD "${UI_VALUE}"
 
   printf '\n'
+  ui_text "A licence lifts two limits: the 10-account cap and the 500-a-month automation allowance. Everything else in TaskSense is the same either way — there is no feature behind it."
   if ui_yesno "Do you have a licence key?" n; then
     ui_ask "LICENSE_KEY" "" \
-      "Starts with tsl_. Verified offline — no activation server, no phone-home, no usage reporting. Without one the instance runs on free-tier limits, and an expired licence never blocks access to your data."
+      "Starts with tsl_. Verified offline — no activation server, no phone-home, no usage reporting. Copy the whole line, including the tsl_ prefix: a key cut short fails as \"signature does not verify\"."
     cfg_set LICENSE_KEY "${UI_VALUE}"
   else
     cfg_set LICENSE_KEY ""
-    note "running on free-tier limits — add LICENSE_KEY later and restart"
+    note "running on free-tier limits — 10 accounts, 500 automation runs a month"
+    ui_hint "Ask for one at ${SUPPORT_EMAIL}, with the organisation it is for and how many people will have accounts. It is one line added to .env, then a restart — docs/14-LICENSING.md."
   fi
 }
 

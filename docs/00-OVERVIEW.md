@@ -102,9 +102,14 @@ A signed `LICENSE_KEY` enables the licensed tier. It is **verified offline** wit
 an Ed25519 signature: no activation server, no phone-home, no usage reporting.
 The key encodes your organisation, a seat count and an optional expiry.
 
-Without a key the instance runs on free-tier limits (seat cap, monthly
-automation cap). **An expired licence never blocks access to your data** — the
-instance keeps serving; the licensed features stop.
+Without a key the instance runs on free-tier limits: **10 accounts** and **500
+automation runs a month**. Everything else is the same software — there is no
+feature behind the licence.
+
+**An expired licence never blocks access to your data**, and going over the seat
+count never stops anybody signing in: on-premise the overage is reported rather
+than enforced. Full detail, including how to read the state and what to do about
+each one: [14-LICENSING](14-LICENSING.md).
 
 ---
 

@@ -119,7 +119,7 @@ verify_prompt() {
   "${SCRIPT_DIR}/verify-signature.sh" "${UI_VALUE}" || true
 }
 
-# A map, not a list — a directory listing of thirteen files does not tell an
+# A map, not a list — a directory listing of fourteen files does not tell an
 # operator which one they need at 2am.
 doc_index() {
   cat <<EOF
@@ -128,6 +128,7 @@ doc_index() {
     docs/00-OVERVIEW.md          what this is, and what to decide before you start
     docs/11-SIZING.md            CPU, memory and disk for your number of users
     docs/13-REGISTRY-ACCESS.md   getting the image: token, mirror, or archive
+    docs/14-LICENSING.md         what the licence key does, and what it does not
 
   ${C_BOLD}Installing${C_OFF}
     docs/01-INSTALL-COMPOSE.md   one VM with Docker or Podman

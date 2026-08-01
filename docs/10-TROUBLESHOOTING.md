@@ -14,6 +14,29 @@ each with what is wrong and what to do about it.
 
 ---
 
+## Somebody cannot be added, or the plan says Free unexpectedly
+
+Check what the licence actually is before anything else:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" \
+  http://localhost:3000/api/v1/billing/status | jq .licence
+```
+
+| `state` | Cause | Fix |
+| --- | --- | --- |
+| `absent` | No `LICENSE_KEY` in `.env` | Free-tier limits are correct behaviour. [14-LICENSING](14-LICENSING.md) |
+| `invalid` | The key was copied short, or altered | It must start with `tsl_` and include everything after it, on one line |
+| `expired` | The date inside the key has passed | Renew at info@meiksense.io. Your data is untouched |
+| `valid` | The licence is fine | The limit you hit is the one in the key — check `over` on `/api/v1/team/seats` |
+
+**On-premise, exceeding the seat count does not block sign-in.** If somebody
+genuinely cannot get in, the cause is not seats — check the directory
+configuration in [05-IDENTITY](05-IDENTITY.md).
+
+A change to `LICENSE_KEY` takes effect on restart; it is read once at startup.
+
+
 ## "Authentication failed", with the right password in `.env`
 
 ```

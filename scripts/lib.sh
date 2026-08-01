@@ -180,8 +180,16 @@ require_env_file() {
 
 # Read one value out of .env without sourcing it: the file holds secrets that
 # may contain characters the shell would interpret.
+#
+# An absent file is "nothing is configured", not an error — the guided installer
+# asks about the image registry before any .env exists. Without this guard GNU
+# sed exits 2 on the missing file, `set -o pipefail` propagates it, and `set -e`
+# ends the script with no message at all. It survives on Alpine, whose busybox
+# sed is quieter, which is exactly the kind of difference that reaches a
+# customer's RHEL host and not our test container.
 env_value() {
   local key="$1"
+  [ -f "${ENV_FILE}" ] || return 0
   sed -n "s/^${key}=//p" "${ENV_FILE}" | tail -n1
 }
 

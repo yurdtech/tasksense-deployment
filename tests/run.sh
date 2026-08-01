@@ -32,6 +32,7 @@ else
   printf '\n  shellcheck not installed — skipped\n'
 fi
 
+run "fresh clone" ./tests/fresh-clone.sh
 run "renderer" ./tests/wizard-render.sh
 run "flow" ./tests/wizard-flow.sh
 

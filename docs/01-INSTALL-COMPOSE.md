@@ -78,6 +78,9 @@ cp compose/.env.example compose/.env && ${EDITOR:-vi} compose/.env
 ./scripts/install.sh --offline
 ```
 
+The archive carries `linux/amd64` images. On any other architecture, pull from
+the registry or mirror into your own — the script checks and tells you.
+
 **Into your own registry** (run where you can reach both):
 
 ```bash

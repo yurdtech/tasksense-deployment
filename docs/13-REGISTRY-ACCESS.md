@@ -99,6 +99,13 @@ cp compose/.env.example compose/.env && ${EDITOR:-vi} compose/.env
 No registry credentials are needed on that host — nothing there ever contacts a
 registry.
 
+> **The archive carries `linux/amd64` images.** A `docker-archive` holds one
+> image, not a manifest list, so the offline bundle has to pick an architecture,
+> and it picks the one datacentre servers run. The registry serves both amd64
+> and arm64 — if you run something else, pull from it or mirror into your own,
+> as above. `install.sh --offline` checks the host architecture first and says
+> so, rather than loading images that then refuse to start.
+
 ---
 
 ## About the token

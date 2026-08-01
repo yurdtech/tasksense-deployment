@@ -43,6 +43,26 @@ if [ "${MODE}" = "offline" ]; then
   shopt -u nullglob
   [ ${#ARCHIVES[@]} -gt 0 ] || die "no image archives in ${IMAGE_DIR}"
 
+  # The offline archive carries linux/amd64. Loading it on arm64 succeeds and
+  # then fails at `docker run` with "exec format error", which reads as a broken
+  # image rather than a wrong one. Say it here, where the fix is obvious.
+  HOST_ARCH="$("${RUNTIME}" info --format '{{.Architecture}}' 2>/dev/null || uname -m)"
+  case "${HOST_ARCH}" in
+    x86_64 | amd64) : ;;
+    *)
+      BUNDLED="$(sed -n 's/^bundledArch=//p' "${ROOT_DIR}/VERSION" 2>/dev/null || true)"
+      die "this host is ${HOST_ARCH}, and the offline archive carries ${BUNDLED:-linux/amd64}" \
+          "The images would load and then fail to start." \
+          "" \
+          "The registry serves both architectures. Either pull from it:" \
+          "  docker login ghcr.io -u <username> && ./scripts/install.sh" \
+          "" \
+          "or mirror the right architecture into your own registry from a machine" \
+          "that can reach ghcr.io:" \
+          "  ./scripts/load-images.sh --registry <your-registry>/tasksense"
+      ;;
+  esac
+
   for archive in "${ARCHIVES[@]}"; do
     printf '  loading %s ... ' "$(basename "${archive}")"
     "${RUNTIME}" load -i "${archive}" >/dev/null || die "failed to load ${archive}"

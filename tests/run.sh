@@ -34,6 +34,8 @@ fi
 
 run "fresh clone" ./tests/fresh-clone.sh
 run "terminal" ./tests/terminal.sh
+run "menu" ./tests/menu.sh
+run "registry login" ./tests/registry-login.sh
 run "renderer" ./tests/wizard-render.sh
 run "flow" ./tests/wizard-flow.sh
 

@@ -203,9 +203,20 @@ ensure_registry_login() {
     return 0
   fi
 
+  # A stored credential is not a working one.
+  #
+  # Signing in to ghcr.io only proves the token is a token. Whether it can read
+  # *this* package is a separate question the registry does not answer until the
+  # pull — so a mistyped or wrong-scope token gets "Login Succeeded", is written
+  # to config.json, and then every later run reports the operator as signed in
+  # while nothing they do works. Say what is actually known, and offer the way out.
   if have_registry_login "${host}"; then
-    ok "already signed in to ${host}"
-    return 0
+    note "a credential for ${host} is already stored on this host"
+    note "whether it can read this image only shows at the pull"
+    if ! confirm "  Sign in again with a different token?"; then
+      return 0
+    fi
+    "${RUNTIME}" logout "${host}" >/dev/null 2>&1 || true
   fi
 
   prompt_registry_login "${host}"

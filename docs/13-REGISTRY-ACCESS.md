@@ -6,6 +6,17 @@ nothing else.
 
 ---
 
+## The guided installer asks for it
+
+```bash
+./tasksense
+```
+
+At the point the image is needed it asks for the username and token, hides the
+token as you type it, signs in, and tells you where to ask if you do not have
+one yet. Nothing else to read; the rest of this page is for the cases it does
+not cover.
+
 ## Pulling directly
 
 ```bash
@@ -13,10 +24,11 @@ echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u <username> --password
 docker pull ghcr.io/yurdtech/tasksense:1.0.0
 ```
 
-`<username>` is the account name we gave you alongside the token.
+`<username>` is the account name we gave you alongside the token. It is not your
+own GitHub login, and you do not need a GitHub account to pull.
 
-`install.sh` does this for you once you are logged in — the token only needs to
-be entered once per host, and Docker stores it in `~/.docker/config.json`.
+Signing in is per host, not per pull — Docker stores the credential in
+`~/.docker/config.json`, and `install.sh` uses it from there.
 
 ### Verify what you pulled
 

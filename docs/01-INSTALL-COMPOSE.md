@@ -67,7 +67,7 @@ TASKSENSE_VERSION=1.0.0                          # pin it; never "latest"
 APP_URL=https://tasksense.bank.internal          # what users type
 FIRST_ADMIN_EMAIL=admin@bank.internal            # becomes the administrator
 STORAGE_SECRET=$(openssl rand -base64 32)        # encrypts stored credentials
-MONGO_PASSWORD=$(openssl rand -base64 24)        # the database account
+MONGO_PASSWORD=$(openssl rand -hex 24)           # the database account — hex, see below
 ```
 
 > **`STORAGE_SECRET` is not recoverable.** It encrypts the credentials you later

@@ -25,7 +25,7 @@ The application will not start without these.
 | `TASKSENSE_VERSION` | `1.0.0` | Pin it. `latest` means a restart can move you to a different version. |
 | `APP_URL` | `https://tasksense.bank.internal` | What users type. Sign-in redirects are built from it. |
 | `STORAGE_SECRET` | `openssl rand -base64 32` | Min 32 chars. Encrypts stored credentials. **Not recoverable — back it up.** |
-| `MONGO_USER` / `MONGO_PASSWORD` | `tasksense` / `openssl rand -base64 24` | The database account. |
+| `MONGO_USER` / `MONGO_PASSWORD` | `tasksense` / `openssl rand -hex 24` | The database account. **Hex, not base64.** The password is substituted into a connection string, and a URI reads `/ : @ ? # [ ] %` as structure — one of those ends the password early and the driver rejects the whole URI with *Password contains unescaped characters*, before connecting to anything. |
 | `FIRST_ADMIN_EMAIL` | `admin@bank.internal` | First install only. Becomes the administrator of the new workspace. |
 
 `DEPLOYMENT_MODE=onprem` and `NODE_ENV=production` are set by the compose file

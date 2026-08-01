@@ -259,6 +259,36 @@ ui_ask() {
   done
 }
 
+# The generator, on its own so it can be tested without a terminal.
+#
+# `uri` means hex: nothing in it needs escaping anywhere. 24 bytes is 48
+# characters and 192 bits, so nothing is given up for the safety. base64 stays
+# for values that never enter a URI, where the shorter string is nicer to handle.
+ui_generate_secret() {
+  local charset="$1" bytes="$2" value
+
+  # Without this, a host with no openssl generates an empty string and says
+  # "generated (0 characters)". The empty password then makes a URI that parses
+  # perfectly — `mongodb://tasksense:@mongo:27017/` is valid — so nothing
+  # downstream objects until the database refuses the connection, by which point
+  # the cause is several steps behind. A test of this generator passed against
+  # exactly that, twice, before the assertion below existed.
+  command -v openssl >/dev/null 2>&1 || die "openssl is not installed" \
+    "It generates the secrets, and there is no safe fallback worth writing." \
+    "  RHEL/Rocky:  sudo dnf install openssl" \
+    "  Debian/Ubuntu:  sudo apt install openssl"
+
+  if [ "${charset}" = "uri" ]; then
+    value="$(openssl rand -hex "${bytes}" | tr -d '\n')"
+  else
+    value="$(openssl rand -base64 "${bytes}" | tr -d '\n')"
+  fi
+
+  [ -n "${value}" ] || die "openssl produced nothing" \
+    "Generating a secret is not something to guess at, so this stops here."
+  printf '%s' "${value}"
+}
+
 # Trims a typed secret, and says so.
 #
 # Pasting a password out of a password manager or an email brings a trailing
@@ -278,9 +308,18 @@ ui_trim_secret() {
 
 # A secret, with generation offered first — an operator asked to invent a
 # 32-character key will reach for something memorable, which is the problem.
+# ui_secret NAME "explanation" BYTES [uri]
+#
+# `uri` generates from hex instead of base64, for a value that ends up inside a
+# connection string. base64 emits `+`, `/` and `=`, and a MongoDB URI rejects
+# all three in the password position — `mongodb://user:aB3+xY/9zQ==@mongo/`
+# fails to parse before a single packet is sent. Two in three generated
+# passwords contained one, so most installations died at first boot with
+# "MongoParseError: Password contains unescaped characters", which names neither
+# the setting nor the fact that we chose the value.
 ui_secret() {
   ui_require_tty
-  local name="$1" explain="$2" bytes="${3:-32}" choice answer
+  local name="$1" explain="$2" bytes="${3:-32}" charset="${4:-base64}" choice answer problem
 
   printf '\n  %s%s%s\n' "$C_BOLD" "${name}" "$C_OFF"
   [ -n "${explain}" ] && ui_hint "${explain}"
@@ -303,13 +342,21 @@ ui_secret() {
   IFS= read -r choice
   case "${choice:-g}" in
     t|T)
-      printf '  '
-      read -rs answer
-      printf '\n'
-      UI_VALUE="$(ui_trim_secret "${answer}")"
+      while true; do
+        printf '  '
+        read -rs answer
+        printf '\n'
+        answer="$(ui_trim_secret "${answer}")"
+        if [ "${charset}" = "uri" ] && ! problem="$(ui_valid_uri_secret "${answer}")"; then
+          warn "${problem}"
+          continue
+        fi
+        UI_VALUE="${answer}"
+        break
+      done
       ;;
     *)
-      UI_VALUE="$(openssl rand -base64 "${bytes}" | tr -d '\n')"
+      UI_VALUE="$(ui_generate_secret "${charset}" "${bytes}")"
       ok "generated (${#UI_VALUE} characters)"
       ;;
   esac
@@ -362,6 +409,21 @@ ui_valid_port() {
     *) [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && return 0
        printf 'must be between 1 and 65535'; return 1 ;;
   esac
+}
+
+# For anything that ends up in a connection string. The reserved characters are
+# not a matter of taste: the URI parser splits on them, so a password containing
+# one is read as the end of the password and the beginning of something else.
+ui_valid_uri_secret() {
+  case "$1" in
+    *[/:@?\#%]*|*'['*|*']'*)
+      printf 'cannot contain / : @ ? # %% [ or ] — the connection string is a URI and those end the password early. Letters, digits and . _ ~ - are safe'
+      return 1
+      ;;
+  esac
+  [ "${#1}" -ge 12 ] && return 0
+  printf 'at least 12 characters'
+  return 1
 }
 
 ui_valid_secret() {

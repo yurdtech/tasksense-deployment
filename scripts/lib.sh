@@ -222,6 +222,50 @@ ensure_registry_login() {
   prompt_registry_login "${host}"
 }
 
+# ── State left by earlier installs ───────────────────────────────────────────
+
+# The volume named in docker-compose.yml.
+MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
+
+# MongoDB writes MONGO_INITDB_ROOT_USERNAME and _PASSWORD exactly once: when it
+# first creates its data directory. An existing volume keeps whatever it was
+# created with, and a new password in .env is simply ignored — the application
+# then starts, fails to authenticate, and says "Authentication failed" without
+# mentioning that a volume is involved at all.
+#
+# Which is a fair description of what happens after any install that did not
+# finish: the second attempt uses a new password against the first attempt's
+# database, and the error names neither.
+mongo_volume_exists() {
+  "${RUNTIME}" volume inspect "${MONGO_VOLUME}" >/dev/null 2>&1
+}
+
+# What to say about it. Separate from the check so install.sh can print it after
+# the fact and the wizard can print it before.
+explain_stale_mongo_volume() {
+  cat >&2 <<EOF
+
+  ${C_BOLD}A MongoDB volume from an earlier install is on this host.${C_OFF}
+
+  MongoDB sets its username and password only when it first creates its data
+  directory. ${MONGO_VOLUME} already exists, so it kept the credentials it was
+  created with, and the ones in ${ENV_FILE} are ignored — which is why
+  authentication fails with a password that is demonstrably in the file.
+
+  If that database holds nothing you need — an install that did not finish,
+  most often — remove it and start again:
+
+    ${COMPOSE[*]:-docker compose} -f ${COMPOSE_DIR}/docker-compose.yml down -v
+
+  ${C_DIM}-v is the part that matters: without it the volume survives and the
+  next attempt fails the same way.${C_OFF}
+
+  If it holds data you need, put the original password back in ${ENV_FILE}
+  instead. See docs/10-TROUBLESHOOTING.md.
+
+EOF
+}
+
 # ── Configuration ────────────────────────────────────────────────────────────
 require_env_file() {
   [ -f "${ENV_FILE}" ] || die "no configuration at ${ENV_FILE}" \

@@ -20,12 +20,18 @@ not cover.
 ## Pulling directly
 
 ```bash
-echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u <username> --password-stdin
+echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u yurdtech --password-stdin
 docker pull ghcr.io/yurdtech/tasksense:1.0.0
 ```
 
-`<username>` is the account name we gave you alongside the token. It is not your
-own GitHub login, and you do not need a GitHub account to pull.
+The username is `yurdtech`. It is the account the token belongs to, not yours —
+**you do not need a GitHub account to pull.** The registry authenticates the
+token and does not check the username at all, so if a colleague's notes say
+something else, either works.
+
+The token is the whole credential. Guard it accordingly, and if it is ever
+exposed tell us and we will revoke that one; it is issued per customer, so
+revoking yours affects nobody else.
 
 Signing in is per host, not per pull — Docker stores the credential in
 `~/.docker/config.json`, and `install.sh` uses it from there.
@@ -64,7 +70,7 @@ If you run Harbor, Nexus or Artifactory, pull once at the boundary and serve
 internally from there. Run this where you can reach both:
 
 ```bash
-docker login ghcr.io -u <username> -p "$TASKSENSE_REGISTRY_TOKEN"
+docker login ghcr.io -u yurdtech -p "$TASKSENSE_REGISTRY_TOKEN"
 docker login harbor.bank.internal
 
 ./scripts/load-images.sh --registry harbor.bank.internal/tasksense

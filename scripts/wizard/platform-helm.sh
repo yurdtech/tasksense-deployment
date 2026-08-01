@@ -182,7 +182,7 @@ cat <<EOF
     kubectl create namespace tasksense
     kubectl create secret docker-registry ghcr -n tasksense \\
       --docker-server=ghcr.io \\
-      --docker-username=<username> --docker-password=<token>
+      --docker-username=${REGISTRY_ACCOUNT} --docker-password=<your token>
 
   ${C_DIM}No token yet? Ask at ${SUPPORT_EMAIL}, with the organisation the licence
   is for and who should receive it. docs/13-REGISTRY-ACCESS.md${C_OFF}

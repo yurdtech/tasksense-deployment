@@ -55,7 +55,7 @@ if [ "${MODE}" = "offline" ]; then
           "The images would load and then fail to start." \
           "" \
           "The registry serves both architectures. Either pull from it:" \
-          "  docker login ghcr.io -u <username> && ./scripts/install.sh" \
+          "  docker login ghcr.io -u ${REGISTRY_ACCOUNT} && ./scripts/install.sh" \
           "" \
           "or mirror the right architecture into your own registry from a machine" \
           "that can reach ghcr.io:" \

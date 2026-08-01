@@ -61,7 +61,7 @@ received a **registry token** from us; it grants read access to this one package
 and nothing else.
 
 ```bash
-echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u <username> --password-stdin
+echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u yurdtech --password-stdin
 docker pull ghcr.io/yurdtech/tasksense:1.0.0
 ```
 

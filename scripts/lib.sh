@@ -102,6 +102,14 @@ compose() {
 # Where to ask for a registry token.
 SUPPORT_EMAIL="${SUPPORT_EMAIL:-info@meiksense.io}"
 
+# The account the tokens we issue belong to.
+#
+# GHCR authenticates the token and ignores the username entirely — verified:
+# `docker login ghcr.io -u definitely-not-a-real-account` with a valid token
+# succeeds and the pull works, while a valid username with a bad token gets
+# `denied: denied`. So this is a default to save typing, not a credential.
+REGISTRY_ACCOUNT="${REGISTRY_ACCOUNT:-yurdtech}"
+
 # The registry the configured image comes from. An image mirrored into your own
 # registry needs no token from us, so everything below skips.
 registry_host() {
@@ -138,7 +146,7 @@ prompt_registry_login() {
   if [ ! -t 0 ]; then
     die "not signed in to ${host}, and there is no terminal to ask on" \
         "Sign in first, then run this again:" \
-        "  echo \"\$TASKSENSE_REGISTRY_TOKEN\" | ${RUNTIME} login ${host} -u <username> --password-stdin"
+        "  echo \"\$TASKSENSE_REGISTRY_TOKEN\" | ${RUNTIME} login ${host} -u ${REGISTRY_ACCOUNT} --password-stdin"
   fi
 
   step "Registry access"
@@ -155,8 +163,12 @@ prompt_registry_login() {
 
 EOF
 
-  read -r -p "  Username: " username
-  [ -n "${username}" ] || die "no username given" "It is the account name sent with your token, not your own GitHub login."
+  # Defaulted, because it is not a credential and getting it "wrong" cannot
+  # fail. Asking for it as though it mattered invites somebody to type their own
+  # GitHub login, get denied for an unrelated reason, and spend the next ten
+  # minutes on the one field that has no effect.
+  read -r -p "  Username [${REGISTRY_ACCOUNT}]: " username
+  username="${username:-${REGISTRY_ACCOUNT}}"
 
   # Silent: a token pasted into a terminal ends up in scrollback, and from
   # there into a screenshot in a ticket.
@@ -166,13 +178,15 @@ EOF
   [ -n "${token}" ] || die "no token given" "Ask for one at ${SUPPORT_EMAIL}."
 
   if printf '%s' "${token}" | "${RUNTIME}" login "${host}" -u "${username}" --password-stdin >/dev/null 2>&1; then
-    ok "signed in to ${host} as ${username}"
+    ok "signed in to ${host}"
     return 0
   fi
 
-  die "${host} rejected those credentials" \
-      "The username is the account name sent with your token, not your own GitHub login." \
-      "If the token has expired, ask for a replacement at ${SUPPORT_EMAIL}." \
+  # Only the token can be wrong. Naming the username here would send somebody to
+  # check a field the registry never looks at.
+  die "${host} rejected that token" \
+      "Check it was copied whole — they are long, and a truncated one fails exactly like an expired one." \
+      "If it has expired, ask for a replacement at ${SUPPORT_EMAIL}." \
       "See docs/13-REGISTRY-ACCESS.md."
 }
 

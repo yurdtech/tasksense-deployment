@@ -38,7 +38,11 @@ versions need an upgrade — see [docs/08-UPGRADE.md](docs/08-UPGRADE.md).
 ## What we publish with each release
 
 - An SBOM (CycloneDX)
-- A Trivy scan; CRITICAL and HIGH findings block the release
+- A Trivy scan for fixable CRITICAL and HIGH vulnerabilities, published with the
+  release. It reports rather than blocks — see
+  [docs/06-SECURITY.md](docs/06-SECURITY.md#supply-chain) for why, and for what
+  keeps the count at zero. The scan is reproducible against the published
+  digest if you want to gate on it yourself.
 - A cosign signature over the image and over the offline archive's checksums
 
 Verify before installing:

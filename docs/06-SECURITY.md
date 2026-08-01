@@ -241,8 +241,26 @@ logs contain user names and task titles.
 - Runs as **uid 1001, non-root**, with a read-only root filesystem, all Linux
   capabilities dropped and `no-new-privileges` set. On OpenShift it runs under
   an arbitrary uid in group 0 (`restricted-v2`).
-- Every release is scanned with **Trivy**; CRITICAL and HIGH findings fail the
-  build.
+- Every release is scanned with **Trivy** for CRITICAL and HIGH vulnerabilities
+  that have a fix available. The result is published with the release, and the
+  current image reports **zero**.
+
+  The scan reports rather than blocks. New advisories land continuously against
+  transitive dependencies, and a release that is otherwise ready is not held
+  back by one published an hour earlier — the fix for that is a dependency
+  bump, which ships as its own change. Findings are never silent: they appear
+  in the build summary and raise a warning on the run.
+
+  Two things keep the count at zero rather than merely visible: the runtime
+  image contains no package manager (the bundled npm CLI carried its own
+  vendored dependency tree, which was the source of most findings including the
+  only CRITICAL), and the remainder are pinned above their advisories through
+  dependency overrides.
+
+  If you require a hard gate on your own copy, run `trivy image` against the
+  digest before promoting it — the scan is reproducible and the SBOM below tells
+  you exactly what is inside.
+
 - An **SBOM** (CycloneDX) is published with each release.
 - Images and release archives are **signed with cosign**. Verify before
   installing:

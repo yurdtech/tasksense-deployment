@@ -67,6 +67,7 @@ answers = [
     "25\n",                                 # STORAGE_MAX_FILE_MB
     "n\n",                                  # AI features?
     "1",                                    # log format: json
+    "1",                                    # log level: log
     "n\n",                                  # metrics?
     "n\n",                                  # egress allowlist?
     "2",                                    # sizing: up to 200
@@ -176,6 +177,10 @@ check "LDAP_USER_FILTER keeps its braces" "(sAMAccountName={{username}})" \
 check "no mail configured" "" "$(value_of "${OUT}" SMTP_HOST)"
 check "no OIDC configured" "" "$(value_of "${OUT}" OIDC_ISSUER)"
 check "AI off" "off" "$(value_of "${OUT}" AGENT_DISPATCHER)"
+check "log format" "json" "$(value_of "${OUT}" LOG_FORMAT)"
+# Asked for, not copied from .env.example. It was copied, and the example held
+# a value the application rejects — see tests/env-example.sh.
+check "log level is one the application accepts" "log" "$(value_of "${OUT}" LOG_LEVEL)"
 
 # The sizing menu.
 # docs/11-SIZING.md gives 4 cores and 8 GB for 200 users, for the host; the

@@ -379,7 +379,20 @@ section_operations() {
     "json|one object per line, for Splunk, QRadar or Elastic" \
     "text|human-readable, for reading by eye during an install"
   if [ "${UI_CHOICE}" = "1" ]; then cfg_set LOG_FORMAT json; else cfg_set LOG_FORMAT text; fi
-  cfg_set LOG_LEVEL "$(example_default LOG_LEVEL)"
+
+  printf '\n'
+  ui_text "These are the application's own level names, not syslog's. There is no \"info\" — \"log\" is the ordinary one that means it."
+  ui_menu "How much should it log?" \
+    "log|the ordinary level — startup, sign-ins, errors" \
+    "warn|quieter: only what needs attention" \
+    "debug|while diagnosing something; noisy" \
+    "verbose|everything, including per-request detail"
+  case "${UI_CHOICE}" in
+    1) cfg_set LOG_LEVEL log ;;
+    2) cfg_set LOG_LEVEL warn ;;
+    3) cfg_set LOG_LEVEL debug ;;
+    4) cfg_set LOG_LEVEL verbose ;;
+  esac
 
   printf '\n'
   if ui_yesno "Expose Prometheus metrics?" n; then
@@ -469,7 +482,8 @@ configure_all() {
 
 # --edit: one section at a time, against what is already there.
 configure_edit() {
-  load_current
+  local target="${1:-${ENV_FILE}}"
+  load_current "${target}"
   while true; do
     ui_menu "Which settings?" \
       "Version and access|release, bind address, port" \
@@ -500,13 +514,13 @@ configure_edit() {
   done
 
   configure_summary
-  ui_yesno "Write these to ${ENV_FILE}?" y || { note "nothing changed"; return 1; }
+  ui_yesno "Write these to ${target}?" y || { note "nothing changed"; return 1; }
 
   # Keep the previous file. A reconfigure that loses a working setting is
   # recoverable if the old one is still on disk.
-  cp "${ENV_FILE}" "${ENV_FILE}.bak"
-  render_env "${ENV_FILE}"
-  ok "written — previous version kept as .env.bak"
+  [ -f "${target}" ] && cp "${target}" "${target}.bak"
+  render_env "${target}"
+  ok "written"
   return 0
 }
 
@@ -514,6 +528,11 @@ load_example_defaults
 
 case "${1:-}" in
   --edit) ui_require_tty; configure_edit ;;
+  --edit-candidate)
+    # The same menu, against the file the installer is still assembling — used
+    # when the live checks reject the configuration itself rather than one of
+    # the things it points at.
+    ui_require_tty; configure_edit "${2:?usage: --edit-candidate <path>}" ;;
   --collect)
     # For the wizard: ask everything, write to a candidate file, do not confirm
     # and do not touch compose/.env. The installer tests that candidate against

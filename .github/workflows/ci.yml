@@ -103,5 +103,19 @@ jobs:
       - name: configuration renderer — .env stays equivalent to .env.example
         run: ./tests/wizard-render.sh
 
+      # Skips loudly without a registry credential rather than passing quietly.
+      # Add a read-only GHCR token as the GHCR_TOKEN secret to turn it on: it is
+      # the only check that can tell whether the values we ship are ones the
+      # application accepts, because the schema lives in the image.
+      - name: .env.example is a configuration that starts
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -n "${GHCR_TOKEN:-}" ]; then
+            printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u yurdtech --password-stdin
+          fi
+          ./tests/env-example.sh
+
       - name: the flow, driven through a real pty
         run: ./tests/wizard-flow.sh

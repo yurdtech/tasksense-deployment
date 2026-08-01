@@ -154,14 +154,28 @@ if [ "${OFFLINE}" = "1" ]; then
     die "could not load the images" "See docs/13-REGISTRY-ACCESS.md."
   fi
 else
-  if ! ui_spinner "pulling ${IMAGE}" -- "${RUNTIME}" pull "${IMAGE}"; then
+  # The pull is where a bad token finally shows itself — `docker login` accepts
+  # one that cannot read this package — so a refusal here is offered a second
+  # try rather than ending the installation. Bounded, because an expired token
+  # will not become valid by being typed again.
+  PULL_ATTEMPT=1
+  while ! ui_spinner "pulling ${IMAGE}" -- "${RUNTIME}" pull "${IMAGE}"; do
     ui_show_log 15
-    die "could not pull ${IMAGE}" \
-        "If the tag does not exist, check the releases page for the right version." \
-        "If access was denied, the token may have expired — ask at ${SUPPORT_EMAIL}." \
-        "If there is no route to ghcr.io, install from an archive instead." \
-        "See docs/13-REGISTRY-ACCESS.md."
-  fi
+    if [ "$(registry_host)" != "ghcr.io" ] || [ "${PULL_ATTEMPT}" -ge 3 ]; then
+      die "could not pull ${IMAGE}" \
+          "If the tag does not exist, check the releases page for the right version." \
+          "If access was denied, the token may have expired — ask at ${SUPPORT_EMAIL}." \
+          "If there is no route to ghcr.io, install from an archive instead." \
+          "See docs/13-REGISTRY-ACCESS.md."
+    fi
+    printf '\n'
+    ui_text "Signing in succeeded, so the credential is stored — but it cannot read this image. A token typed short, or issued for something else, looks exactly like this: the sign-in works and the pull does not."
+    ui_yesno "Try a different token?" y || die "stopped at the image" \
+      "Nothing was written. Ask for a token at ${SUPPORT_EMAIL} and run ./tasksense again."
+    "${RUNTIME}" logout ghcr.io >/dev/null 2>&1 || true
+    prompt_registry_login ghcr.io
+    PULL_ATTEMPT=$((PULL_ATTEMPT + 1))
+  done
 fi
 
 # ── 7. Live checks ───────────────────────────────────────────────────────────

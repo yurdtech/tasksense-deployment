@@ -83,6 +83,17 @@ ui_plain() {
   printf '%s' "${out:-${text}}"
 }
 
+# Cut to a character count, with an ellipsis when something was lost. Counted in
+# characters rather than bytes, which the UTF-8 locale settled in lib.sh makes
+# true — the same reason the banner pads correctly.
+ui_fit() {
+  local text="$1" width="$2"
+  [ "${width}" -lt 8 ] && width=8
+  [ "${#text}" -le "${width}" ] && { printf '%s' "${text}"; return; }
+  if [ "${UI_UTF8}" = "1" ]; then printf '%s…' "${text:0:$((width - 1))}"
+  else printf '%s...' "${text:0:$((width - 3))}"; fi
+}
+
 ui_clear() { [ -t 1 ] || return 0; printf '\033[2J\033[H'; }
 
 ui_banner() {
@@ -151,14 +162,20 @@ ui_menu() {
       local label desc=""
       label="$(ui_plain "${entry%%|*}")"
       [ "${entry}" != "${entry%%|*}" ] && desc="$(ui_plain "${entry#*|}")"
+      # A description long enough to wrap would print two rows where the
+      # arithmetic below counts one, and the menu would climb the screen exactly
+      # as it did when the arithmetic itself was wrong. Truncate instead.
+      desc="$(ui_fit "${desc}" $((UI_WIDTH - 32)))"
+      # \033[K clears to the end of the line before writing it: a shorter option
+      # drawn over a longer one otherwise leaves the tail of the old text behind.
       if [ "${i}" -eq "${selected}" ]; then
-        printf '  %s%s %s %-22s%s %s%s%s\n' "$C_CYAN" "$C_BOLD" "$UI_POINT" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
+        printf '\033[K  %s%s %s %-22s%s %s%s%s\n' "$C_CYAN" "$C_BOLD" "$UI_POINT" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
       else
-        printf '    %s%-22s%s %s%s%s\n' "$C_GREY" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
+        printf '\033[K    %s%-22s%s %s%s%s\n' "$C_GREY" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
       fi
       i=$((i + 1))
     done
-    printf '\n  %s%s or 1-%s to choose - Enter to confirm%s' "$C_DIM" "$UI_ARROWS" "${count}" "$C_OFF"
+    printf '\033[K\n\033[K  %s%s or 1-%s to choose - Enter to confirm%s' "$C_DIM" "$UI_ARROWS" "${count}" "$C_OFF"
 
     IFS= read -rsn1 key
     case "${key}" in
@@ -182,8 +199,16 @@ ui_menu() {
         ;;
       q|Q) printf '\033[?25h\n\n'; info "  cancelled"; exit 0 ;;
     esac
-    # Redraw in place: options + the hint line.
-    printf '\033[%sA\r' "$((count + 2))"
+    # Back to the first option, and no further.
+    #
+    # This printed `count` option rows, then a newline, then the hint — so the
+    # cursor is `count + 1` rows below where option one started. Moving up
+    # `count + 2`, as this did, put it one row higher every time round: the menu
+    # climbed the screen a line per keypress, erasing its own title and then
+    # whatever the installer had said above it. Nothing errors when it is wrong,
+    # which is why tests/menu.sh interprets the escape sequences rather than
+    # searching the bytes for text that is still technically present.
+    printf '\033[%sA\r' "$((count + 1))"
   done
 }
 

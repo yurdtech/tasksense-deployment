@@ -150,12 +150,12 @@ IMAGE="${IMAGE:-ghcr.io/yurdtech/tasksense}:${VERSION}"
 
 if [ "${OFFLINE}" = "1" ]; then
   if ! ui_spinner "loading images from ./images" -- "${SCRIPT_DIR}/load-images.sh" --offline; then
-    ui_show_log
+    ui_show_log 15
     die "could not load the images" "See docs/13-REGISTRY-ACCESS.md."
   fi
 else
   if ! ui_spinner "pulling ${IMAGE}" -- "${RUNTIME}" pull "${IMAGE}"; then
-    ui_show_log
+    ui_show_log 15
     die "could not pull ${IMAGE}" \
         "If the tag does not exist, check the releases page for the right version." \
         "If access was denied, the token may have expired — ask at ${SUPPORT_EMAIL}." \

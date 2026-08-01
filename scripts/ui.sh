@@ -83,7 +83,7 @@ ui_plain() {
   printf '%s' "${out:-${text}}"
 }
 
-ui_clear() { [ -t 1 ] && printf '\033[2J\033[H' || true; }
+ui_clear() { [ -t 1 ] || return 0; printf '\033[2J\033[H'; }
 
 ui_banner() {
   printf '\n%s%s%s%s%s\n' "$C_BLUE" "$UI_TL" "$(ui_rule $((UI_WIDTH - 2)))" "$UI_TR" "$C_OFF"

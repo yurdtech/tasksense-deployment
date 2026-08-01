@@ -24,6 +24,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Pinned. The runner's own shellcheck is whatever Ubuntu shipped, and it
+      # disagreed with the version on the machine these were written on: the
+      # first run of this workflow failed on two findings that were clean
+      # locally. A linter that reports different things in different places
+      # cannot be a gate — it is a coin toss that occasionally blocks a merge.
+      - name: install shellcheck 0.11.0
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin shellcheck-v0.11.0/shellcheck
+          shellcheck --version
+
       - name: shellcheck
         # -P SCRIPTDIR so `source=../lib.sh` resolves from the script that wrote
         # it rather than from wherever this happens to be invoked.

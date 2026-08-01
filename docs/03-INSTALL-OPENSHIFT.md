@@ -8,7 +8,18 @@ Requires OpenShift 4.10+.
 
 ---
 
-## The short version
+
+## Installing
+
+```bash
+./tasksense          # → OpenShift
+```
+
+Asks the same questions as the Kubernetes path, offers a Route instead of an
+Ingress, and adds `-f values-openshift.yaml` to the command it prints. It stops
+at the values file unless you tell it to run the install.
+
+By hand:
 
 ```bash
 oc new-project tasksense

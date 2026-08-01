@@ -30,6 +30,25 @@ else
   C_CYAN=""; C_BLUE=""; C_INV=""; C_GREY=""
 fi
 
+# Box drawing, in whichever alphabet this terminal can actually render. lib.sh
+# has already adopted a UTF-8 locale if the host has one and set UI_UTF8 to say
+# whether it worked.
+#
+# Two things break without it, and they break differently. The glyphs come out
+# as replacement characters — visibly wrong. And `${#text}`, which pads the
+# boxes, counts bytes rather than characters, so the frame is silently
+# misaligned by two columns for every em dash inside it. The second is the one
+# that would have shipped unnoticed.
+if [ "${UI_UTF8}" = "1" ]; then
+  UI_H="─"; UI_V="│"; UI_TL="┌"; UI_TR="┐"; UI_BL="└"; UI_BR="┘"
+  UI_POINT="❯"; UI_ARROWS="↑↓"
+  UI_SPIN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+else
+  UI_H="-"; UI_V="|"; UI_TL="+"; UI_TR="+"; UI_BL="+"; UI_BR="+"
+  UI_POINT=">"; UI_ARROWS="up/down"
+  UI_SPIN='|/-'
+fi
+
 UI_WIDTH="$( { tput cols 2>/dev/null || echo 80; } )"
 [ "${UI_WIDTH}" -gt 100 ] && UI_WIDTH=100
 [ "${UI_WIDTH}" -lt 60 ] && UI_WIDTH=60
@@ -50,27 +69,50 @@ ui_require_tty() {
 
 # ── output ───────────────────────────────────────────────────────────────────
 
+# Prose, in an alphabet this terminal can render.
+#
+# The explanatory text is full of em dashes and middle dots. On a terminal
+# without UTF-8 each one is three replacement characters dropped into the middle
+# of a sentence, which is worse than a hyphen: it reads as corruption, and the
+# operator starts wondering what else is broken. iconv transliterates rather
+# than mangles, and is on every glibc host.
+ui_plain() {
+  local text="$*" out
+  if [ "${UI_UTF8}" = "1" ]; then printf '%s' "${text}"; return; fi
+  out="$(printf '%s' "${text}" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null)" || out=""
+  printf '%s' "${out:-${text}}"
+}
+
 ui_clear() { [ -t 1 ] && printf '\033[2J\033[H' || true; }
 
 ui_banner() {
-  printf '\n%s┌%s┐%s\n' "$C_BLUE" "$(ui_rule $((UI_WIDTH - 2)))" "$C_OFF"
-  ui_banner_line "TaskSense — on-premise installer"
-  ui_banner_line "${1:-}"
-  printf '%s└%s┘%s\n' "$C_BLUE" "$(ui_rule $((UI_WIDTH - 2)))" "$C_OFF"
+  printf '\n%s%s%s%s%s\n' "$C_BLUE" "$UI_TL" "$(ui_rule $((UI_WIDTH - 2)))" "$UI_TR" "$C_OFF"
+  ui_banner_line "$(ui_plain "TaskSense — on-premise installer")"
+  ui_banner_line "$(ui_plain "${1:-}")"
+  printf '%s%s%s%s%s\n' "$C_BLUE" "$UI_BL" "$(ui_rule $((UI_WIDTH - 2)))" "$UI_BR" "$C_OFF"
 }
 
 ui_banner_line() {
   local text="$1" pad
   pad=$((UI_WIDTH - 4 - ${#text}))
   [ "${pad}" -lt 0 ] && pad=0
-  printf '%s│%s %s%*s %s│%s\n' "$C_BLUE" "$C_OFF" "$text" "${pad}" "" "$C_BLUE" "$C_OFF"
+  printf '%s%s%s %s%*s %s%s%s\n' "$C_BLUE" "$UI_V" "$C_OFF" "$text" "${pad}" "" "$C_BLUE" "$UI_V" "$C_OFF"
 }
 
-ui_rule() { printf '%*s' "$1" "" | tr ' ' '─'; }
+# Built by repetition rather than `printf | tr`: GNU tr does not handle
+# multibyte characters at all, in any locale, so `tr ' ' '─'` writes one third
+# of a box-drawing character per column. It looks right on macOS, whose BSD tr
+# does handle them — which is why this survived until it was run on RHEL.
+ui_rule() {
+  local n="$1" out=""
+  while [ "${#out}" -lt "${n}" ]; do out="${out}${UI_H}${UI_H}${UI_H}${UI_H}${UI_H}${UI_H}${UI_H}${UI_H}"; done
+  printf '%s' "${out:0:n}"
+}
 
 # "Step 4 of 9 — Sign-in", so nobody wonders how much is left.
 ui_step() {
-  local n="$1" total="$2" title="$3"
+  local n="$1" total="$2" title
+  title="$(ui_plain "$3")"
   printf '\n%s%s Step %s of %s %s%s  %s%s%s\n' \
     "$C_INV" "$C_BOLD" "$n" "$total" "$C_OFF" "" "$C_BOLD" "$title" "$C_OFF"
   printf '%s%s%s\n' "$C_GREY" "$(ui_rule "$UI_WIDTH")" "$C_OFF"
@@ -79,11 +121,11 @@ ui_step() {
 # Wraps explanatory text to the terminal, indented. `fold` is everywhere `fmt`
 # is not, and breaks on spaces with -s.
 ui_text() {
-  printf '%s\n' "$*" | fold -s -w $((UI_WIDTH - 4)) | sed 's/^/  /'
+  printf '%s\n' "$(ui_plain "$*")" | fold -s -w $((UI_WIDTH - 4)) | sed 's/^/  /'
 }
 
 ui_hint() {
-  printf '%s\n' "$*" | fold -s -w $((UI_WIDTH - 4)) | sed "s/^/  ${C_DIM}/;s/$/${C_OFF}/"
+  printf '%s\n' "$(ui_plain "$*")" | fold -s -w $((UI_WIDTH - 4)) | sed "s/^/  ${C_DIM}/;s/$/${C_OFF}/"
 }
 
 # ── menu ─────────────────────────────────────────────────────────────────────
@@ -106,16 +148,17 @@ ui_menu() {
   while true; do
     local i=0
     for entry in "${options[@]}"; do
-      local label="${entry%%|*}" desc=""
-      [ "${entry}" != "${label}" ] && desc="${entry#*|}"
+      local label desc=""
+      label="$(ui_plain "${entry%%|*}")"
+      [ "${entry}" != "${entry%%|*}" ] && desc="$(ui_plain "${entry#*|}")"
       if [ "${i}" -eq "${selected}" ]; then
-        printf '  %s%s ❯ %-22s%s %s%s%s\n' "$C_CYAN" "$C_BOLD" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
+        printf '  %s%s %s %-22s%s %s%s%s\n' "$C_CYAN" "$C_BOLD" "$UI_POINT" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
       else
         printf '    %s%-22s%s %s%s%s\n' "$C_GREY" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
       fi
       i=$((i + 1))
     done
-    printf '\n  %s↑↓ or 1-%s to choose · Enter to confirm%s' "$C_DIM" "${count}" "$C_OFF"
+    printf '\n  %s%s or 1-%s to choose - Enter to confirm%s' "$C_DIM" "$UI_ARROWS" "${count}" "$C_OFF"
 
     IFS= read -rsn1 key
     case "${key}" in
@@ -292,10 +335,10 @@ ui_spinner() {
   fi
 
   "$@" >"${log}" 2>&1 &
-  local pid=$! frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
+  local pid=$! frames="${UI_SPIN}" i=0
   printf '\033[?25l'
   while kill -0 "${pid}" 2>/dev/null; do
-    printf '\r  %s%s%s %s' "$C_CYAN" "${frames:i++%10:1}" "$C_OFF" "${message}"
+    printf '\r  %s%s%s %s' "$C_CYAN" "${frames:i++%${#frames}:1}" "$C_OFF" "${message}"
     sleep 0.1
   done
   printf '\033[?25h\r\033[K'
@@ -304,7 +347,7 @@ ui_spinner() {
     ok "${message}"
     return 0
   fi
-  printf '  %s✗%s %s\n' "$C_RED" "$C_OFF" "${message}"
+  printf '  %s%s%s %s\n' "$C_RED" "$MARK_BAD" "$C_OFF" "${message}"
   return 1
 }
 

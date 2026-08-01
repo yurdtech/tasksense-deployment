@@ -30,6 +30,25 @@ going live — the application's own snapshots are not disaster recovery
 
 ## Install
 
+### Building the values file with the wizard
+
+```bash
+git clone https://github.com/yurdtech/tasksense-deployment.git
+cd tasksense-deployment
+./tasksense          # → Kubernetes
+```
+
+It asks about the four values the chart refuses to render without, plus ingress,
+storage and replicas, and writes `my-values.yaml`. It stops there and prints the
+command rather than applying anything — a cluster is usually somebody else's to
+change, and the install may need to go through a pipeline rather than a
+terminal. It will run `helm install` for you if you ask it to.
+
+`my-values.yaml` is in `.gitignore`: unless you moved the four values into a
+Secret, it holds the storage key and the database URI.
+
+### Or by hand
+
 ```bash
 kubectl create namespace tasksense
 

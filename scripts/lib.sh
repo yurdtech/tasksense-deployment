@@ -19,9 +19,35 @@ else
   C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""; C_OFF=""
 fi
 
+# A tick is three bytes. Printed to a terminal that is not in a UTF-8 locale it
+# comes out as three replacement characters, which is how "✓ healthy" becomes
+# "??? healthy" over a serial console or an ssh session that carried LC_ALL=C —
+# both ordinary inside a bank. Adopt a UTF-8 locale if the host has one; use
+# ASCII if it does not, rather than printing rubbish either way.
+if ! printf '%s' "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" | grep -qi 'utf-\{0,1\}8'; then
+  if locale -a 2>/dev/null | grep -qi '^C\.utf-\{0,1\}8$'; then
+    LC_ALL=C.UTF-8
+    export LC_ALL
+  fi
+fi
+# shellcheck disable=SC2034  # UI_UTF8 and MARK_BAD are read by ui.sh
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *[Uu][Tt][Ff]*) UI_UTF8=1; MARK_OK="✓"; MARK_BAD="✗" ;;
+  *)              UI_UTF8=0; MARK_OK="+"; MARK_BAD="x" ;;
+esac
+# TASKSENSE_ASCII=1 forces it, for a terminal that claims UTF-8 and is lying —
+# some emulators reached over a bank's jump host do.
+if [ "${TASKSENSE_ASCII:-0}" = "1" ]; then
+  # shellcheck disable=SC2034  # read by ui.sh
+  UI_UTF8=0
+  MARK_OK="+"
+  # shellcheck disable=SC2034  # read by ui.sh
+  MARK_BAD="x"
+fi
+
 info()  { printf '%s\n' "$*"; }
 step()  { printf '\n%s==>%s %s%s%s\n' "$C_BOLD" "$C_OFF" "$C_BOLD" "$*" "$C_OFF"; }
-ok()    { printf '  %s✓%s %s\n' "$C_GREEN" "$C_OFF" "$*"; }
+ok()    { printf '  %s%s%s %s\n' "$C_GREEN" "$MARK_OK" "$C_OFF" "$*"; }
 warn()  { printf '  %s!%s %s\n' "$C_YELLOW" "$C_OFF" "$*" >&2; }
 note()  { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_OFF"; }
 

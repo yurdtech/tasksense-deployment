@@ -52,7 +52,7 @@ answers = [
     "https://tasksense.abb.internal\n",     # APP_URL
     "infra@abb.internal\n",                 # FIRST_ADMIN_EMAIL
     "g\n",                                  # STORAGE_SECRET: generate
-    "tasksense\n",                          # MONGO_USER
+    "  tasksense  \n",                      # MONGO_USER — pasted, with spaces
     "g\n",                                  # MONGO_PASSWORD: generate
     "n\n",                                  # licence key?
     "1",                                    # sign-in: LDAP  (menu, no newline)
@@ -61,7 +61,8 @@ answers = [
     "bind-secret\n",                        # LDAP_BIND_PASSWORD
     "DC=abb,DC=internal\n",                 # LDAP_BASE_DN
     "(sAMAccountName={{username}})\n",      # LDAP_USER_FILTER
-    "n\n",                                  # own CA?
+    "y\n",                                  # own CA?
+    " /certs/abb-ca.crt\n",                 # LDAP_TLS_CA — pasted, leading space
     "n\n",                                  # group map?
     "n\n",                                  # mail?
     "25\n",                                 # STORAGE_MAX_FILE_MB
@@ -154,7 +155,9 @@ check "APP_URL as typed" "https://tasksense.abb.internal" "$(value_of "${OUT}" A
 check "CORS follows APP_URL without being asked" "https://tasksense.abb.internal" \
   "$(value_of "${OUT}" CORS_ALLOWED_ORIGINS)"
 check "administrator" "infra@abb.internal" "$(value_of "${OUT}" FIRST_ADMIN_EMAIL)"
-check "MONGO_USER" "tasksense" "$(value_of "${OUT}" MONGO_USER)"
+# Pasted with spaces around it. `IFS= read` keeps them, and nothing downstream
+# would have complained — it produces a value that looks right and fails later.
+check "MONGO_USER is trimmed of pasted whitespace" "tasksense" "$(value_of "${OUT}" MONGO_USER)"
 
 # The generated secrets: the length is the contract the application enforces.
 SECRET="$(value_of "${OUT}" STORAGE_SECRET)"
@@ -172,6 +175,17 @@ check "LDAP_BIND_DN keeps its commas and equals signs" \
   "CN=svc-tasksense,OU=Service Accounts,DC=abb,DC=internal" "$(value_of "${OUT}" LDAP_BIND_DN)"
 check "LDAP_USER_FILTER keeps its braces" "(sAMAccountName={{username}})" \
   "$(value_of "${OUT}" LDAP_USER_FILTER)"
+
+# The one that was actually reported: a leading space here is invisible, has no
+# validator to catch it, and surfaces as "no such file or directory, open
+# ' /certs/abb-ca.crt'" long afterwards.
+check "LDAP_TLS_CA is trimmed" "/certs/abb-ca.crt" "$(value_of "${OUT}" LDAP_TLS_CA)"
+
+# And the file is not on this host, so it says so while the path is still in
+# the operator's head rather than leaving it to the live checks.
+TRANSCRIPT="$(cat "${WORK}/transcript.txt" 2>/dev/null | tr -d '\r')"
+check "warns that the CA file is not in compose/certs" "1" \
+  "$(printf '%s' "${TRANSCRIPT}" | grep -c 'no abb-ca.crt in' || true)"
 
 # Declined sections leave nothing set.
 check "no mail configured" "" "$(value_of "${OUT}" SMTP_HOST)"

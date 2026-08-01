@@ -1,0 +1,27 @@
+# Your configuration — holds the database password and the storage encryption
+# key. Never commit it; start from compose/.env.example.
+compose/.env
+compose/.env.bak
+compose/docker-compose.override.yml
+
+# Backups contain the whole database, uploaded files and your secrets.
+backups/
+
+# Container image archives, unpacked from a release or produced by docker save.
+images/
+*.tar
+*.tar.gz
+
+# State written by upgrade.sh / rollback.sh.
+.previous-version
+
+# Diagnostics bundles.
+tasksense-diagnostics-*.tar.gz
+
+# Certificates and keys, in case anyone stages them here.
+*.pem
+*.key
+*.crt
+!cosign.pub
+
+.DS_Store

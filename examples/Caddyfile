@@ -1,0 +1,34 @@
+# TaskSense behind Caddy.
+#
+#   sudo cp examples/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Caddy needs no special configuration for the live-update streams — it does not
+# buffer proxied responses — which is why this file is four lines and the nginx
+# equivalent is not.
+
+tasksense.bank.internal {
+    reverse_proxy localhost:3000
+}
+
+# ── With a certificate you already have ──────────────────────────────────────
+#
+# By default Caddy obtains and renews certificates itself, which needs it to
+# reach a CA. On an isolated network, supply your own from your internal PKI:
+#
+# tasksense.bank.internal {
+#     tls /etc/ssl/certs/tasksense.crt /etc/ssl/private/tasksense.key
+#     reverse_proxy localhost:3000
+# }
+#
+# ── Larger uploads ───────────────────────────────────────────────────────────
+#
+# Caddy does not cap request bodies by default, so STORAGE_MAX_FILE_MB is the
+# only limit. To enforce one here as well:
+#
+# tasksense.bank.internal {
+#     request_body {
+#         max_size 25MB
+#     }
+#     reverse_proxy localhost:3000
+# }

@@ -1,0 +1,115 @@
+# TaskSense — on-premise stack.
+#
+#   cp .env.example .env && $EDITOR .env
+#   ../scripts/install.sh
+#
+# Two containers: the application (API and web UI on one port) and MongoDB.
+# Put your own reverse proxy in front for TLS — see docs/01-INSTALL-COMPOSE.md.
+#
+# Neither container reaches the internet. Everything the application talks to
+# (identity, mail, object storage, language models) is a host you configure.
+
+name: tasksense
+
+services:
+  app:
+    image: ${TASKSENSE_IMAGE:-ghcr.io/yurdtech/tasksense}:${TASKSENSE_VERSION:?set TASKSENSE_VERSION in .env}
+    container_name: tasksense-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Not overridable from .env: these describe the stack, not the site.
+      # DEPLOYMENT_MODE=onprem makes the application refuse to start on a
+      # configuration that would be merely unwise in the hosted product —
+      # a development NODE_ENV, a missing STORAGE_SECRET, demo sign-in.
+      DEPLOYMENT_MODE: onprem
+      NODE_ENV: production
+      PORT: "3000"
+      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin
+      STORAGE_LOCAL_ROOT: /app/api/data/uploads
+      BACKUP_DIR: /app/api/data/backups
+
+    ports:
+      # Bound to the loopback interface so only the reverse proxy on this host
+      # can reach it. Docker writes its own iptables rules ahead of the host
+      # firewall's, so a plain "3000:3000" would be reachable from the network
+      # even with the port denied in ufw/firewalld.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-3000}:3000"
+
+    volumes:
+      # Uploads, nightly snapshots and agent execution workspaces.
+      - app-data:/app/api/data
+
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+    # The image already runs as a non-root user; these close the rest.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    deploy:
+      resources:
+        limits:
+          cpus: "${APP_CPU_LIMIT:-2}"
+          memory: ${APP_MEMORY_LIMIT:-2g}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  mongo:
+    image: ${MONGO_IMAGE:-mongo}:${MONGO_VERSION:-7}
+    container_name: tasksense-mongo
+    restart: unless-stopped
+    command: ["--auth", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:?set MONGO_USER in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD in .env}
+
+    # No `ports:` on purpose. The database is reachable only from the app over
+    # the internal compose network. To inspect it, exec into the container.
+    volumes:
+      - mongo-data:/data/db
+
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+    security_opt:
+      - no-new-privileges:true
+
+    deploy:
+      resources:
+        limits:
+          cpus: "${MONGO_CPU_LIMIT:-2}"
+          memory: ${MONGO_MEMORY_LIMIT:-2g}
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  app-data:
+    name: tasksense-app-data
+  mongo-data:
+    name: tasksense-mongo-data

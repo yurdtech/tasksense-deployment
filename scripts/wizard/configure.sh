@@ -257,6 +257,7 @@ signin_ldap() {
     ui_ask "LDAP_TLS_CA" "$(example_default LDAP_TLS_CA)" \
       "The path INSIDE the container. Copy the CA file into compose/certs/ on this host — that directory is mounted at /certs, read-only — and leave this as /certs/<filename>."
     cfg_set LDAP_TLS_CA "${UI_VALUE}"
+    check_ca_present "${UI_VALUE}"
   fi
 
   printf '\n'
@@ -265,6 +266,35 @@ signin_ldap() {
       "group DN=role, separated by semicolons. Re-evaluated at every sign-in, so removing somebody from the group in AD takes effect on their next login — you do not have to touch TaskSense."
     cfg_set LDAP_GROUP_MAP "${UI_VALUE}"
   fi
+}
+
+# The path just given is the one inside the container; the file has to be on
+# this host, in compose/certs. Those are two different things and the setting
+# only mentions one of them, which is why "I put the certificate on the server"
+# and "the application can read the certificate" come apart so easily.
+#
+# Checking here rather than leaving it to the live checks costs nothing and
+# arrives while the operator still has the file path in their head.
+check_ca_present() {
+  local inside="$1" name
+  case "${inside}" in
+    /certs/*) name="${inside#/certs/}" ;;
+    *)
+      warn "that path is not under /certs, so the compose file will not mount it"
+      ui_hint "Only compose/certs is mounted into the container. A path anywhere else needs a mount you add yourself — docs/05-IDENTITY.md."
+      return 0
+      ;;
+  esac
+
+  if [ -f "${COMPOSE_DIR}/certs/${name}" ]; then
+    ok "found ${COMPOSE_DIR}/certs/${name}"
+    return 0
+  fi
+
+  warn "there is no ${name} in ${COMPOSE_DIR}/certs"
+  ui_text "The path above is correct for inside the container — but the file has to exist on this host for the container to see it:"
+  ui_hint "  cp /etc/ssl/certs/${name} ${COMPOSE_DIR}/certs/"
+  ui_hint "The live checks will refuse to pass until it is there, so this can be done now or in a moment."
 }
 
 signin_oidc() {

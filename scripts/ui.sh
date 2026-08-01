@@ -235,6 +235,15 @@ ui_ask() {
     fi
 
     IFS= read -r answer
+
+    # Trim. `IFS= read` keeps leading and trailing whitespace, and a path or a
+    # DN pasted out of a document or an email routinely carries one —
+    # invisibly. What that produces is not a validation error but a
+    # working-looking value that fails much later: LDAP_TLS_CA=" /certs/ca.pem"
+    # is reported as "no such file or directory, open ' /certs/ca.pem'", where
+    # the only evidence is a space nobody notices inside a quoted string.
+    answer="${answer#"${answer%%[![:space:]]*}"}"
+    answer="${answer%"${answer##*[![:space:]]}"}"
     answer="${answer:-${default}}"
 
     if [ -z "${answer}" ]; then
@@ -248,6 +257,23 @@ ui_ask() {
     UI_VALUE="${answer}"
     return 0
   done
+}
+
+# Trims a typed secret, and says so.
+#
+# Pasting a password out of a password manager or an email brings a trailing
+# space or newline more often than not. Keeping it turns into "invalid
+# credentials" against a directory, which is the least diagnosable failure we
+# have: the password is right, the operator can see that it is right, and it
+# does not work. Announcing the trim is the part that matters — a password that
+# genuinely ends in a space is rare, and whoever has one is told why their value
+# changed rather than left to find out at sign-in.
+ui_trim_secret() {
+  local raw="$1" trimmed
+  trimmed="${raw#"${raw%%[![:space:]]*}"}"
+  trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+  [ "${trimmed}" != "${raw}" ] && warn "removed leading or trailing whitespace from what you pasted"
+  printf '%s' "${trimmed}"
 }
 
 # A secret, with generation offered first — an operator asked to invent a
@@ -266,7 +292,7 @@ ui_secret() {
     printf '\n  > '
     read -rs answer
     printf '\n'
-    UI_VALUE="${answer}"
+    UI_VALUE="$(ui_trim_secret "${answer}")"
     [ -n "${UI_VALUE}" ] || warn "left empty"
     return 0
   fi
@@ -280,7 +306,7 @@ ui_secret() {
       printf '  '
       read -rs answer
       printf '\n'
-      UI_VALUE="${answer}"
+      UI_VALUE="$(ui_trim_secret "${answer}")"
       ;;
     *)
       UI_VALUE="$(openssl rand -base64 "${bytes}" | tr -d '\n')"

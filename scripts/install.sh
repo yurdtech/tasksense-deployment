@@ -51,7 +51,16 @@ compose up -d
 
 if ! wait_for_health 180; then
   printf '\n'
-  compose logs --tail 40 app || true
+  LOG="$(compose logs --tail 40 app 2>&1 || true)"
+  printf '%s\n' "${LOG}"
+
+  # One symptom is worth naming, because the message the driver produces is
+  # true and useless: the password in .env really is the password, and it
+  # really is refused.
+  case "${LOG}" in
+    *"Authentication failed"*) explain_stale_mongo_volume ;;
+  esac
+
   die "the application did not become healthy within 180s" \
       "The log above usually says why. A configuration error is reported in full" \
       "on the first lines. See docs/10-TROUBLESHOOTING.md."

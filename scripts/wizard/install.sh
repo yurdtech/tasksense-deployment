@@ -257,6 +257,45 @@ if [ -f "${ENV_FILE}" ]; then
   note "a copy is kept as .env.bak"
 fi
 
+# Before anything is written, because the failure it prevents is a fifteen-minute
+# detour through a stack trace that names neither the volume nor the password.
+if mongo_volume_exists; then
+  printf '\n'
+  warn "${MONGO_VOLUME} already exists on this host"
+  ui_text "MongoDB sets its username and password only when it first creates its data directory. That volume kept the credentials it was made with, so the password just generated will be refused — the application will start, fail to authenticate, and say so without mentioning the volume."
+  printf '\n'
+  ui_menu "Which is it?" \
+    "Left over from an install that did not finish|remove the volume and start clean" \
+    "A database I need|I will put its original password back myself" \
+    "Not sure|stop here and let me look"
+
+  case "${UI_CHOICE}" in
+    1)
+      printf '\n'
+      ui_text "This deletes the database and the uploaded files in those volumes. It cannot be undone, and no backup is taken by this step."
+      printf '\n  Type %sDELETE%s to confirm: ' "$C_BOLD" "$C_OFF"
+      IFS= read -r typed
+      if [ "${typed}" = "DELETE" ]; then
+        compose --env-file "${CANDIDATE}" down -v >/dev/null 2>&1 || true
+        ok "removed"
+      else
+        die "stopped — nothing was written" "The volume is untouched."
+      fi
+      ;;
+    2)
+      ui_text "Then set MONGO_PASSWORD to that database's original password. The wizard cannot know it; it is in the .env from the install that created the volume, or in your password manager."
+      die "stopped — nothing was written" \
+          "Run ./tasksense again once you have the original password to hand."
+      ;;
+    3)
+      die "stopped — nothing was written" \
+          "  ${RUNTIME} volume inspect ${MONGO_VOLUME}" \
+          "  ${RUNTIME} run --rm -v ${MONGO_VOLUME}:/data mongo:7 ls -la /data/db" \
+          "docs/10-TROUBLESHOOTING.md covers what to do with either answer."
+      ;;
+  esac
+fi
+
 ui_yesno "Install now?" y || { note "nothing was written"; exit 0; }
 
 [ -f "${ENV_FILE}" ] && cp "${ENV_FILE}" "${ENV_FILE}.bak"

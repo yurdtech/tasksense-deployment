@@ -14,6 +14,42 @@ each with what is wrong and what to do about it.
 
 ---
 
+## "Authentication failed", with the right password in `.env`
+
+```
+Cannot reach MongoDB at mongodb://tasksense:235ca6…@mongo:27017/?authSource=admin:
+MongoServerError: Authentication failed.
+```
+
+The password in `.env` is the password, and it is refused. Both are true.
+
+MongoDB writes its username and password **once**, when it first creates its
+data directory. Every later start ignores `MONGO_INITDB_ROOT_PASSWORD`
+completely. So a volume left by an earlier install keeps the credentials it was
+made with, and a new `.env` cannot change them.
+
+It comes up after any install that did not finish: the second attempt generates
+a new password and meets the first attempt's database.
+
+```bash
+docker volume ls | grep tasksense-mongo-data     # is one there?
+```
+
+If that database holds nothing you need:
+
+```bash
+docker compose -f compose/docker-compose.yml down -v
+./tasksense
+```
+
+`-v` is the part that matters. Without it the volume survives and the next
+attempt fails identically.
+
+If it holds data you need, put the original password back in `.env` instead —
+it is in the `.env` from the install that created the volume, or in your
+password manager. There is no way to recover it from the database.
+
+
 ## It will not start
 
 ### "Invalid environment configuration"

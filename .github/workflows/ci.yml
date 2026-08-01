@@ -120,6 +120,9 @@ jobs:
       - name: the flow, driven through a real pty
         run: ./tests/wizard-flow.sh
 
+      - name: reinstalling over an old database volume is explained
+        run: ./tests/stale-volume.sh
+
       - name: generated passwords survive a MongoDB URI
         env:
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}

@@ -1,7 +1,31 @@
 # Installing on a VM with Docker Compose
 
-About 30 minutes on a prepared host, most of it spent deciding what to put in
-`.env`.
+Two ways in. They produce the same installation — the same `compose/.env`, the
+same `scripts/install.sh` — and differ only in whether the questions are asked
+of you or read from a file.
+
+## The guided installer
+
+```bash
+git clone https://github.com/yurdtech/tasksense-deployment.git
+cd tasksense-deployment
+./tasksense
+```
+
+It checks the host, asks for the registry token (and says where to get one),
+asks about ten questions with each setting explained where it appears, **tests
+your answers against your real directory and mail relay before installing**,
+then installs. About fifteen minutes.
+
+Afterwards the same command is the operations panel: status, logs, upgrades,
+backups, restores and support diagnostics.
+
+Requirements: bash 4 or newer — every supported Linux has it — and a terminal.
+It refuses a pipe rather than hanging on a question nobody can see.
+
+Everything below is the same installation done by hand. Read it if you are
+automating, if you want to know what the wizard writes, or if you would rather
+see the whole file before anything runs.
 
 ---
 

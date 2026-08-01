@@ -108,6 +108,28 @@ instance keeps serving; the licensed features stop.
 
 ---
 
+## How you install it
+
+```bash
+git clone https://github.com/yurdtech/tasksense-deployment.git
+cd tasksense-deployment
+./tasksense
+```
+
+`./tasksense` is a guided installer: it checks the host, asks for the registry
+token, walks through the settings with each one explained where it appears,
+tests them against your real directory and mail relay, and installs. It is also
+the operations panel afterwards — status, upgrades, backups, diagnostics.
+
+The same installation can be done by hand, from `compose/.env` and
+`scripts/install.sh`, which is the right route for configuration management or a
+golden image. Both write the same file and run the same installer.
+
+The decisions below are the ones worth making before you start either way — the
+wizard asks about them, but it cannot decide them for you.
+
+---
+
 ## What you decide before installing
 
 1. **Hostname and certificate.** Users type `https://<this>`. Sign-in redirects
@@ -131,7 +153,7 @@ instance keeps serving; the licensed features stop.
 | | |
 | --- | --- |
 | Provision the VM, install Docker | 30 min |
-| Configure `.env` and install | 30 min |
+| Configure and install (`./tasksense`) | 15–30 min |
 | Reverse proxy and certificate | 30 min |
 | Connect the directory, test sign-in | 1 hour |
 | Backups configured and a restore rehearsed | 1 hour |
@@ -144,7 +166,7 @@ rehearsal — a backup you have never restored is a hypothesis.
 
 ## Where to go next
 
-- Installing: [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md)
+- Installing: [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md) — or just run `./tasksense`
 - Every setting: [04-CONFIGURATION](04-CONFIGURATION.md)
 - For the security review: [06-SECURITY](06-SECURITY.md)
 - Backups and recovery: [07-BACKUP-DR](07-BACKUP-DR.md)

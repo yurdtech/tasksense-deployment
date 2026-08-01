@@ -195,7 +195,7 @@ section_secrets() {
   cfg_set MONGO_USER "${UI_VALUE}"
 
   ui_secret "MONGO_PASSWORD" \
-    "The password for that account. Generated is better than chosen — nothing types it by hand, so there is no reason for it to be memorable." 24
+    "The password for that account. Generated is better than chosen — nothing types it by hand, so there is no reason for it to be memorable. It ends up inside a connection string, so it is drawn from hex: a / or + or = would end the password early and the database would be unreachable before the first query." 24 uri
   cfg_set MONGO_PASSWORD "${UI_VALUE}"
 
   printf '\n'

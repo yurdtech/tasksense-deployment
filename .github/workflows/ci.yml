@@ -119,3 +119,13 @@ jobs:
 
       - name: the flow, driven through a real pty
         run: ./tests/wizard-flow.sh
+
+      - name: generated passwords survive a MongoDB URI
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -n "${GHCR_TOKEN:-}" ]; then
+            printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u yurdtech --password-stdin
+          fi
+          ./tests/mongo-uri.sh

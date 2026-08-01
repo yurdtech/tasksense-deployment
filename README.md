@@ -15,21 +15,42 @@ claim rather than take our word for it.
 
 ---
 
-## Install in four commands
+## Install
 
 ```bash
 git clone https://github.com/yurdtech/tasksense-deployment.git
-cd tasksense-deployment/compose
+cd tasksense-deployment
+./tasksense
+```
+
+`./tasksense` walks you through it: checks the host, signs in to the registry
+(it asks for the token, and says where to get one), asks about ten questions
+with each setting explained, **tests your answers against your real directory
+and mail relay before installing**, then installs. About fifteen minutes.
+
+It is also where you go afterwards — status, upgrades, backups, restores, logs
+and support diagnostics are all behind the same command.
+
+New here? Read [`docs/00-OVERVIEW.md`](docs/00-OVERVIEW.md) first — it covers the
+architecture and sizing in two pages.
+
+### Without the questions
+
+For configuration management, a pipeline, or a golden image, the underlying path
+is unchanged and fully supported:
+
+```bash
+cd compose
 cp .env.example .env && ${EDITOR:-vi} .env      # required values are marked
 ../scripts/install.sh
 ```
 
-`install.sh` checks the host first, pulls or loads the image, starts the stack
-and waits until it answers its own health check. Roughly 30 minutes end to end,
-most of it spent deciding what to put in `.env`.
+There is one installer. `./tasksense` writes exactly the `compose/.env` this
+does and then calls the same `scripts/install.sh` — it is a way of arriving at
+the answers, not a second way of installing. Kubernetes and OpenShift work the
+same way: the wizard writes a Helm values file and shows you the command.
 
-New here? Read [`docs/00-OVERVIEW.md`](docs/00-OVERVIEW.md) first — it covers the
-architecture and sizing in two pages.
+`./tasksense` needs bash 4 and a terminal. The scripts above need neither.
 
 ---
 

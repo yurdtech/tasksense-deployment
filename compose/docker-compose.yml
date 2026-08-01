@@ -40,6 +40,13 @@ services:
       # Uploads, nightly snapshots and agent execution workspaces.
       - app-data:/app/api/data
 
+      # Your internal CA, for LDAPS and for an SMTP relay using a certificate
+      # your organisation issued. Read-only, and empty unless you put something
+      # there — see certs/README.md. Mounted rather than documented as an
+      # override file because a directory over TLS is the normal case inside a
+      # bank, and an override nobody remembers to write fails at first sign-in.
+      - ./certs:/certs:ro
+
     depends_on:
       mongo:
         condition: service_healthy

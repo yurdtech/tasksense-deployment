@@ -1,0 +1,94 @@
+# Runs on every pull request and every push to main.
+#
+# The scripts here are the installation. A typo in them is not a broken build
+# somebody notices at their desk — it is a bank's engineer, on a host we cannot
+# reach, reading an error we did not intend to write. So the checks are aimed at
+# the failures that actually escaped review rather than at coverage: the ones
+# below both come from bugs found by running this on a customer's distribution
+# after it had passed everything else.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push supersedes the first; there is nothing to deploy here.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        # -P SCRIPTDIR so `source=../lib.sh` resolves from the script that wrote
+        # it rather than from wherever this happens to be invoked.
+        run: shellcheck -x -P SCRIPTDIR tasksense scripts/*.sh scripts/wizard/*.sh tests/*.sh
+
+      - name: every script is executable
+        # A file that lost its executable bit still passes review and still
+        # reads correctly in the diff. It fails on the customer's first command.
+        run: |
+          set -euo pipefail
+          missing=0
+          for f in tasksense scripts/*.sh scripts/wizard/*.sh tests/*.sh; do
+            case "${f}" in scripts/lib.sh|scripts/ui.sh) continue ;; esac  # sourced, not run
+            [ -x "${f}" ] || { echo "not executable: ${f}"; missing=1; }
+          done
+          exit "${missing}"
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: compose file is valid
+        run: |
+          set -euo pipefail
+          # `env_file: .env` means compose refuses to parse without one.
+          sed -e 's/^STORAGE_SECRET=$/STORAGE_SECRET=0123456789012345678901234567890123456789/' \
+              -e 's/^MONGO_PASSWORD=$/MONGO_PASSWORD=0123456789012345678901/' \
+              compose/.env.example > compose/.env
+          docker compose -f compose/docker-compose.yml config >/dev/null
+          rm -f compose/.env
+
+      - uses: azure/setup-helm@v4
+      - name: chart lints and renders
+        run: |
+          set -euo pipefail
+          helm lint helm/tasksense \
+            --set appUrl=https://tasksense.example.internal \
+            --set mongodbUri='mongodb://u:p@mongo:27017/?authSource=admin' \
+            --set storageSecret=0123456789012345678901234567890123456789 \
+            --set firstAdminEmail=admin@example.internal
+          # And with the OpenShift overlay, which clears the uid the base sets —
+          # a chart that renders one way and not the other is half tested.
+          helm template tasksense helm/tasksense \
+            -f helm/tasksense/values-openshift.yaml \
+            --set appUrl=https://tasksense.example.internal \
+            --set mongodbUri='mongodb://u:p@mongo:27017/?authSource=admin' \
+            --set storageSecret=0123456789012345678901234567890123456789 \
+            --set firstAdminEmail=admin@example.internal >/dev/null
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Each suite is its own step so a red build names the thing that broke,
+      # rather than "tests failed".
+      - name: fresh clone — the first command a customer runs
+        run: ./tests/fresh-clone.sh
+
+      - name: terminal rendering — locales a bank actually has
+        run: ./tests/terminal.sh
+
+      - name: configuration renderer — .env stays equivalent to .env.example
+        run: ./tests/wizard-render.sh
+
+      - name: the flow, driven through a real pty
+        run: ./tests/wizard-flow.sh

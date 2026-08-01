@@ -120,7 +120,10 @@ Sizing for larger installs: [`docs/11-SIZING.md`](docs/11-SIZING.md).
 | [08-UPGRADE](docs/08-UPGRADE.md) | planning a version upgrade |
 | [09-MONITORING](docs/09-MONITORING.md) | wiring up Prometheus, Grafana or a SIEM |
 | [10-TROUBLESHOOTING](docs/10-TROUBLESHOOTING.md) | debugging a broken install |
+| [11-SIZING](docs/11-SIZING.md) | working out CPU, memory and disk |
+| [12-AI-MODELS](docs/12-AI-MODELS.md) | connecting an internal language model |
 | [13-REGISTRY-ACCESS](docs/13-REGISTRY-ACCESS.md) | managing the registry token |
+| [14-LICENSING](docs/14-LICENSING.md) | asking what the licence key does |
 
 The Helm chart is in [`helm/tasksense`](helm/tasksense), with OpenShift values
 alongside it and Prometheus alert rules in [`examples/`](examples/).

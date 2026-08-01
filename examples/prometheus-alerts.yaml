@@ -63,7 +63,8 @@ spec:
     - name: tasksense.licence
       rules:
         - alert: TaskSenseLicenceExpiring
-          # -1 means perpetual or absent; only a real countdown should alert.
+          # -1 means there is no date to count to. tasksense_license_perpetual
+          # and tasksense_license_valid say which of the reasons applies.
           expr: tasksense_license_expires_in_days >= 0 and tasksense_license_expires_in_days < 30
           for: 1h
           labels:
@@ -71,29 +72,57 @@ spec:
           annotations:
             summary: TaskSense licence expires in {{ $value }} days
             description: >-
-              On expiry the instance drops to free-tier limits — a seat cap and a
-              monthly automation allowance. Data is never blocked, but the first
-              symptom is a colleague who cannot be invited.
+              On expiry the instance drops to free-tier limits — 10 accounts and
+              500 automation runs a month. Data is never blocked and nobody is
+              signed out; the limits simply come back.
 
-        - alert: TaskSenceLicenceExpired
-          expr: tasksense_license_valid == 0 and tasksense_seats_limit > 0
+        - alert: TaskSenseLicenceExpired
+          # An expired licence used to be indistinguishable from an unlicensed
+          # instance on every gauge, so this could not be written honestly.
+          expr: tasksense_license_expired == 1
           for: 1h
           labels:
             severity: warning
           annotations:
-            summary: TaskSense is running without a valid licence
-            description: Free-tier limits are in force. Your data is untouched.
+            summary: The TaskSense licence has expired
+            description: >-
+              Free-tier limits are in force. Your data is untouched and still
+              fully accessible. Renew at info@meiksense.io.
 
-        - alert: TaskSenseSeatsNearLimit
-          expr: tasksense_seats_limit > 0 and (tasksense_users / tasksense_seats_limit) > 0.9
-          for: 30m
+        - alert: TaskSenseLicenceInvalid
+          expr: tasksense_license_invalid == 1
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: TaskSense is at {{ $value | humanizePercentage }} of its seat cap
+            summary: TaskSense has a licence key it cannot verify
             description: >-
-              Further invitations will be refused. Raise the cap before it is
-              somebody's first day.
+              The signature does not check out — almost always a key copied
+              short. It must start with tsl_ and include everything after it.
+
+        - alert: TaskSenseSeatsOverLimit
+          # Reported, not enforced: on-premise nobody is turned away at the seat
+          # count. This is a number to renew against, not an incident.
+          expr: tasksense_seats_over_limit > 0
+          for: 6h
+          labels:
+            severity: info
+          annotations:
+            summary: TaskSense is {{ $value }} seats over its licensed count
+            description: >-
+              Everyone keeps working. Get in touch about a renewal covering the
+              larger headcount.
+
+        - alert: TaskSenseSeatsNearLimit
+          expr: tasksense_seats_limit > 0 and (tasksense_seats_used / tasksense_seats_limit) > 0.9
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: TaskSense is at {{ $value | humanizePercentage }} of its licensed seats
+            description: >-
+              Nothing is blocked when it is passed. Worth raising before the
+              renewal conversation rather than after it.
 
     - name: tasksense.performance
       rules:

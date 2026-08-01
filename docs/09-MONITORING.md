@@ -35,9 +35,14 @@ token for you.
 | `tasksense_agent_runs_total{outcome}` | counter | Only meaningful with the AI features on |
 | `tasksense_mongo_up` | gauge | 1 when the last check reached the database |
 | `tasksense_users`, `tasksense_workspaces` | gauge | |
-| `tasksense_seats_limit` | gauge | 0 when unlimited |
+| `tasksense_seats_limit` | gauge | Licensed seats; 0 when unlimited |
+| `tasksense_seats_used` | gauge | Suspended accounts excluded |
+| `tasksense_seats_over_limit` | gauge | Seats beyond the licensed count; 0 within it. **Nothing is blocked when it rises** |
 | `tasksense_license_valid` | gauge | |
-| `tasksense_license_expires_in_days` | gauge | −1 when perpetual or absent |
+| `tasksense_license_expired` | gauge | 1 when a licence is installed and its date has passed |
+| `tasksense_license_invalid` | gauge | 1 when the key's signature does not verify |
+| `tasksense_license_perpetual` | gauge | 1 when the licence has no expiry |
+| `tasksense_license_expires_in_days` | gauge | −1 when there is no date to count to; the three gauges above say why |
 
 Counters are per process. With several replicas Prometheus scrapes each and sums
 them, which is how it is meant to work — but remember it when reading a single
@@ -45,14 +50,15 @@ instance's numbers.
 
 ### Alerts
 
-`examples/prometheus-alerts.yaml` has these ready to load. The four that matter:
+`examples/prometheus-alerts.yaml` has these ready to load. The ones that matter:
 
 | Alert | Why |
 |---|---|
 | **TaskSenseDown** | No instance is being scraped |
 | **TaskSenseMongoDown** | `tasksense_mongo_up == 0`. The only data store; the application can serve nothing |
-| **TaskSenseLicenceExpiring** | 30 days out. An expired licence silently drops to free-tier limits, and the first anyone hears is a user who cannot be invited |
-| **TaskSenseSeatsNearLimit** | Above 90% of the cap, for the same reason |
+| **TaskSenseLicenceExpiring** | 30 days out. An expired licence quietly restores free-tier limits — 10 accounts, 500 automation runs a month |
+| **TaskSenseLicenceExpired** / **Invalid** | The two states that used to be invisible: a lapsed key and one copied short both looked exactly like no licence at all |
+| **TaskSenseSeatsOverLimit** | Informational. On-premise nobody is turned away at the seat count — this is a renewal conversation, not an incident |
 
 Latency and error-rate alerts are in the same file, deliberately loose — tighten
 them once you know what normal looks like on your hardware.

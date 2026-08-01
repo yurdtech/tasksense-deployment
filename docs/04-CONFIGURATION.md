@@ -182,7 +182,7 @@ network** from Admin → Agents → Providers. See [12-AI-MODELS](12-AI-MODELS.m
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `LICENSE_KEY` | — | Verified offline. Without it, free-tier limits. Expiry never blocks data access. |
+| `LICENSE_KEY` | — | Verified offline. Without it: 10 accounts, 500 automation runs a month. Expiry never blocks data access, and exceeding the seats never blocks sign-in — see [14-LICENSING](14-LICENSING.md). |
 | `BACKUP_DIR` | `/app/api/data/backups` | In-application snapshots. Keep it on the data volume, or a container rebuild discards them. |
 | `SWAGGER_ENABLED` | off | The interactive API browser. It publishes the whole API surface. |
 | `APP_CPU_LIMIT` / `APP_MEMORY_LIMIT` | `2` / `2g` | |

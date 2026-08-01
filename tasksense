@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# TaskSense — guided installer and operations panel.
+#
+#   ./tasksense                looks at what is on this host and offers the
+#                              right thing: install it, or operate it
+#   ./tasksense install        the installation wizard
+#   ./tasksense status         health, version, containers
+#   ./tasksense logs           follow the application log
+#   ./tasksense --help
+#
+# This asks questions. For unattended installs — configuration management,
+# a pipeline, a golden image — use scripts/install.sh with a prepared
+# compose/.env instead. Both write and read the same files; this one just
+# explains itself on the way.
+
+# shellcheck source=scripts/lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/lib.sh"
+# shellcheck source=scripts/ui.sh
+. "${SCRIPT_DIR}/ui.sh"
+
+WIZARD_DIR="${SCRIPT_DIR}/wizard"
+
+# From the title comment to the first blank line, so adding an option below
+# does not silently truncate the help.
+usage() { sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# ── what is on this host ─────────────────────────────────────────────────────
+
+# A container runtime, without dying when there is none. The install wizard
+# reports a missing runtime as a preflight finding, which is far more useful
+# than the entry point refusing to start at all.
+soft_runtime() {
+  detect_runtime 2>/dev/null || return 1
+}
+
+# fresh    — no configuration here yet
+# stopped  — configured, but nothing is running
+# running  — containers are up (healthy or not; the panel says which)
+detect_state() {
+  STATE=fresh
+  [ -f "${ENV_FILE}" ] || return 0
+
+  STATE=stopped
+  soft_runtime || return 0
+  # `compose ps -q app` prints an id only while the container exists. Filtering
+  # on running state separates "up" from "exited after a crash loop" — the two
+  # need different first sentences.
+  if [ -n "$(compose ps -q --status running app 2>/dev/null)" ]; then
+    STATE=running
+  elif curl -fsS --max-time 3 "$(health_url)" >/dev/null 2>&1; then
+    # podman-compose has no --status. An answering health endpoint settles it.
+    STATE=running
+  fi
+  return 0
+}
+
+# The one-line header: version · state · health · address.
+state_line() {
+  local version address health
+  version="$(env_value TASKSENSE_VERSION 2>/dev/null)"
+  address="$(env_value APP_URL 2>/dev/null)"
+
+  case "${STATE}" in
+    running)
+      if curl -fsS --max-time 3 "$(health_url)" >/dev/null 2>&1; then
+        health="${C_GREEN}healthy${C_OFF}"
+      else
+        health="${C_YELLOW}not answering yet${C_OFF}"
+      fi
+      printf '%s · running · %b · %s' "${version:-?}" "${health}" "${address:-no APP_URL}"
+      ;;
+    stopped)
+      printf '%s · %sstopped%s · %s' "${version:-?}" "$C_YELLOW" "$C_OFF" "${address:-no APP_URL}"
+      ;;
+    *)
+      printf 'not installed on this host'
+      ;;
+  esac
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────────
+
+run_wizard() { "${WIZARD_DIR}/install.sh" "$@"; }
+run_panel()  { "${WIZARD_DIR}/panel.sh" "$@"; }
+
+# Nothing here yet. Offer the wizard, but not only the wizard — somebody who
+# reached this directory by way of a colleague's instructions may want to check
+# the host first, or verify a release archive they were handed.
+fresh_menu() {
+  ui_banner "$(state_line)"
+  cat <<EOF
+
+  This directory has no configuration yet, so nothing is installed.
+
+  The guided setup asks about ten questions, tests the answers against your
+  real database and directory, and starts TaskSense. Around 15 minutes.
+
+EOF
+  ui_menu "Where would you like to start?" \
+    "Install|guided setup, from here to a working system" \
+    "Check this host|requirements only — nothing is changed" \
+    "Verify a release|check a downloaded archive's checksum and signature" \
+    "Documentation|what is in docs/, and which file answers what" \
+    "Quit|"
+
+  case "${UI_CHOICE}" in
+    1) run_wizard ;;
+    2) "${SCRIPT_DIR}/preflight.sh" || true ;;
+    3) verify_prompt ;;
+    4) doc_index ;;
+    5) exit 0 ;;
+  esac
+}
+
+verify_prompt() {
+  ui_ask "Path to the release archive" "" \
+    "The tasksense-onprem-<version>.tar.gz you downloaded. SHA256SUMS, SHA256SUMS.sig and cosign.pub must be beside it."
+  "${SCRIPT_DIR}/verify-signature.sh" "${UI_VALUE}" || true
+}
+
+# A map, not a list — a directory listing of thirteen files does not tell an
+# operator which one they need at 2am.
+doc_index() {
+  cat <<EOF
+
+  ${C_BOLD}Start here${C_OFF}
+    docs/00-OVERVIEW.md          what this is, and what to decide before you start
+    docs/11-SIZING.md            CPU, memory and disk for your number of users
+    docs/13-REGISTRY-ACCESS.md   getting the image: token, mirror, or archive
+
+  ${C_BOLD}Installing${C_OFF}
+    docs/01-INSTALL-COMPOSE.md   one VM with Docker or Podman
+    docs/02-INSTALL-KUBERNETES.md  the Helm chart
+    docs/03-INSTALL-OPENSHIFT.md   the same chart, with the OpenShift overlay
+    docs/04-CONFIGURATION.md     every setting, and what happens if it is wrong
+
+  ${C_BOLD}Running it${C_OFF}
+    docs/05-IDENTITY.md          Active Directory, LDAP, OIDC
+    docs/06-SECURITY.md          written for a security review
+    docs/07-BACKUP-DR.md         backups, and restoring one
+    docs/08-UPGRADE.md           upgrades and rollbacks
+    docs/09-MONITORING.md        Prometheus metrics and structured logs
+
+  ${C_BOLD}When something is wrong${C_OFF}
+    docs/10-TROUBLESHOOTING.md   symptoms, causes, fixes
+    docs/12-AI-MODELS.md         AI features on an internal model (optional)
+
+EOF
+}
+
+main() {
+  case "${1:-}" in
+    -h|--help|help) usage; exit 0 ;;
+    install|setup)  shift; run_wizard "$@"; exit $? ;;
+    status|logs|upgrade|backup|restore|diagnostics|configure)
+      detect_state
+      [ "${STATE}" = "fresh" ] && die "nothing is installed here" \
+        "There is no ${ENV_FILE}, so there is nothing running to work with." \
+        "Run ./tasksense to install."
+      run_panel "$@"; exit $? ;;
+    "") ;;
+    *)  die "unknown command: $1" "Run ./tasksense --help." ;;
+  esac
+
+  ui_require_tty
+  detect_state
+  if [ "${STATE}" = "fresh" ]; then fresh_menu; else run_panel; fi
+}
+
+main "$@"

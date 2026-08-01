@@ -44,16 +44,17 @@ LDAP_GROUP_MAP=CN=TaskSense-Admins,OU=Groups,DC=bank,DC=internal=admin;CN=TaskSe
 LDAP_LABEL=Sign in with your bank account
 ```
 
-Mount the CA into the container — in `compose/docker-compose.override.yml`:
+Put the CA where the container can see it. `compose/certs/` is mounted at
+`/certs`, read-only:
 
-```yaml
-services:
-  app:
-    volumes:
-      - /etc/ssl/certs/bank-ca.pem:/certs/bank-ca.pem:ro
+```bash
+cp /etc/ssl/certs/bank-ca.pem compose/certs/
 ```
 
-Then `docker compose -f compose/docker-compose.yml up -d`.
+`LDAP_TLS_CA` is the path **inside** the container — `/certs/bank-ca.pem` —
+not the path on the host. Getting that wrong fails at first sign-in rather than
+at startup, which is why `./tasksense` binds to the directory and tells you
+before installing.
 
 ### Choosing the user filter
 

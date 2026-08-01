@@ -1,0 +1,336 @@
+#!/usr/bin/env bash
+# Terminal primitives for the guided installer. Sourced after lib.sh, whose
+# colours, `step`, `ok`, `warn` and `die` are reused rather than duplicated.
+#
+# Everything here assumes a real terminal and says so when there is not one.
+# The alternative — prompting into a pipe — waits forever, which is how a
+# `curl … | bash` reads as a hang rather than a mistake.
+
+# The guided path needs bash 4: associative arrays for the answers, and `read
+# -t 0.1` for arrow keys — bash 3.2 rejects a fractional timeout outright.
+#
+# Every supported host has it (RHEL 8 ships 4.4, Ubuntu 20.04 ships 5.0). macOS
+# does not, which is the case worth naming: /bin/bash there is 3.2 from 2007.
+# The plain scripts stay bash 3 compatible, so an operator on a Mac is never
+# stuck — they just take the documented route.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+  printf '\nerror: this needs bash 4 or newer (found %s)\n' "${BASH_VERSION:-unknown}" >&2
+  printf '       Every supported Linux host has it. On macOS: brew install bash\n' >&2
+  printf '       Or use the non-interactive path, which runs on bash 3:\n' >&2
+  # shellcheck disable=SC2016  # $EDITOR is for the reader to substitute, not us
+  printf '         cp compose/.env.example compose/.env && $EDITOR compose/.env\n' >&2
+  printf '         ./scripts/install.sh\n\n' >&2
+  exit 1
+fi
+
+# Extra colours the plain scripts do not need.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+  C_CYAN=$'\033[36m'; C_BLUE=$'\033[34m'; C_INV=$'\033[7m'; C_GREY=$'\033[90m'
+else
+  C_CYAN=""; C_BLUE=""; C_INV=""; C_GREY=""
+fi
+
+UI_WIDTH="$( { tput cols 2>/dev/null || echo 80; } )"
+[ "${UI_WIDTH}" -gt 100 ] && UI_WIDTH=100
+[ "${UI_WIDTH}" -lt 60 ] && UI_WIDTH=60
+
+# A wizard half-way through an install leaves a hidden cursor and a terminal in
+# raw mode. Restore both however we exit.
+ui_restore() { printf '\033[?25h'; stty echo 2>/dev/null || true; }
+trap ui_restore EXIT INT TERM
+
+ui_require_tty() {
+  [ -t 0 ] && [ -t 1 ] && return 0
+  die "this needs an interactive terminal" \
+      "It asks questions, so it cannot run from a pipe or a CI job." \
+      "For automation use the documented path instead:" \
+      "  cp compose/.env.example compose/.env && \$EDITOR compose/.env" \
+      "  ./scripts/install.sh"
+}
+
+# ── output ───────────────────────────────────────────────────────────────────
+
+ui_clear() { [ -t 1 ] && printf '\033[2J\033[H' || true; }
+
+ui_banner() {
+  printf '\n%s┌%s┐%s\n' "$C_BLUE" "$(ui_rule $((UI_WIDTH - 2)))" "$C_OFF"
+  ui_banner_line "TaskSense — on-premise installer"
+  ui_banner_line "${1:-}"
+  printf '%s└%s┘%s\n' "$C_BLUE" "$(ui_rule $((UI_WIDTH - 2)))" "$C_OFF"
+}
+
+ui_banner_line() {
+  local text="$1" pad
+  pad=$((UI_WIDTH - 4 - ${#text}))
+  [ "${pad}" -lt 0 ] && pad=0
+  printf '%s│%s %s%*s %s│%s\n' "$C_BLUE" "$C_OFF" "$text" "${pad}" "" "$C_BLUE" "$C_OFF"
+}
+
+ui_rule() { printf '%*s' "$1" "" | tr ' ' '─'; }
+
+# "Step 4 of 9 — Sign-in", so nobody wonders how much is left.
+ui_step() {
+  local n="$1" total="$2" title="$3"
+  printf '\n%s%s Step %s of %s %s%s  %s%s%s\n' \
+    "$C_INV" "$C_BOLD" "$n" "$total" "$C_OFF" "" "$C_BOLD" "$title" "$C_OFF"
+  printf '%s%s%s\n' "$C_GREY" "$(ui_rule "$UI_WIDTH")" "$C_OFF"
+}
+
+# Wraps explanatory text to the terminal, indented. `fold` is everywhere `fmt`
+# is not, and breaks on spaces with -s.
+ui_text() {
+  printf '%s\n' "$*" | fold -s -w $((UI_WIDTH - 4)) | sed 's/^/  /'
+}
+
+ui_hint() {
+  printf '%s\n' "$*" | fold -s -w $((UI_WIDTH - 4)) | sed "s/^/  ${C_DIM}/;s/$/${C_OFF}/"
+}
+
+# ── menu ─────────────────────────────────────────────────────────────────────
+
+# ui_menu "Title" "Label|description" …
+# Sets UI_CHOICE to the 1-based index. Arrow keys move, Enter selects, and a
+# number selects directly — not every terminal sends arrows, and over some
+# serial consoles none of them do.
+# shellcheck disable=SC2034  # read by the wizard scripts that source this
+UI_CHOICE=0
+ui_menu() {
+  ui_require_tty
+  local title="$1"; shift
+  local options=("$@")
+  local count=${#options[@]} selected=0 key rest
+
+  printf '\n  %s%s%s\n\n' "$C_BOLD" "$title" "$C_OFF"
+  printf '\033[?25l'
+
+  while true; do
+    local i=0
+    for entry in "${options[@]}"; do
+      local label="${entry%%|*}" desc=""
+      [ "${entry}" != "${label}" ] && desc="${entry#*|}"
+      if [ "${i}" -eq "${selected}" ]; then
+        printf '  %s%s ❯ %-22s%s %s%s%s\n' "$C_CYAN" "$C_BOLD" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
+      else
+        printf '    %s%-22s%s %s%s%s\n' "$C_GREY" "${label}" "$C_OFF" "$C_DIM" "${desc}" "$C_OFF"
+      fi
+      i=$((i + 1))
+    done
+    printf '\n  %s↑↓ or 1-%s to choose · Enter to confirm%s' "$C_DIM" "${count}" "$C_OFF"
+
+    IFS= read -rsn1 key
+    case "${key}" in
+      $'\033')
+        # An escape sequence, or a bare Esc. Read the rest without blocking so
+        # a lone Esc does not hang waiting for characters that never come.
+        read -rsn2 -t 0.1 rest || rest=""
+        case "${rest}" in
+          "[A") selected=$(((selected - 1 + count) % count)) ;;
+          "[B") selected=$(((selected + 1) % count)) ;;
+        esac
+        ;;
+      "" ) printf '\033[?25h\n'; UI_CHOICE=$((selected + 1)); return 0 ;;
+      [1-9])
+        if [ "${key}" -le "${count}" ]; then
+          printf '\033[?25h\n'
+          # shellcheck disable=SC2034  # read by the wizard scripts that source this
+          UI_CHOICE="${key}"
+          return 0
+        fi
+        ;;
+      q|Q) printf '\033[?25h\n\n'; info "  cancelled"; exit 0 ;;
+    esac
+    # Redraw in place: options + the hint line.
+    printf '\033[%sA\r' "$((count + 2))"
+  done
+}
+
+# ── questions ────────────────────────────────────────────────────────────────
+
+# ui_ask VAR "Label" "default" "explanation" [validator]
+#
+# The explanation is the point. This is a guided version of
+# docs/04-CONFIGURATION.md — somebody installing for the first time should not
+# have to read a 190-line file to learn which six values matter.
+# shellcheck disable=SC2034  # read by the wizard scripts that source this
+UI_VALUE=""
+ui_ask() {
+  ui_require_tty
+  local name="$1" default="$2" explain="$3" validator="${4:-}" answer problem
+
+  while true; do
+    printf '\n  %s%s%s\n' "$C_BOLD" "${name}" "$C_OFF"
+    [ -n "${explain}" ] && ui_hint "${explain}"
+    if [ -n "${default}" ]; then
+      printf '\n  %s[%s]%s ' "$C_DIM" "${default}" "$C_OFF"
+    else
+      printf '\n  > '
+    fi
+
+    IFS= read -r answer
+    answer="${answer:-${default}}"
+
+    if [ -z "${answer}" ]; then
+      warn "this one is required"
+      continue
+    fi
+    if [ -n "${validator}" ] && ! problem="$("${validator}" "${answer}")"; then
+      warn "${problem}"
+      continue
+    fi
+    UI_VALUE="${answer}"
+    return 0
+  done
+}
+
+# A secret, with generation offered first — an operator asked to invent a
+# 32-character key will reach for something memorable, which is the problem.
+ui_secret() {
+  ui_require_tty
+  local name="$1" explain="$2" bytes="${3:-32}" choice answer
+
+  printf '\n  %s%s%s\n' "$C_BOLD" "${name}" "$C_OFF"
+  [ -n "${explain}" ] && ui_hint "${explain}"
+
+  # bytes=0 means the value belongs to somebody else — a directory service
+  # account, a mail relay, an OIDC client. Offering to generate one would be
+  # offering to invent a password that already exists somewhere.
+  if [ "${bytes}" -eq 0 ]; then
+    printf '\n  > '
+    read -rs answer
+    printf '\n'
+    UI_VALUE="${answer}"
+    [ -n "${UI_VALUE}" ] || warn "left empty"
+    return 0
+  fi
+
+  printf '\n  %s[g]%s generate one for me   %s[t]%s type my own\n  > ' \
+    "$C_BOLD" "$C_OFF" "$C_BOLD" "$C_OFF"
+
+  IFS= read -r choice
+  case "${choice:-g}" in
+    t|T)
+      printf '  '
+      read -rs answer
+      printf '\n'
+      UI_VALUE="${answer}"
+      ;;
+    *)
+      UI_VALUE="$(openssl rand -base64 "${bytes}" | tr -d '\n')"
+      ok "generated (${#UI_VALUE} characters)"
+      ;;
+  esac
+}
+
+ui_yesno() {
+  ui_require_tty
+  local prompt="$1" default="${2:-n}" answer hint
+  [ "${default}" = "y" ] && hint="[Y/n]" || hint="[y/N]"
+  printf '\n  %s %s%s%s ' "${prompt}" "$C_DIM" "${hint}" "$C_OFF"
+  IFS= read -r answer
+  answer="${answer:-${default}}"
+  case "${answer}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+# ── validators ───────────────────────────────────────────────────────────────
+# Each prints why it refused, on stdout, and returns non-zero. Catching these
+# here rather than at boot is most of the value: the alternative is a container
+# that exits with a message nobody sees until they go looking for logs.
+
+ui_valid_url() {
+  case "$1" in
+    https://*) return 0 ;;
+    http://*)
+      warn "plain http — passwords and session cookies would cross the network unencrypted"
+      return 0
+      ;;
+    *) printf 'must start with https:// (or http://)'; return 1 ;;
+  esac
+}
+
+ui_valid_email() {
+  case "$1" in
+    ?*@?*.?*) return 0 ;;
+    *) printf 'that does not look like an email address'; return 1 ;;
+  esac
+}
+
+ui_valid_ldap_url() {
+  case "$1" in
+    ldaps://*) return 0 ;;
+    ldap://*) printf 'use ldaps:// — a plain ldap:// bind sends every password in clear text, and on-premise the application refuses it'; return 1 ;;
+    *) printf 'must start with ldaps://'; return 1 ;;
+  esac
+}
+
+ui_valid_port() {
+  case "$1" in
+    ''|*[!0-9]*) printf 'must be a number' ; return 1 ;;
+    *) [ "$1" -ge 1 ] && [ "$1" -le 65535 ] && return 0
+       printf 'must be between 1 and 65535'; return 1 ;;
+  esac
+}
+
+ui_valid_secret() {
+  [ "${#1}" -ge 32 ] && return 0
+  printf 'must be at least 32 characters (%s given)' "${#1}"
+  return 1
+}
+
+# ── progress ─────────────────────────────────────────────────────────────────
+
+# ui_spinner "message" -- command…
+# Output goes to a log the caller can show if it fails; a `docker pull` writing
+# over a spinner is unreadable.
+UI_LAST_LOG=""
+ui_spinner() {
+  local message="$1"; shift; [ "$1" = "--" ] && shift
+  local log; log="$(mktemp)"; UI_LAST_LOG="${log}"
+
+  if [ ! -t 1 ]; then
+    printf '  %s … ' "${message}"
+    "$@" >"${log}" 2>&1 && { printf 'done\n'; return 0; } || return 1
+  fi
+
+  "$@" >"${log}" 2>&1 &
+  local pid=$! frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
+  printf '\033[?25l'
+  while kill -0 "${pid}" 2>/dev/null; do
+    printf '\r  %s%s%s %s' "$C_CYAN" "${frames:i++%10:1}" "$C_OFF" "${message}"
+    sleep 0.1
+  done
+  printf '\033[?25h\r\033[K'
+
+  if wait "${pid}"; then
+    ok "${message}"
+    return 0
+  fi
+  printf '  %s✗%s %s\n' "$C_RED" "$C_OFF" "${message}"
+  return 1
+}
+
+# The tail of the last ui_spinner command, for when it failed.
+ui_show_log() {
+  [ -f "${UI_LAST_LOG}" ] || return 0
+  printf '\n'
+  tail -n "${1:-15}" "${UI_LAST_LOG}" | sed "s/^/  ${C_DIM}/;s/$/${C_OFF}/"
+  printf '\n'
+}
+
+# ── summary ──────────────────────────────────────────────────────────────────
+
+# Collects `label|value` pairs, then draws them. Secrets are masked here rather
+# than at the call site, so a new setting cannot leak by being added without
+# somebody remembering to hide it.
+UI_SUMMARY=()
+ui_summary_add() { UI_SUMMARY+=("$1|$2"); }
+ui_summary_secret() { UI_SUMMARY+=("$1|••••••••  ${C_DIM}(${#2} characters)${C_OFF}"); }
+
+ui_summary_show() {
+  printf '\n  %s%s%s\n' "$C_BOLD" "${1:-Review}" "$C_OFF"
+  printf '  %s%s%s\n' "$C_GREY" "$(ui_rule $((UI_WIDTH - 2)))" "$C_OFF"
+  local entry
+  for entry in "${UI_SUMMARY[@]}"; do
+    printf '  %s%-24s%s %s\n' "$C_DIM" "${entry%%|*}" "$C_OFF" "${entry#*|}"
+  done
+  printf '\n'
+}

@@ -72,10 +72,18 @@ answers = [
     "2",                                    # sizing: up to 200
 ]
 
+# --user matters, and not only for tidiness. The wizard writes the candidate
+# with mode 600 — it holds the storage key and the database password. Written by
+# root inside the container, that file lands on a Linux host owned by root and
+# unreadable to the user running this, and every assertion below fails on
+# "Permission denied" rather than on anything real. It passes on macOS, where
+# Docker Desktop maps ownership to the calling user. Same shape as the other two
+# platform bugs this suite exists for.
 cmd = [
     "docker", "run", "--rm", "-i", "-t",
+    "--user", f"{os.getuid()}:{os.getgid()}",
     "-v", f"{root}:/w", "-v", f"{work}:/out", "-w", "/w",
-    "-e", "TERM=xterm",
+    "-e", "TERM=xterm", "-e", "HOME=/tmp",
     "tasksense-wizard-test",
     "./scripts/wizard/configure.sh", "--collect", "/out/candidate.env",
 ]

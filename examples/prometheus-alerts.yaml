@@ -1,0 +1,126 @@
+# TaskSense alerting rules.
+#
+# Kubernetes, with the Prometheus Operator:
+#   kubectl apply -f examples/prometheus-alerts.yaml -n <monitoring-namespace>
+#
+# Plain Prometheus: copy the `groups:` block into your rule_files.
+#
+# The two at the top are outages. The two after them are the failures that stay
+# silent until somebody cannot do their job — an expired licence and a full seat
+# cap both present as "a user cannot be invited", days after the cause.
+#
+# The latency and error-rate thresholds are deliberately loose. Tighten them
+# once you know what normal looks like on your hardware; an alert that fires
+# during every backup window is an alert people learn to close.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tasksense
+  labels:
+    app.kubernetes.io/name: tasksense
+    # Match your Prometheus's ruleSelector, e.g. release: kube-prometheus-stack
+spec:
+  groups:
+    - name: tasksense.availability
+      rules:
+        - alert: TaskSenseDown
+          expr: up{job=~".*tasksense.*"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: TaskSense is not responding to scrapes
+            description: >-
+              No instance has answered for 2 minutes. Check the pods, then
+              /api/v1/health/ready — if that fails, the cause is usually MongoDB.
+            runbook: docs/10-TROUBLESHOOTING.md
+
+        - alert: TaskSenseMongoDown
+          expr: tasksense_mongo_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: TaskSense cannot reach MongoDB
+            description: >-
+              MongoDB is the only data store and there is no fallback, so the
+              application can serve nothing. Readiness is already failing, which
+              takes the instance out of the Service.
+
+        - alert: TaskSenseRestarting
+          expr: increase(kube_pod_container_status_restarts_total{container="tasksense"}[15m]) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense is restarting repeatedly
+            description: >-
+              Usually memory pressure, or a liveness probe pointed at an endpoint
+              that touches the database. The log line before each restart says
+              which.
+
+    - name: tasksense.licence
+      rules:
+        - alert: TaskSenseLicenceExpiring
+          # -1 means perpetual or absent; only a real countdown should alert.
+          expr: tasksense_license_expires_in_days >= 0 and tasksense_license_expires_in_days < 30
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense licence expires in {{ $value }} days
+            description: >-
+              On expiry the instance drops to free-tier limits — a seat cap and a
+              monthly automation allowance. Data is never blocked, but the first
+              symptom is a colleague who cannot be invited.
+
+        - alert: TaskSenceLicenceExpired
+          expr: tasksense_license_valid == 0 and tasksense_seats_limit > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense is running without a valid licence
+            description: Free-tier limits are in force. Your data is untouched.
+
+        - alert: TaskSenseSeatsNearLimit
+          expr: tasksense_seats_limit > 0 and (tasksense_users / tasksense_seats_limit) > 0.9
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense is at {{ $value | humanizePercentage }} of its seat cap
+            description: >-
+              Further invitations will be refused. Raise the cap before it is
+              somebody's first day.
+
+    - name: tasksense.performance
+      rules:
+        - alert: TaskSenseSlowRequests
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le) (rate(tasksense_http_request_duration_seconds_bucket[10m]))
+            ) > 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense p95 request latency is above 1s
+            description: >-
+              Most often an undersized MongoDB cache — check memory before CPU.
+              See docs/11-SIZING.md.
+
+        - alert: TaskSenseErrorRate
+          expr: >-
+            sum(rate(tasksense_http_requests_total{status=~"5.."}[10m]))
+              /
+            sum(rate(tasksense_http_requests_total[10m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of TaskSense requests are failing
+            description: >-
+              Every 5xx is logged with a stack trace and a requestId. Search the
+              logs for that id to find one end to end.

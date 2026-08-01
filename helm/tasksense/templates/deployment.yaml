@@ -1,0 +1,112 @@
+{{- include "tasksense.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tasksense.fullname" . }}
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
+    # A ReadWriteOnce volume cannot be mounted by the old and new pod at once,
+    # so a rolling update would deadlock: the new pod waits for a volume the
+    # old one still holds. Recreate accepts a few seconds of downtime instead
+    # of hanging until the deadline.
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "tasksense.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        # Restarts the pods when the configuration changes. Without it, a
+        # `helm upgrade` that only alters a value leaves the old value running
+        # and the release looks applied when it is not.
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: tasksense
+          image: {{ include "tasksense.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env: {{- include "tasksense.env" . | nindent 12 }}
+          envFrom: {{- include "tasksense.envFrom" . | nindent 12 }}
+
+          # Liveness must NOT touch MongoDB. /health and /health/ready both do,
+          # and pointing this at either restarts every replica during a database
+          # failover — the one moment when killing the application lengthens the
+          # outage rather than ending it.
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness must. MongoDB is the only data store, so an instance that
+          # cannot reach it can serve nothing and should be taken out of the
+          # Service until it can.
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Covers the slow first boot: connecting, and applying migrations when
+          # migrations.onBoot is auto. Generous, because the alternative is a
+          # pod killed halfway through a schema change.
+          startupProbe:
+            httpGet:
+              path: /api/v1/health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /app/api/data
+            {{- end }}
+            # readOnlyRootFilesystem is on, and Node writes temporary files.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "tasksense.fullname" .)) }}
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

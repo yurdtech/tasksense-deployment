@@ -1,0 +1,55 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "tasksense.fullname" . }}-backup
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              image: {{ .Values.backup.image }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  STAMP="$(date -u +%Y%m%d-%H%M%SZ)"
+                  OUT="/data/backups/mongodump-${STAMP}.archive.gz"
+                  mkdir -p /data/backups
+
+                  mongodump --uri="${MONGODB_URI}" --db=tasksense --archive="${OUT}" --gzip
+
+                  # A dump that is implausibly small is worse than no dump: it
+                  # looks like a backup until the day it is needed.
+                  SIZE="$(wc -c < "${OUT}")"
+                  if [ "${SIZE}" -lt 1024 ]; then
+                    echo "dump is only ${SIZE} bytes — refusing to keep it" >&2
+                    rm -f "${OUT}"
+                    exit 1
+                  fi
+                  echo "wrote ${OUT} (${SIZE} bytes)"
+
+                  find /data/backups -name 'mongodump-*.archive.gz' \
+                    -mtime +{{ .Values.backup.retentionDays }} -delete
+              envFrom:
+                - secretRef:
+                    name: {{ include "tasksense.secretName" . }}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "tasksense.fullname" .)) }}
+{{- end }}

@@ -1,0 +1,32 @@
+apiVersion: v2
+name: tasksense
+description: TaskSense — task intelligence platform, on-premise
+type: application
+
+# The chart version moves independently of the application: a change to a
+# template is a new chart version even when the image is unchanged.
+version: 1.0.0
+
+# Overridden by --set image.tag, but this is what you get if you forget, and it
+# should be a version that exists rather than "latest".
+appVersion: "1.0.0"
+
+home: https://github.com/yurdtech/tasksense-deployment
+sources:
+  - https://github.com/yurdtech/tasksense-deployment
+maintainers:
+  - name: YurdTech
+    email: support@yurdtech.az
+
+keywords:
+  - tasks
+  - project-management
+  - on-premise
+
+annotations:
+  # No MongoDB subchart. In a cluster the database is almost always something
+  # the platform team already runs — an operator, a managed service, a
+  # StatefulSet with their own backup policy — and bundling one would either be
+  # ignored or, worse, quietly used in production without a backup story.
+  # `mongodbUri` is required; docs/02-INSTALL-KUBERNETES.md covers the options.
+  artifacthub.io/prerelease: "false"

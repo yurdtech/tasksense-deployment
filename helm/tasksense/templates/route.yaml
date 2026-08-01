@@ -1,0 +1,21 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "tasksense.fullname" . }}
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  annotations:
+    # Server-sent events: without a long timeout the router closes the live
+    # update stream every 30 seconds and the interface reconnects in a loop.
+    haproxy.router.openshift.io/timeout: 24h
+spec:
+  {{- with .Values.route.host }}
+  host: {{ . | quote }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "tasksense.fullname" . }}
+  port:
+    targetPort: http
+  tls: {{- toYaml .Values.route.tls | nindent 4 }}
+{{- end }}

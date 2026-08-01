@@ -90,17 +90,19 @@ Sizing for larger installs: [`docs/11-SIZING.md`](docs/11-SIZING.md).
 | --- | --- |
 | [00-OVERVIEW](docs/00-OVERVIEW.md) | deciding whether and how to deploy |
 | [01-INSTALL-COMPOSE](docs/01-INSTALL-COMPOSE.md) | installing on a VM |
+| [02-INSTALL-KUBERNETES](docs/02-INSTALL-KUBERNETES.md) | installing on Kubernetes |
+| [03-INSTALL-OPENSHIFT](docs/03-INSTALL-OPENSHIFT.md) | installing on OpenShift |
 | [04-CONFIGURATION](docs/04-CONFIGURATION.md) | looking up what a setting does |
 | [05-IDENTITY](docs/05-IDENTITY.md) | wiring up Active Directory, LDAP or SSO |
 | [06-SECURITY](docs/06-SECURITY.md) | **reviewing this for a security committee** |
 | [07-BACKUP-DR](docs/07-BACKUP-DR.md) | responsible for backups and recovery |
 | [08-UPGRADE](docs/08-UPGRADE.md) | planning a version upgrade |
+| [09-MONITORING](docs/09-MONITORING.md) | wiring up Prometheus, Grafana or a SIEM |
 | [10-TROUBLESHOOTING](docs/10-TROUBLESHOOTING.md) | debugging a broken install |
 | [13-REGISTRY-ACCESS](docs/13-REGISTRY-ACCESS.md) | managing the registry token |
 
-Still being written, and shipping with the Helm chart: Kubernetes and OpenShift
-installation, monitoring recipes, sizing detail, and running the AI features on
-an internal model. Ask your contact if you need one of them now.
+The Helm chart is in [`helm/tasksense`](helm/tasksense), with OpenShift values
+alongside it and Prometheus alert rules in [`examples/`](examples/).
 
 ---
 

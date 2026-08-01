@@ -1,0 +1,59 @@
+TaskSense {{ .Values.image.tag | default .Chart.AppVersion }} is installing.
+
+Watch it come up:
+
+  kubectl rollout status deploy/{{ include "tasksense.fullname" . }} -n {{ .Release.Namespace }}
+
+{{- if eq .Values.migrations.onBoot "manual" }}
+
+Schema migrations ran in a Job before the pods started. If the release failed
+here, that Job is where the reason is:
+
+  kubectl logs job/{{ include "tasksense.fullname" . }}-migrate -n {{ .Release.Namespace }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Reach it at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else if .Values.route.enabled }}
+
+Reach it at:
+
+  kubectl get route {{ include "tasksense.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}'
+{{- else }}
+
+No Ingress or Route is enabled. To try it locally:
+
+  kubectl port-forward svc/{{ include "tasksense.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  curl http://localhost:8080/api/v1/health
+{{- end }}
+
+{{- if .Values.firstAdminEmail }}
+
+{{ .Values.firstAdminEmail }} is the administrator of the new workspace, and has
+NO password — sign in through your identity provider, or register with that
+address to set one. No default credential ships with the product.
+{{- end }}
+
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is off. Uploaded files live in the pod and disappear when
+it restarts. Point Admin → Storage at object storage, or enable persistence.
+{{- end }}
+
+{{- if and .Values.persistence.enabled (not .Values.backup.enabled) }}
+
+Backups are not scheduled. Set backup.enabled, or point your own backup tooling
+at MongoDB and the data volume — docs/07-BACKUP-DR.md. A backup you have never
+restored is a hypothesis.
+{{- end }}
+
+{{- if not .Values.networkPolicy.enabled }}
+
+networkPolicy is off. The application makes outbound requests to URLs an
+administrator configures (webhooks, importers, model endpoints); the policy is
+what bounds them at the network layer. Worth turning on — see values.yaml.
+{{- end }}

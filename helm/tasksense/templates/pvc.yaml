@@ -1,0 +1,19 @@
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tasksense.fullname" . }}-data
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  annotations:
+    # Uploaded files live here. Deleting the release must not delete them —
+    # `helm uninstall` is not a decision to discard a customer's attachments.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+{{- end }}

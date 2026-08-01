@@ -1,0 +1,60 @@
+{{- if and .Values.migrations.hook.enabled (eq .Values.migrations.onBoot "manual") }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tasksense.fullname" . }}-migrate
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  annotations:
+    # Before the pods, on install and on upgrade. With MIGRATE_ON_BOOT=manual
+    # the application refuses to start while anything is pending, so this Job is
+    # what makes the schema ready — once, from one place, rather than from
+    # whichever replica happens to boot first.
+    #
+    # The runner is safe under concurrency on its own (the ledger's unique _id
+    # is the lock), so this is not the thing that prevents a double-apply. What
+    # it buys is that a failed migration fails the *upgrade*, visibly, instead
+    # of leaving pods crash-looping while the release reports success.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
+  # Kept for a day so a failed migration can still be read after the fact.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {{- include "tasksense.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "tasksense.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ["node", "dist/database/migrations/cli.js", "up"]
+          env: {{- include "tasksense.env" . | nindent 12 }}
+          envFrom:
+            # The hook copy, not the release's Secret — that one does not exist
+            # yet when hooks run. See job-migrate-secret.yaml. An operator-
+            # supplied `existingSecret` is already there, so it is used directly.
+            - secretRef:
+                name: {{ if .Values.existingSecret }}{{ .Values.existingSecret }}{{ else }}{{ include "tasksense.fullname" . }}-migrate{{ end }}
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}

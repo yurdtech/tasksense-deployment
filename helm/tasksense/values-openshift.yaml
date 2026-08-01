@@ -1,0 +1,37 @@
+# OpenShift overrides.
+#
+#   helm install tasksense ./helm/tasksense \
+#     -f helm/tasksense/values-openshift.yaml -f my-values.yaml
+#
+# The image already runs under the `restricted-v2` SCC unmodified — it is built
+# with its files owned by group 0 and group-writable where it needs to write, so
+# an arbitrary uid can use it. No custom SCC, no ServiceAccount privileges.
+
+podSecurityContext:
+  # Cleared, not set. OpenShift assigns a uid from the namespace's range and
+  # rejects a pod that asks for a specific one under restricted-v2. `fsGroup`
+  # is likewise assigned; naming either is how a chart that "supports
+  # OpenShift" fails to admit.
+  runAsNonRoot: true
+  runAsUser: null
+  fsGroup: null
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Routes rather than Ingress. OpenShift supports both; Route is what the
+# cluster's own router serves and what `oc get route` will show you.
+ingress:
+  enabled: false
+
+route:
+  enabled: true
+  host: ""            # empty lets OpenShift generate one from the app name
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

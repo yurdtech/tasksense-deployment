@@ -1,0 +1,60 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tasksense.fullname" . }}
+  labels: {{- include "tasksense.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+
+  ingress:
+    # The ingress controller, and anything else you name.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        {{- range .Values.networkPolicy.ingressNamespaceSelectors }}
+        - namespaceSelector:
+            matchLabels: {{- toYaml . | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: 3000
+          protocol: TCP
+    # Prometheus scraping, when it is not in one of the namespaces above.
+    {{- if .Values.metrics.enabled }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 3000
+          protocol: TCP
+    {{- end }}
+
+  egress:
+    # DNS. Everything below resolves a name first, so without this the policy
+    # blocks the database as effectively as it blocks the internet.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # The hosts you named: MongoDB, the directory, the mail relay, a model
+    # endpoint. Nothing else — which is the point. The application makes
+    # outbound requests to URLs an administrator configures, and this is the
+    # layer that bounds them regardless of what is typed into the admin console.
+    {{- with .Values.networkPolicy.egressCIDRs }}
+    - to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}

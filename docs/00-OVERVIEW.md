@@ -74,8 +74,8 @@ Detail in [11-SIZING](11-SIZING.md).
 | | Choose it when | Guide |
 | --- | --- | --- |
 | **Docker Compose** on a VM | You want the simplest thing that works. Most installations. | [01](01-INSTALL-COMPOSE.md) |
-| **Kubernetes** (Helm) | You have a cluster and a platform team already running things on it. | ships with the Helm chart |
-| **OpenShift** | Same, on Red Hat. The image runs under `restricted-v2` unmodified. | ships with the Helm chart |
+| **Kubernetes** (Helm) | You have a cluster and a platform team already running things on it. | [02](02-INSTALL-KUBERNETES.md) |
+| **OpenShift** | Same, on Red Hat. The image runs under `restricted-v2` unmodified. | [03](03-INSTALL-OPENSHIFT.md) |
 
 Compose is not the lesser option. A single well-backed-up VM is easier to
 operate, easier to reason about and easier to restore than a cluster, and for a

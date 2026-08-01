@@ -1,0 +1,208 @@
+# TaskSense — Helm values.
+#
+#   helm install tasksense ./helm/tasksense -f my-values.yaml
+#
+# Four values have no default and the chart refuses to render without them:
+# appUrl, mongodbUri, storageSecret, firstAdminEmail. Everything else has a
+# working default.
+
+image:
+  repository: ghcr.io/yurdtech/tasksense
+  # Pin it. `latest` means a pod restart can land on a different version than
+  # its neighbours are running.
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# The registry is private. Create the secret first:
+#   kubectl create secret docker-registry ghcr \
+#     --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+imagePullSecrets:
+  - name: ghcr
+
+# ── Required ─────────────────────────────────────────────────────────────────
+
+# The URL users type. Sign-in redirects are built from it, so changing it later
+# means reconfiguring your identity provider.
+appUrl: ""
+
+# The only data store. Not bundled — see the note in Chart.yaml.
+# Put TLS and replica-set options in the URI:
+#   mongodb://user:pass@mongo-0,mongo-1/?replicaSet=rs0&tls=true&authSource=admin
+mongodbUri: ""
+
+# Encrypts stored provider credentials at rest. At least 32 characters.
+#   openssl rand -base64 32
+# Not recoverable: back it up with the database, or a restore returns
+# credentials nobody can decrypt.
+storageSecret: ""
+
+# First install only. Becomes the administrator of the new, empty workspace,
+# with no password — sign in through your identity provider, or register with
+# the same address to set one.
+firstAdminEmail: ""
+
+# Supply the four above from a Secret you manage instead (Vault, sealed-secrets,
+# an external-secrets operator). It must contain APP_URL, MONGODB_URI,
+# STORAGE_SECRET and FIRST_ADMIN_EMAIL. Anything set here is then ignored.
+existingSecret: ""
+
+# ── Optional ─────────────────────────────────────────────────────────────────
+
+# Ed25519-signed, verified offline. Without one, free-tier limits apply.
+licenseKey: ""
+
+replicaCount: 1
+
+# Extra environment variables, for anything the chart does not model —
+# LDAP_*, OIDC_*, SMTP_*, EGRESS_ALLOWLIST, SESSION_TTL_HOURS. Reference
+# docs/04-CONFIGURATION.md; secrets belong in `existingSecret` or
+# `extraEnvFrom`, not here.
+extraEnv: {}
+#  LDAP_URL: ldaps://dc01.corp.internal:636
+#  SESSION_TTL_HOURS: "12"
+
+# Secrets and ConfigMaps to load wholesale.
+extraEnvFrom: []
+#  - secretRef:
+#      name: tasksense-ldap
+
+logging:
+  format: json     # json for a SIEM; text is readable but not parseable
+  level: log       # verbose | debug | log | warn | error | fatal
+
+metrics:
+  enabled: false
+  # Required when enabled — the endpoint 404s without it. The gauges report
+  # seat usage and licence expiry, which is an inventory of the installation.
+  #   openssl rand -hex 32
+  token: ""
+  serviceMonitor:
+    enabled: false          # needs the Prometheus Operator
+    interval: 30s
+    labels: {}              # e.g. release: kube-prometheus-stack
+
+# Schema migrations. `manual` plus the pre-upgrade hook below is the right
+# pairing in a cluster: migrations run once, from a Job, before any new pod
+# starts — rather than from whichever replica happens to boot first.
+migrations:
+  onBoot: manual
+  hook:
+    enabled: true
+    backoffLimit: 0         # a failed migration should stop the upgrade
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+
+persistence:
+  # Uploaded files, agent workspaces and the in-application snapshots.
+  #
+  # With more than one replica this MUST be ReadWriteMany, or use object
+  # storage instead (Admin → Storage) and set enabled: false. Two replicas on
+  # a ReadWriteOnce volume will not schedule, which is the good failure; one
+  # replica writing files another cannot read is the bad one.
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  storageClass: ""          # "" uses the cluster default
+  existingClaim: ""
+
+# ── Networking ───────────────────────────────────────────────────────────────
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    # Live updates are server-sent events. Buffered, the interface looks frozen
+    # — changes arrive only when the buffer happens to flush.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    # Must be at least storageMaxFileMb, or uploads are rejected before they
+    # reach the application and the error comes from the wrong place.
+    nginx.ingress.kubernetes.io/proxy-body-size: 25m
+  hosts:
+    - host: tasksense.example.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: tasksense-tls
+  #    hosts: [tasksense.example.internal]
+
+# OpenShift only; ignored elsewhere. See values-openshift.yaml.
+route:
+  enabled: false
+  host: ""
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+networkPolicy:
+  # Default-deny egress, then allow only what the application actually needs.
+  # Worth turning on: the product makes outbound requests to URLs an
+  # administrator configures, and this is the layer that bounds them.
+  enabled: false
+  # CIDRs the application may reach — MongoDB, the directory, the mail relay,
+  # a model endpoint. DNS to kube-dns is allowed automatically.
+  egressCIDRs: []
+  #  - 10.20.0.0/16
+  # Namespaces allowed to reach the application, beyond the ingress controller.
+  ingressNamespaceSelectors: []
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+
+storageMaxFileMb: 25
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    # No CPU limit by default: throttling a Node process at the limit shows up
+    # as latency nobody can explain. The request reserves the capacity.
+    memory: 2Gi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Matches the image: uid 1001, group 0, nothing writable but the data volume.
+# values-openshift.yaml clears the uid so the SCC can assign one.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+# ── Backup ───────────────────────────────────────────────────────────────────
+
+backup:
+  # mongodump into the data volume. This is a convenience, not a disaster
+  # recovery plan — see docs/07-BACKUP-DR.md. A cluster with a backup operator
+  # should use that instead and leave this off.
+  enabled: false
+  schedule: "0 2 * * *"
+  # The image needs mongodump. Any mongo image will do.
+  image: mongo:7
+  retentionDays: 30

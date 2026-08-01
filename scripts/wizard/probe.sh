@@ -91,6 +91,27 @@ probe_one() {
   return 1
 }
 
+# Does the configuration parse at all?
+#
+# Every check builds the config first, so an invalid value fails all of them
+# with the same message — and the installer would report whichever ran as the
+# failure. That is how `LOG_LEVEL=info` came out as "1 check(s) failed: ldap",
+# offering to re-enter a bind DN that was never wrong.
+#
+# `oidc` is used as the vehicle: it parses the environment and then, with no
+# issuer configured, does nothing at all.
+probe_config() {
+  local image="$1" envfile="$2" out
+  out="$("${RUNTIME}" run --rm --env-file "${envfile}" "${image}" node dist/probe/cli.js oidc 2>&1 || true)"
+  case "${out}" in
+    *"Invalid environment configuration"*|*"nvalid enum value"*)
+      printf '%s\n' "${out}" | sed '/^$/d;s/^/  /'
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 # probe_run <candidate.env> [sample-username]
 probe_run() {
   local candidate="$1" sample="${2:-}" image envfile
@@ -108,6 +129,13 @@ probe_run() {
     note "the installation will go ahead; a wrong directory setting will show up at first sign-in instead"
     rm -f "${envfile}"
     return 0
+  fi
+
+  if ! probe_config "${image}" "${envfile}"; then
+    warn "the configuration itself was rejected — no connection was attempted"
+    PROBE_FAILED=(configuration)
+    rm -f "${envfile}"
+    return 1
   fi
 
   local -a checks=()

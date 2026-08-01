@@ -196,7 +196,11 @@ section_for() {
 
 while ! probe_run "${CANDIDATE}"; do
   printf '\n'
-  warn "${#PROBE_FAILED[@]} check(s) failed: ${PROBE_FAILED[*]}"
+  if [ "${PROBE_FAILED[0]}" = "configuration" ]; then
+    warn "the configuration is not valid — the message above names the setting"
+  else
+    warn "${#PROBE_FAILED[@]} check(s) failed: ${PROBE_FAILED[*]}"
+  fi
   ui_text "The reason is printed above each one. Installing on top of this would produce a system that starts but that nobody can sign in to."
   printf '\n'
 
@@ -208,9 +212,15 @@ while ! probe_run "${CANDIDATE}"; do
 
   case "${UI_CHOICE}" in
     1)
-      for check in "${PROBE_FAILED[@]}"; do
-        "${WIZARD_DIR}/configure.sh" --section "$(section_for "${check}")" "${CANDIDATE}"
-      done
+      # A rejected configuration names its own variable and belongs to no single
+      # section, so it opens the whole menu rather than guessing.
+      if [ "${PROBE_FAILED[0]}" = "configuration" ]; then
+        "${WIZARD_DIR}/configure.sh" --edit-candidate "${CANDIDATE}" || true
+      else
+        for check in "${PROBE_FAILED[@]}"; do
+          "${WIZARD_DIR}/configure.sh" --section "$(section_for "${check}")" "${CANDIDATE}"
+        done
+      fi
       ;;
     2) ;;
     3) warn "continuing with failing checks"; break ;;

@@ -85,7 +85,7 @@ first with local passwords and connect the directory afterwards.
 **With access to the registry:**
 
 ```bash
-echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u <username> --password-stdin
+echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u yurdtech --password-stdin
 ./scripts/install.sh
 ```
 

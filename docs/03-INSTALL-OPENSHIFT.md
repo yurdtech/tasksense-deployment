@@ -26,7 +26,7 @@ oc new-project tasksense
 
 oc create secret docker-registry ghcr \
   --docker-server=ghcr.io \
-  --docker-username=<username> \
+  --docker-username=yurdtech \
   --docker-password="$TASKSENSE_REGISTRY_TOKEN"
 
 helm install tasksense ./helm/tasksense \

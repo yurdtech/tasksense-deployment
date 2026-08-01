@@ -38,6 +38,7 @@ run "menu" ./tests/menu.sh
 run "registry login" ./tests/registry-login.sh
 run "renderer" ./tests/wizard-render.sh
 run ".env.example" ./tests/env-example.sh
+run "mongo uri" ./tests/mongo-uri.sh
 run "flow" ./tests/wizard-flow.sh
 
 printf '\n'

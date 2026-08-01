@@ -28,6 +28,10 @@ appUrl: ""
 # The only data store. Not bundled — see the note in Chart.yaml.
 # Put TLS and replica-set options in the URI:
 #   mongodb://user:pass@mongo-0,mongo-1/?replicaSet=rs0&tls=true&authSource=admin
+#
+# Percent-encode anything in the password that a URI treats as structure —
+# / : @ ? # [ ] % — or the driver refuses the whole string with "Password
+# contains unescaped characters". A hex password avoids the question.
 mongodbUri: ""
 
 # Encrypts stored provider credentials at rest. At least 32 characters.

@@ -167,6 +167,10 @@ check "STORAGE_SECRET is not the example's empty value" "ok" \
   "$([ -n "${SECRET}" ] && echo ok || echo empty)"
 MONGO_PW="$(value_of "${OUT}" MONGO_PASSWORD)"
 check "MONGO_PASSWORD generated" "ok" "$([ "${#MONGO_PW}" -ge 24 ] && echo ok || echo "only ${#MONGO_PW}")"
+# It is substituted into a MongoDB URI by the compose file. base64 emits / + and
+# =, and the driver rejects all three there — two in three installs died on it.
+check "and is safe to put inside a connection string" "ok" \
+  "$(case "${MONGO_PW}" in *[/:@?\#%+=]*) echo "contains a URI-reserved character" ;; *) echo ok ;; esac)"
 
 # The menu selection routed to the LDAP sub-flow, and the awkward characters
 # made it through a terminal intact.

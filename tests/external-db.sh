@@ -69,11 +69,36 @@ check "and the bundled host is nowhere in it" "0" \
   "$(printf '%s' "$(uri_of)" | grep -c '@mongo:27017')"
 
 # ── 3. the bundled database is not started ───────────────────────────────────
+#
+# Against a stand-in image, not ours.
+#
+# `--dry-run` still resolves images, so on a machine where ghcr.io/…/tasksense
+# is not cached it stops at "Image … Error not found" and narrates nothing
+# further. The first version of this checked for "tasksense-app  Created" and
+# passed only where the image happened to be pulled — and the mongo assertion
+# beside it then passed for no reason at all, because the run never got that
+# far. What is under test here is the compose wiring, so the application's image
+# is deliberately something any machine can fetch.
+STANDIN=("TASKSENSE_IMAGE=busybox" "TASKSENSE_VERSION=latest")
 
+write_env "MONGODB_URI=${THEIRS}" "${STANDIN[@]}"
 out="$(cd "${ROOT}/compose" && docker compose up -d --scale mongo=0 --dry-run 2>&1)"
+
 # --dry-run narrates both "Creating" and "Created"; match the finished one.
 check "the application is created" "1" "$(printf '%s' "${out}" | grep -c 'tasksense-app  *Created')"
 check "and the database container is not" "0" "$(printf '%s' "${out}" | grep -c 'tasksense-mongo')"
+
+# The reason --scale is used rather than a compose profile: a profiled service
+# in depends_on makes compose reject the entire project, so the two assertions
+# above could never both hold. This is that difference, asserted.
+( cd "${ROOT}/compose" && docker compose config >/dev/null 2>&1 )
+check "and the project is still valid with the database scaled away" "0" "$?"
+
+# Without --scale the database is part of the plan, so the check above is
+# measuring the flag rather than the absence of a service.
+out="$(cd "${ROOT}/compose" && docker compose up -d --dry-run 2>&1)"
+check "unscaled, the bundled database would be created" "1" \
+  "$(printf '%s' "${out}" | grep -c 'tasksense-mongo  *Created')"
 
 # ── 4. the scripts know which of the two it is ───────────────────────────────
 

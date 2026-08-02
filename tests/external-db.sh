@@ -82,20 +82,22 @@ check "and the bundled host is nowhere in it" "0" \
 STANDIN=("TASKSENSE_IMAGE=busybox" "TASKSENSE_VERSION=latest")
 
 write_env "MONGODB_URI=${THEIRS}" "${STANDIN[@]}"
-out="$(cd "${ROOT}/compose" && docker compose up -d --scale mongo=0 --dry-run 2>&1)"
+out="$(cd "${ROOT}/compose" && docker compose up -d --no-deps --dry-run app 2>&1)"
 
 # --dry-run narrates both "Creating" and "Created"; match the finished one.
 check "the application is created" "1" "$(printf '%s' "${out}" | grep -c 'tasksense-app  *Created')"
 check "and the database container is not" "0" "$(printf '%s' "${out}" | grep -c 'tasksense-mongo')"
 
-# The reason --scale is used rather than a compose profile: a profiled service
-# in depends_on makes compose reject the entire project, so the two assertions
-# above could never both hold. This is that difference, asserted.
+# The reason a profile is not used: a profiled service named in depends_on makes
+# compose reject the entire project, so the two assertions above could never
+# both hold.
 ( cd "${ROOT}/compose" && docker compose config >/dev/null 2>&1 )
-check "and the project is still valid with the database scaled away" "0" "$?"
+check "and the project is still valid without it" "0" "$?"
 
-# Without --scale the database is part of the plan, so the check above is
-# measuring the flag rather than the absence of a service.
+# Without --no-deps the database is part of the plan, so the check above is
+# measuring the flag rather than the absence of a service. --scale mongo=0 was
+# tried first and is ignored by some compose versions, including the runners';
+# this assertion is what would catch the same thing happening to --no-deps.
 out="$(cd "${ROOT}/compose" && docker compose up -d --dry-run 2>&1)"
 check "unscaled, the bundled database would be created" "1" \
   "$(printf '%s' "${out}" | grep -c 'tasksense-mongo  *Created')"

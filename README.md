@@ -24,9 +24,13 @@ cd tasksense-deployment
 ```
 
 `./tasksense` walks you through it: checks the host, signs in to the registry
-(it asks for the token, and says where to get one), asks about ten questions
-with each setting explained, **tests your answers against your real directory
-and mail relay before installing**, then installs. About fifteen minutes.
+(it asks for the token, and says where to get one), **tests your answers against
+your real directory and mail relay before installing**, then installs. About
+fifteen minutes.
+
+It asks how you would rather configure it — question by question, or by opening
+`.env` in your editor to paste a prepared one. A run that stops part-way keeps
+what you entered, and the next one offers to carry on.
 
 It is also where you go afterwards — status, upgrades, backups, restores, logs
 and support diagnostics are all behind the same command.

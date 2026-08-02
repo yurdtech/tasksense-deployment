@@ -13,9 +13,22 @@ cd tasksense-deployment
 ```
 
 It checks the host, asks for the registry token (and says where to get one),
-asks about ten questions with each setting explained where it appears, **tests
-your answers against your real directory and mail relay before installing**,
-then installs. About fifteen minutes.
+**tests your answers against your real directory and mail relay before
+installing**, then installs. About fifteen minutes.
+
+It offers two ways to fill in the configuration, and neither is the lesser one:
+
+- **Answer questions** — one setting at a time, each explained where it appears.
+- **Edit the file** — it opens `.env.example` in your editor with its
+  explanations intact. Fill in the values marked REQUIRED, or select everything
+  and paste a configuration you already have.
+
+The second exists because somebody installing their fourth environment already
+knows what goes in the file and has the values in a ticket. Both produce the same
+`compose/.env`.
+
+Answers are kept if a run stops part-way. The next `./tasksense` offers to carry
+on from where it ended rather than starting over.
 
 Afterwards the same command is the operations panel: status, logs, upgrades,
 backups, restores and support diagnostics.

@@ -85,8 +85,18 @@ write_env "MONGODB_URI=${THEIRS}" "${STANDIN[@]}"
 out="$(cd "${ROOT}/compose" && docker compose up -d --no-deps --dry-run app 2>&1)"
 
 # --dry-run narrates both "Creating" and "Created"; match the finished one.
-check "the application is created" "1" "$(printf '%s' "${out}" | grep -c 'tasksense-app  *Created')"
-check "and the database container is not" "0" "$(printf '%s' "${out}" | grep -c 'tasksense-mongo')"
+# Matched on "Container <name>" specifically. `tasksense-mongo` on its own also
+# matches the volume, `tasksense-mongo-data`, which compose narrates creating on
+# a machine that does not already have it — so the earlier version of this could
+# fail on a clean runner while the service it was asking about never started.
+db_lines="$(printf '%s\n' "${out}" | grep -c 'Container tasksense-mongo')"
+
+check "the application is created" "1" \
+  "$(printf '%s\n' "${out}" | grep -c 'Container tasksense-app  *Created')"
+if [ "${db_lines}" != "0" ]; then
+  printf '  what compose planned:\n%s\n' "$(printf '%s\n' "${out}" | sed 's/^/      /')"
+fi
+check "and the database container is not" "0" "${db_lines}"
 
 # The reason a profile is not used: a profiled service named in depends_on makes
 # compose reject the entire project, so the two assertions above could never
@@ -100,7 +110,7 @@ check "and the project is still valid without it" "0" "$?"
 # this assertion is what would catch the same thing happening to --no-deps.
 out="$(cd "${ROOT}/compose" && docker compose up -d --dry-run 2>&1)"
 check "unscaled, the bundled database would be created" "1" \
-  "$(printf '%s' "${out}" | grep -c 'tasksense-mongo  *Created')"
+  "$(printf '%s\n' "${out}" | grep -c 'Container tasksense-mongo  *Created')"
 
 # ── 4. the scripts know which of the two it is ───────────────────────────────
 

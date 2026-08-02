@@ -116,16 +116,11 @@ external_database() {
 # project when the profiled service is disabled — "service app depends on
 # undefined service mongo: invalid compose project".
 #
-# `--scale mongo=0` looked like the answer and is not portable. It works on
-# Docker Desktop's compose and is ignored by the one on GitHub's runners, which
-# started the database anyway; a customer's older compose would have done the
-# same, and the symptom is the quiet one — an unwanted database running beside
-# the cluster they told us to use.
-#
-# `--no-deps app` names what to start rather than what to leave out. It predates
-# both of the above and does not depend on how a version treats a dependency it
-# has been told to skip. If the stack ever gains a second service that belongs
-# with the application, it has to be named here too.
+# `--scale mongo=0` would also work. `--no-deps app` is preferred for naming what
+# to start rather than what to leave out: it says the thing directly, and it does
+# not depend on how a compose version treats a dependency it has been told to
+# scale away. If the stack ever gains a second service that belongs with the
+# application, it has to be named here too.
 compose_up() {
   if external_database; then
     compose up -d --no-deps app

@@ -64,6 +64,34 @@ registry is reachable. Fix anything it marks with `✗` before continuing.
 
 ---
 
+## Using a MongoDB you already run
+
+TaskSense brings its own database by default, which is what most installations
+want. If you have a cluster — a replica set, something your DBAs administer —
+set one line instead:
+
+```bash
+MONGODB_URI=mongodb://tasksense:PASSWORD@mongo-0.bank.internal:27017,mongo-1.bank.internal:27017/?replicaSet=rs0&tls=true&authSource=admin
+```
+
+Then the bundled container is **not started at all**, and `MONGO_USER` and
+`MONGO_PASSWORD` are unused — they exist to create the bundled one.
+
+The account needs read and write on one database. TaskSense creates its own
+collections and indexes there on first start; nothing has to be prepared.
+
+Two consequences worth knowing before you choose it:
+
+- **Backups become yours.** `./scripts/backup.sh` covers uploaded files and
+  configuration, but it cannot reach a database it does not run. See
+  [07-BACKUP-DR](07-BACKUP-DR.md).
+- **Percent-encode the password** if it contains `/ : @ ? # [ ] %`. A URI reads
+  those as structure, and the driver refuses the whole string before connecting
+  to anything.
+
+`./tasksense` asks which of the two you want.
+
+
 ## 1. Configure
 
 ```bash

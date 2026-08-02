@@ -24,12 +24,24 @@ done
 
 detect_runtime
 require_env_file
-require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET MONGO_USER MONGO_PASSWORD
+# MONGO_USER and MONGO_PASSWORD create and address the bundled database. With
+# an external one they are not used at all, and demanding them would mean
+# inventing credentials for a server somebody else administers.
+if external_database; then
+  require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET
+else
+  require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET MONGO_USER MONGO_PASSWORD
+fi
 
 VERSION="$(env_value TASKSENSE_VERSION)"
 
 step "TaskSense ${VERSION}"
 note "runtime: ${RUNTIME}   config: ${ENV_FILE}"
+if external_database; then
+  note "database: your own — the bundled container will not be started"
+else
+  note "database: bundled MongoDB container"
+fi
 
 if [ "${SKIP_PREFLIGHT}" = "0" ]; then
   if [ "${OFFLINE}" = "1" ]; then "${SCRIPT_DIR}/preflight.sh" --offline
@@ -47,7 +59,7 @@ else
 fi
 
 step "Starting"
-compose up -d
+compose_up
 
 if ! wait_for_health 180; then
   printf '\n'

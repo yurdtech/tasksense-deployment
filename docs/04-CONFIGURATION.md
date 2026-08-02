@@ -94,7 +94,7 @@ workspace policy rather than a deployment setting.
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `MONGODB_URI` | set by compose | Point at your own cluster if you have one. Put TLS options in the URI: `?tls=true&tlsCAFile=/certs/ca.pem&replicaSet=rs0&authSource=admin`. |
+| `MONGODB_URI` | the bundled container | Set it to use a cluster you already run; the bundled database is then not started at all, and `MONGO_USER`/`MONGO_PASSWORD` are unused. TLS and replica-set options go in the URI: `?tls=true&tlsCAFile=/certs/ca.pem&replicaSet=rs0&authSource=admin`. Percent-encode `/ : @ ? # [ ] %` in the password. |
 | `MONGODB_DB` | `tasksense` | |
 | `MONGODB_TIMEOUT_MS` | `5000` | Initial connection timeout. |
 

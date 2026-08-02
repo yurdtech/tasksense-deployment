@@ -190,13 +190,33 @@ section_secrets() {
   cfg_set STORAGE_SECRET "${UI_VALUE}"
 
   printf '\n'
-  ui_ask "MONGO_USER" "$(example_default MONGO_USER)" \
-    "The database account the application uses. It is created on first start."
-  cfg_set MONGO_USER "${UI_VALUE}"
+  ui_text "TaskSense stores everything in MongoDB. The installation can bring its own, or use one you already run."
+  ui_menu "Which database?" \
+    "Bring one with it|a MongoDB container beside the application — most installations" \
+    "Use my own|an existing cluster, a replica set, or a server your DBAs run"
 
-  ui_secret "MONGO_PASSWORD" \
-    "The password for that account. Generated is better than chosen — nothing types it by hand, so there is no reason for it to be memorable. It ends up inside a connection string, so it is drawn from hex: a / or + or = would end the password early and the database would be unreachable before the first query." 24 uri
-  cfg_set MONGO_PASSWORD "${UI_VALUE}"
+  if [ "${UI_CHOICE}" = "2" ]; then
+    printf '\n'
+    ui_text "Then TaskSense will not start a database of its own. Give it the connection string; the account in it needs read and write on one database, and TaskSense creates its own collections and indexes there on first start."
+    ui_ask "MONGODB_URI" "mongodb://tasksense:PASSWORD@mongo.bank.internal:27017/?authSource=admin" \
+      "TLS and replica-set options belong in the URI: ?replicaSet=rs0&tls=true&tlsCAFile=/certs/ca.pem&authSource=admin. Percent-encode anything in the password that a URI reads as structure — / : @ ? # [ ] % — or the driver refuses the whole string."
+    cfg_set MONGODB_URI "${UI_VALUE}"
+
+    # Not used with an external database, and leaving the example's values would
+    # suggest an account somebody should create.
+    cfg_set MONGO_USER ""
+    cfg_set MONGO_PASSWORD ""
+    ui_hint "The bundled database will not be started, and its backup is then your DBAs' — ./scripts/backup.sh covers files and configuration but cannot reach a database it does not run. docs/07-BACKUP-DR.md."
+  else
+    cfg_set MONGODB_URI ""
+    ui_ask "MONGO_USER" "$(example_default MONGO_USER)" \
+      "The database account the application uses. It is created on first start."
+    cfg_set MONGO_USER "${UI_VALUE}"
+
+    ui_secret "MONGO_PASSWORD" \
+      "The password for that account. Generated is better than chosen — nothing types it by hand, so there is no reason for it to be memorable. It ends up inside a connection string, so it is drawn from hex: a / or + or = would end the password early and the database would be unreachable before the first query." 24 uri
+    cfg_set MONGO_PASSWORD "${UI_VALUE}"
+  fi
 
   printf '\n'
   ui_text "A licence lifts two limits: the 10-account cap and the 500-a-month automation allowance. Everything else in TaskSense is the same either way — there is no feature behind it."
@@ -478,8 +498,14 @@ configure_summary() {
   ui_summary_add "Listens on" "$(cfg_get BIND_ADDRESS):$(cfg_get HTTP_PORT)"
   ui_summary_add "Administrator" "$(cfg_get FIRST_ADMIN_EMAIL)"
   ui_summary_secret "Storage secret" "$(cfg_get STORAGE_SECRET)"
-  ui_summary_add "Database user" "$(cfg_get MONGO_USER)"
-  ui_summary_secret "Database password" "$(cfg_get MONGO_PASSWORD)"
+  if [ -n "$(cfg_get MONGODB_URI)" ]; then
+    # The URI carries the password; the summary must not.
+    ui_summary_add "Database" "your own — $(printf '%s' "$(cfg_get MONGODB_URI)" | sed 's|://[^@]*@|://…@|')"
+  else
+    ui_summary_add "Database" "bundled container"
+    ui_summary_add "Database user" "$(cfg_get MONGO_USER)"
+    ui_summary_secret "Database password" "$(cfg_get MONGO_PASSWORD)"
+  fi
 
   if [ -n "$(cfg_get LDAP_URL)" ]; then
     ui_summary_add "Sign-in" "LDAP — $(cfg_get LDAP_URL)"

@@ -72,7 +72,7 @@ cp "${ENV_FILE}" "${ENV_FILE}.bak"
 sed -i.tmp "s/^TASKSENSE_VERSION=.*/TASKSENSE_VERSION=${TARGET}/" "${ENV_FILE}" && rm -f "${ENV_FILE}.tmp"
 ok "TASKSENSE_VERSION=${TARGET}"
 
-compose up -d
+compose_up
 
 step "Verifying"
 if wait_for_health 240; then
@@ -89,7 +89,7 @@ warn "${TARGET} did not become healthy — rolling back to ${CURRENT}"
 compose logs --tail 40 app || true
 
 mv "${ENV_FILE}.bak" "${ENV_FILE}"
-compose up -d
+compose_up
 
 if wait_for_health 240; then
   die "upgrade to ${TARGET} failed; ${CURRENT} is running again" \

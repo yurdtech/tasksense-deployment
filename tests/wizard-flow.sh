@@ -52,6 +52,7 @@ answers = [
     "https://tasksense.abb.internal\n",     # APP_URL
     "infra@abb.internal\n",                 # FIRST_ADMIN_EMAIL
     "g\n",                                  # STORAGE_SECRET: generate
+    "1",                                    # database: bring one with it
     "  tasksense  \n",                      # MONGO_USER — pasted, with spaces
     "g\n",                                  # MONGO_PASSWORD: generate
     "n\n",                                  # licence key?
@@ -158,6 +159,9 @@ check "administrator" "infra@abb.internal" "$(value_of "${OUT}" FIRST_ADMIN_EMAI
 # Pasted with spaces around it. `IFS= read` keeps them, and nothing downstream
 # would have complained — it produces a value that looks right and fails later.
 check "MONGO_USER is trimmed of pasted whitespace" "tasksense" "$(value_of "${OUT}" MONGO_USER)"
+# Choosing the bundled database must not leave a URI behind: compose falls back
+# to the bundled one only when this is empty.
+check "the bundled choice leaves MONGODB_URI unset" "" "$(value_of "${OUT}" MONGODB_URI)"
 
 # The generated secrets: the length is the contract the application enforces.
 SECRET="$(value_of "${OUT}" STORAGE_SECRET)"

@@ -97,6 +97,43 @@ compose() {
   ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" "$@" )
 }
 
+# Is the database somebody else's?
+#
+# MONGODB_URI set in .env means an existing cluster — a replica set, a managed
+# service, a DBA's server. The bundled container is then not wanted, and
+# starting it anyway leaves a database running that nobody asked for, that
+# nothing writes to, and that appears in every `docker ps` a security review
+# runs.
+external_database() {
+  [ -n "$(env_value MONGODB_URI)" ]
+}
+
+# Bring the stack up, without the bundled database when it is not wanted.
+#
+# `--no-deps app` rather than a profile or a scale.
+#
+# A profile cannot express it: `depends_on: mongo` makes compose reject the whole
+# project when the profiled service is disabled — "service app depends on
+# undefined service mongo: invalid compose project".
+#
+# `--scale mongo=0` looked like the answer and is not portable. It works on
+# Docker Desktop's compose and is ignored by the one on GitHub's runners, which
+# started the database anyway; a customer's older compose would have done the
+# same, and the symptom is the quiet one — an unwanted database running beside
+# the cluster they told us to use.
+#
+# `--no-deps app` names what to start rather than what to leave out. It predates
+# both of the above and does not depend on how a version treats a dependency it
+# has been told to skip. If the stack ever gains a second service that belongs
+# with the application, it has to be named here too.
+compose_up() {
+  if external_database; then
+    compose up -d --no-deps app
+  else
+    compose up -d
+  fi
+}
+
 # ── Registry access ──────────────────────────────────────────────────────────
 
 # Where to ask for a registry token.
@@ -237,6 +274,9 @@ MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
 # finish: the second attempt uses a new password against the first attempt's
 # database, and the error names neither.
 mongo_volume_exists() {
+  # An external database has no volume of ours, and its credentials are not
+  # ours to explain.
+  external_database && return 1
   "${RUNTIME}" volume inspect "${MONGO_VOLUME}" >/dev/null 2>&1
 }
 

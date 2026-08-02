@@ -139,5 +139,58 @@ out="$(docker run --rm -v "${ROOT}:/w:ro" -w /w bash:5 bash -c '
 check "an external database needs no MONGO_USER or MONGO_PASSWORD" "1" \
   "$(printf '%s' "${out}" | grep -c '^ACCEPTED$')"
 
+# ── 5. their database, their credentials ────────────────────────────────────
+#
+# MONGO_USER and MONGO_PASSWORD create the bundled container. An installation
+# using its own MongoDB leaves them empty — and compose used to refuse the whole
+# project over it, because it interpolates the entire file before deciding which
+# services to run:
+#
+#   error while interpolating services.mongo.environment.
+#   MONGO_INITDB_ROOT_USERNAME: required variable MONGO_USER is missing a value
+#
+# Naming the one variable the operator was right to leave empty.
+
+write_env "MONGODB_URI=mongodb://mongo.bank.internal:27017/tasksense" "MONGO_USER=" "MONGO_PASSWORD="
+( cd "${ROOT}/compose" && docker compose config >/dev/null 2>&1 )
+check "an external database needs no bundled credentials" "0" "$?"
+
+# A cluster with no authentication at all is a connection string with no
+# credentials in it. Nothing should object.
+check "and a passwordless connection string reaches the application" \
+  "mongodb://mongo.bank.internal:27017/tasksense" "$(uri_of)"
+
+# The requirement still holds where it means something.
+write_env "MONGO_PASSWORD="
+out="$(docker run --rm -v "${ROOT}:/w:ro" -w /w bash:5 bash -c '
+  . scripts/lib.sh
+  if external_database; then
+    require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET
+  else
+    require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET MONGO_USER MONGO_PASSWORD
+  fi' 2>&1)"
+check "the bundled database still refuses to start without a password" "1" \
+  "$(printf '%s' "${out}" | grep -c 'missing required values: MONGO_PASSWORD')"
+
+# ── 6. and an empty pair does not open the database ─────────────────────────
+#
+# The guard that was removed existed to stop somebody creating a bundled
+# MongoDB with no credentials. Asserted rather than assumed: with --auth and no
+# root user, the server creates nobody and authorises nothing, so the failure is
+# a refused connection rather than an open database.
+
+docker rm -f ts-empty-auth >/dev/null 2>&1
+docker run -d --name ts-empty-auth \
+  -e MONGO_INITDB_ROOT_USERNAME= -e MONGO_INITDB_ROOT_PASSWORD= \
+  mongo:7 --auth --bind_ip_all >/dev/null 2>&1
+for _ in $(seq 1 30); do
+  docker exec ts-empty-auth mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
+  sleep 1
+done
+out="$(docker exec ts-empty-auth mongosh --quiet --eval 'db.getSiblingDB("tasksense").t.insertOne({a:1})' 2>&1)"
+docker rm -f ts-empty-auth >/dev/null 2>&1
+check "an unconfigured bundled database is unusable, not open" "1" \
+  "$(printf '%s' "${out}" | grep -c 'not authorized')"
+
 printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

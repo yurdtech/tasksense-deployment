@@ -75,7 +75,9 @@ MONGODB_URI=mongodb://tasksense:PASSWORD@mongo-0.bank.internal:27017,mongo-1.ban
 ```
 
 Then the bundled container is **not started at all**, and `MONGO_USER` and
-`MONGO_PASSWORD` are unused — they exist to create the bundled one.
+`MONGO_PASSWORD` are unused — they exist to create the bundled one. Leave them
+empty; the credentials for your server belong in the connection string, and a
+cluster with no authentication simply has none in it.
 
 The account needs read and write on one database. TaskSense creates its own
 collections and indexes there on first start; nothing has to be prepared.

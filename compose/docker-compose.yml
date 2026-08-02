@@ -94,8 +94,25 @@ services:
     restart: unless-stopped
     command: ["--auth", "--bind_ip_all"]
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:?set MONGO_USER in .env}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?set MONGO_PASSWORD in .env}
+      # Not `${MONGO_USER:?…}`. Compose interpolates the whole file before it
+      # decides which services to run, so that guard fired for installations
+      # using their own MongoDB — where these two are deliberately empty, and
+      # this service is never started at all:
+      #
+      #   error while interpolating services.mongo.environment.
+      #   MONGO_INITDB_ROOT_USERNAME: required variable MONGO_USER is missing
+      #   a value: set MONGO_USER in .env
+      #
+      # Which names MONGO_USER, the one thing the operator was right to leave
+      # empty. The requirement is enforced in scripts/install.sh instead, where
+      # it can tell the two kinds of installation apart.
+      #
+      # An empty pair here does not open the database: the server runs with
+      # --auth and creates no root user, so nothing can authenticate to it. The
+      # application then fails to connect, which is the safe failure rather than
+      # the quiet one.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-}
 
     # No `ports:` on purpose. The database is reachable only from the app over
     # the internal compose network. To inspect it, exec into the container.

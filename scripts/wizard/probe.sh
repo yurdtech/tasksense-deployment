@@ -112,6 +112,50 @@ probe_config() {
   return 0
 }
 
+# Addresses that cannot mean what they appear to mean.
+#
+# Checked before anything is dialled, because the error they produce points
+# somewhere else entirely. `MONGODB_URI=mongodb://localhost:27017` is read from
+# inside the container, where localhost is the container — so it fails with
+# "ECONNREFUSED 127.0.0.1:27017", which reads as "the database is down" and sends
+# an operator to look at a database that is running perfectly well on the host
+# they are sitting on.
+#
+# A warning rather than a refusal: a URI pointing at 127.0.0.1 is right if the
+# container runs with host networking, which is unusual but not wrong.
+probe_reachability() {
+  local candidate="$1" uri ldap dn
+
+  uri="$(sed -n 's/^MONGODB_URI=//p' "${candidate}" | tail -n1)"
+  case "${uri}" in
+    *localhost*|*127.0.0.1*|*"[::1]"*)
+      warn "MONGODB_URI points at localhost"
+      ui_text "Inside the container that is the container itself, not this host — the connection is refused by nothing at all, and the message says the database is unreachable. Use host.docker.internal on Docker Desktop, the host's LAN address on Linux, or leave MONGODB_URI unset to run the bundled database."
+      printf '\n'
+      ;;
+  esac
+
+  ldap="$(sed -n 's/^LDAP_URL=//p' "${candidate}" | tail -n1)"
+  case "${ldap}" in
+    *localhost*|*127.0.0.1*)
+      warn "LDAP_URL points at localhost — from inside the container that is the container"
+      printf '\n'
+      ;;
+  esac
+
+  # A bind DN carrying its own attribute name twice. Typed once and pasted once,
+  # which is how "CN=cn=svc-tasksense,ou=…" happens; the directory answers
+  # "invalid credentials", naming the password rather than the name.
+  dn="$(sed -n 's/^LDAP_BIND_DN=//p' "${candidate}" | tail -n1)"
+  case "${dn}" in
+    [Cc][Nn]=[Cc][Nn]=*|[Uu][Ii][Dd]=[Uu][Ii][Dd]=*|[Oo][Uu]=[Oo][Uu]=*)
+      warn "LDAP_BIND_DN starts with its attribute twice: ${dn%%,*}"
+      ui_text "The directory reports that as invalid credentials, which points at the password instead. It is almost always a prefix typed and then pasted again."
+      printf '\n'
+      ;;
+  esac
+}
+
 # probe_run <candidate.env> [sample-username]
 probe_run() {
   local candidate="$1" sample="${2:-}" image envfile
@@ -130,6 +174,8 @@ probe_run() {
     rm -f "${envfile}"
     return 0
   fi
+
+  probe_reachability "${candidate}"
 
   if ! probe_config "${image}" "${envfile}"; then
     warn "the configuration itself was rejected — no connection was attempted"

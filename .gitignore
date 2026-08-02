@@ -4,6 +4,10 @@ compose/.env
 compose/.env.bak
 compose/docker-compose.override.yml
 
+# An unfinished configuration from ./tasksense. Kept deliberately so a run that
+# stopped can be resumed, and it holds the same secrets the finished file does.
+compose/.env.draft
+
 # The Helm values ./tasksense writes. Same reason: unless you moved the four
 # required values into a Secret, this file holds the storage key and the
 # database URI. See docs/02-INSTALL-KUBERNETES.md.

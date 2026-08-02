@@ -25,14 +25,119 @@ WIZARD_DIR="${SCRIPT_DIR}/wizard"
 OFFLINE=0
 
 # The candidate configuration, until it is proven and promoted to compose/.env.
-CANDIDATE="$(mktemp)"
-chmod 600 "${CANDIDATE}"
-# Half-finished configuration must not be left in /tmp: it holds the storage
-# secret and the database password.
-cleanup() { rm -f "${CANDIDATE}"; ui_restore; }
+#
+# Kept beside the file it becomes, not in /tmp, and deliberately not deleted when
+# the run ends early. It used to be a mktemp removed by the EXIT trap, so any
+# stop at all — including declining to delete a volume, or a mistyped
+# confirmation — threw away every answer given so far. Somebody lost fifteen
+# minutes of typing to a lower-case "delete", and the wizard's own text had told
+# them nothing was written, which was true and not what they had lost.
+#
+# It holds the storage secret and the database password, so it is created 600
+# before anything goes into it, and .gitignore covers it.
+CANDIDATE="${COMPOSE_DIR}/.env.draft"
+
+cleanup() {
+  ui_restore
+  # A draft that was never finished is worth more than the tidiness of removing
+  # it: the next run offers to carry on from it.
+  if [ -s "${CANDIDATE}" ] && [ "${INSTALL_COMPLETED:-0}" = "0" ]; then
+    printf '\n  %sYour answers are saved.%s Run ./tasksense again to carry on from here.\n' \
+      "$C_BOLD" "$C_OFF"
+    printf '  %s%s%s\n\n' "$C_DIM" "${CANDIDATE}" "$C_OFF"
+  fi
+}
 trap cleanup EXIT INT TERM
 
 ui_require_tty
+
+# ── Editing the file directly ────────────────────────────────────────────────
+
+# Which editor, and a straight answer when there is none.
+#
+# $EDITOR is unset more often than not on a freshly provisioned server, and a
+# wizard that responds by opening nothing — or by opening `ed` — has stopped
+# being useful at the one moment it promised to help.
+pick_editor() {
+  local candidate
+  for candidate in "${EDITOR:-}" "${VISUAL:-}" nano vim vi; do
+    [ -n "${candidate}" ] || continue
+    command -v "${candidate%% *}" >/dev/null 2>&1 && { printf '%s' "${candidate}"; return 0; }
+  done
+  return 1
+}
+
+# Start from .env.example, hand it to an editor, then check what came back.
+#
+# The example is the starting point rather than an empty file because it carries
+# the explanation of every setting inline — the same text the questions read
+# out. Somebody who wants to paste a prepared .env can select all and replace it;
+# somebody who wants the comments has them.
+edit_candidate() {
+  local editor
+  if ! editor="$(pick_editor)"; then
+    die "no editor found"         "Set EDITOR, or install nano or vim."         "You can also write the file yourself and run ./scripts/install.sh:"         "  cp ${COMPOSE_DIR}/.env.example ${ENV_FILE}"
+  fi
+
+  [ -s "${CANDIDATE}" ] || {
+    cp "${COMPOSE_DIR}/.env.example" "${CANDIDATE}"
+    chmod 600 "${CANDIDATE}"
+  }
+
+  cat <<EOF
+
+  Opening ${C_BOLD}${editor}${C_OFF}.
+
+  The file is ${C_BOLD}.env.example${C_OFF} with its explanations intact. Either fill in the
+  values marked REQUIRED, or select everything and paste a configuration you
+  already have.
+
+  ${C_DIM}Six values have no default: TASKSENSE_VERSION, APP_URL, FIRST_ADMIN_EMAIL,
+  STORAGE_SECRET, MONGO_USER, MONGO_PASSWORD.${C_OFF}
+
+  ${C_DIM}Generate the two secrets with:
+    openssl rand -base64 32     # STORAGE_SECRET
+    openssl rand -hex 24        # MONGO_PASSWORD — hex, it goes inside a URI${C_OFF}
+
+EOF
+  ui_yesno "Open it now?" y || { note "your draft is at ${CANDIDATE}"; exit 0; }
+
+  while true; do
+    "${editor}" "${CANDIDATE}" || warn "the editor exited with an error"
+    chmod 600 "${CANDIDATE}"
+
+    local blank=""
+    local key value
+    for key in TASKSENSE_VERSION APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_USER MONGO_PASSWORD; do
+      value="$(sed -n "s/^${key}=//p" "${CANDIDATE}" | tail -n1)"
+      [ -n "${value}" ] || blank="${blank} ${key}"
+    done
+
+    # The example ships STORAGE_SECRET and MONGO_PASSWORD empty, so an untouched
+    # file fails the check above. This catches the other half: a file where the
+    # placeholders were left as they came.
+    local placeholder=""
+    grep -q '^APP_URL=https://tasksense.bank.internal$' "${CANDIDATE}" && placeholder="APP_URL"
+    grep -q '^FIRST_ADMIN_EMAIL=admin@bank.internal$' "${CANDIDATE}" && placeholder="${placeholder} FIRST_ADMIN_EMAIL"
+
+    if [ -z "${blank}" ] && [ -z "${placeholder}" ]; then
+      ok "the required values are set"
+      return 0
+    fi
+
+    printf '\n'
+    [ -n "${blank}" ] && warn "still empty:${blank}"
+    [ -n "${placeholder}" ] && warn "still the example's placeholder:${placeholder}"
+    ui_text "The application refuses to start without these, and it reports them all at once — which is a worse place to read them than here."
+    printf '\n'
+    ui_menu "Now?"       "Back to the editor|fix them"       "Carry on anyway|I know what I am doing"       "Stop|the draft is kept"
+    case "${UI_CHOICE}" in
+      1) ;;
+      2) return 0 ;;
+      3) exit 0 ;;
+    esac
+  done
+}
 
 # ── 1. Welcome ───────────────────────────────────────────────────────────────
 
@@ -54,6 +159,38 @@ cat <<EOF
 
 EOF
 ui_yesno "Ready?" y || { note "nothing was changed"; exit 0; }
+
+# ── How to answer ────────────────────────────────────────────────────────────
+
+# An unfinished draft from an earlier run.
+if [ -s "${CANDIDATE}" ]; then
+  printf '\n'
+  ui_text "There are answers here from a run that did not finish."
+  ui_menu "Carry on from them?" \
+    "Resume|keep what was entered, review it, and continue" \
+    "Start again|discard them and answer from the beginning" \
+    "Stop|leave everything as it is"
+  case "${UI_CHOICE}" in
+    1) RESUME=1 ;;
+    2) rm -f "${CANDIDATE}" ;;
+    3) exit 0 ;;
+  esac
+fi
+
+# Two ways to fill in a configuration, and the questions are not right for
+# everybody.
+#
+# Somebody installing their fourth environment already knows what goes in the
+# file, has the values in a ticket, and wants to paste them. Making them answer
+# ten questions to arrive at a file they could have written in thirty seconds is
+# not guidance, it is a toll. Both routes end at the same compose/.env and the
+# same scripts/install.sh — see the note at the top of configure.sh.
+if [ "${RESUME:-0}" = "0" ]; then
+  ui_menu "How would you like to configure it?" \
+    "Answer questions|one setting at a time, each one explained" \
+    "Edit the file|open .env in an editor — paste a prepared one, or fill in the example"
+  [ "${UI_CHOICE}" = "2" ] && CONFIGURE_BY_EDITOR=1
+fi
 
 # ── 2. Preflight ─────────────────────────────────────────────────────────────
 
@@ -131,8 +268,15 @@ ui_step 4 9 "Configuration"
 ui_text "About ten questions. Each says what the setting does and what goes wrong if it is wrong. Nothing is written yet — this all goes into a temporary file that is tested first."
 printf '\n'
 
-"${WIZARD_DIR}/configure.sh" --collect "${CANDIDATE}" \
-  || die "configuration was not completed" "Nothing was written. Run ./tasksense to start again."
+if [ "${CONFIGURE_BY_EDITOR:-0}" = "1" ]; then
+  edit_candidate
+elif [ "${RESUME:-0}" = "1" ]; then
+  # Resuming: show what is there and let them change anything before going on.
+  "${WIZARD_DIR}/configure.sh" --edit-candidate "${CANDIDATE}" || true
+else
+  "${WIZARD_DIR}/configure.sh" --collect "${CANDIDATE}" \
+    || { note "your answers are kept — re-run and choose Resume"; exit 1; }
+fi
 
 if [ -n "${MIRROR_IMAGE:-}" ]; then
   # Written after the questions so it survives the render.
@@ -269,6 +413,8 @@ if mongo_volume_exists; then
     "A database I need|I will put its original password back myself" \
     "Not sure|stop here and let me look"
 
+  # Declining is an answer, not a reason to end the run — see the note on
+  # CANDIDATE. Anything that stops here leaves the draft behind and says so.
   case "${UI_CHOICE}" in
     1)
       printf '\n'
@@ -279,19 +425,22 @@ if mongo_volume_exists; then
         compose --env-file "${CANDIDATE}" down -v >/dev/null 2>&1 || true
         ok "removed"
       else
-        die "stopped — nothing was written" "The volume is untouched."
+        warn "not confirmed — the volume is untouched"
+        ui_text "Nothing was deleted and nothing was lost. Installing over it would fail to authenticate, so this stops here rather than starting something that cannot work."
+        exit 0
       fi
       ;;
     2)
       ui_text "Then set MONGO_PASSWORD to that database's original password. The wizard cannot know it; it is in the .env from the install that created the volume, or in your password manager."
-      die "stopped — nothing was written" \
-          "Run ./tasksense again once you have the original password to hand."
+      note "your answers are kept — re-run and choose Resume once you have it"
+      exit 0
       ;;
     3)
-      die "stopped — nothing was written" \
-          "  ${RUNTIME} volume inspect ${MONGO_VOLUME}" \
-          "  ${RUNTIME} run --rm -v ${MONGO_VOLUME}:/data mongo:7 ls -la /data/db" \
-          "docs/10-TROUBLESHOOTING.md covers what to do with either answer."
+      note "look with:"
+      note "  ${RUNTIME} volume inspect ${MONGO_VOLUME}"
+      note "  ${RUNTIME} run --rm -v ${MONGO_VOLUME}:/data mongo:7 ls -la /data/db"
+      note "docs/10-TROUBLESHOOTING.md covers what to do with either answer."
+      exit 0
       ;;
   esac
 fi
@@ -302,6 +451,11 @@ ui_yesno "Install now?" y || { note "nothing was written"; exit 0; }
 cp "${CANDIDATE}" "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 ok "wrote ${ENV_FILE}"
+
+# The draft has become the configuration; keeping a second copy of the storage
+# secret and the database password lying beside it serves nobody.
+rm -f "${CANDIDATE}"
+INSTALL_COMPLETED=1
 
 # ── 9. Install ───────────────────────────────────────────────────────────────
 

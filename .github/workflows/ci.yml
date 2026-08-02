@@ -100,6 +100,9 @@ jobs:
       - name: terminal rendering — locales a bank actually has
         run: ./tests/terminal.sh
 
+      - name: answers survive a run that stops
+        run: ./tests/draft.sh
+
       - name: configuration renderer — .env stays equivalent to .env.example
         run: ./tests/wizard-render.sh
 

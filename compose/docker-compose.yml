@@ -25,7 +25,16 @@ services:
       DEPLOYMENT_MODE: onprem
       NODE_ENV: production
       PORT: "3000"
-      MONGODB_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin
+      # Your own database, when you set MONGODB_URI in .env; the bundled one
+      # otherwise. This used to be unconditional, so a URI set in .env was
+      # silently ignored — `environment:` outranks `env_file:` — while
+      # docs/04-CONFIGURATION.md said to point it at your own cluster. It was the
+      # one setting the documentation offered and the stack refused.
+      #
+      # With an external database the bundled container is not started at all:
+      # the scripts pass --scale mongo=0. Nothing is left running that nobody
+      # asked for, and nothing writes to a volume nobody backs up.
+      MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin}
       STORAGE_LOCAL_ROOT: /app/api/data/uploads
       BACKUP_DIR: /app/api/data/backups
 

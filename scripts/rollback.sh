@@ -35,7 +35,7 @@ if ! "${RUNTIME}" image inspect "${IMAGE}:${TARGET}" >/dev/null 2>&1; then
 fi
 
 sed -i.tmp "s/^TASKSENSE_VERSION=.*/TASKSENSE_VERSION=${TARGET}/" "${ENV_FILE}" && rm -f "${ENV_FILE}.tmp"
-compose up -d
+compose_up
 
 if wait_for_health 240; then
   running_version | sed 's/^/  /'

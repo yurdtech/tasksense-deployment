@@ -97,6 +97,31 @@ compose() {
   ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" "$@" )
 }
 
+# Is the database somebody else's?
+#
+# MONGODB_URI set in .env means an existing cluster — a replica set, a managed
+# service, a DBA's server. The bundled container is then not wanted, and
+# starting it anyway leaves a database running that nobody asked for, that
+# nothing writes to, and that appears in every `docker ps` a security review
+# runs.
+external_database() {
+  [ -n "$(env_value MONGODB_URI)" ]
+}
+
+# Bring the stack up, without the bundled database when it is not wanted.
+#
+# --scale rather than a profile: `depends_on: mongo` makes compose reject the
+# whole project when the profiled service is disabled, so profiles cannot
+# express "this dependency is optional". Scaling it to zero satisfies the
+# dependency and creates nothing.
+compose_up() {
+  if external_database; then
+    compose up -d --scale mongo=0
+  else
+    compose up -d
+  fi
+}
+
 # ── Registry access ──────────────────────────────────────────────────────────
 
 # Where to ask for a registry token.
@@ -237,6 +262,9 @@ MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
 # finish: the second attempt uses a new password against the first attempt's
 # database, and the error names neither.
 mongo_volume_exists() {
+  # An external database has no volume of ours, and its credentials are not
+  # ours to explain.
+  external_database && return 1
   "${RUNTIME}" volume inspect "${MONGO_VOLUME}" >/dev/null 2>&1
 }
 

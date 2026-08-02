@@ -57,7 +57,7 @@ panel_status() {
 
 panel_start() {
   ui_step 1 1 "Start"
-  compose up -d
+  compose_up
   wait_for_health 180 || {
     warn "not healthy yet"
     compose logs --tail 40 app || true
@@ -183,7 +183,7 @@ panel_configure() {
   printf '\n'
   ui_text "Changed settings take effect on restart."
   ui_yesno "Restart now?" y || { note "restart later with: ./tasksense" ; return 0; }
-  compose up -d
+  compose_up
   wait_for_health 180 || {
     warn "not healthy after the restart"
     compose logs --tail 40 app || true

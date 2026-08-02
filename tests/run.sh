@@ -36,6 +36,7 @@ run "fresh clone" ./tests/fresh-clone.sh
 run "terminal" ./tests/terminal.sh
 run "menu" ./tests/menu.sh
 run "draft" ./tests/draft.sh
+run "external db" ./tests/external-db.sh
 run "registry login" ./tests/registry-login.sh
 run "renderer" ./tests/wizard-render.sh
 run ".env.example" ./tests/env-example.sh

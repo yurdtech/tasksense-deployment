@@ -103,6 +103,9 @@ jobs:
       - name: answers survive a run that stops
         run: ./tests/draft.sh
 
+      - name: an operator's own MongoDB is actually used
+        run: ./tests/external-db.sh
+
       - name: configuration renderer — .env stays equivalent to .env.example
         run: ./tests/wizard-render.sh
 

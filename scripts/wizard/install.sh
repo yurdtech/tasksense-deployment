@@ -84,6 +84,17 @@ edit_candidate() {
     chmod 600 "${CANDIDATE}"
   }
 
+  # The preamble is for the first time through. On a second pass the operator
+  # knows what they are opening and is looking for what to change.
+  if [ "${EDITOR_OPENED:-0}" = "1" ]; then
+    printf '\n'
+    ui_yesno "Open ${editor} again?" y || { note "your draft is at ${CANDIDATE}"; exit 0; }
+    EDITOR_OPENED=1
+    edit_candidate_loop "${editor}"
+    return $?
+  fi
+  EDITOR_OPENED=1
+
   cat <<EOF
 
   Opening ${C_BOLD}${editor}${C_OFF}.
@@ -101,7 +112,13 @@ edit_candidate() {
 
 EOF
   ui_yesno "Open it now?" y || { note "your draft is at ${CANDIDATE}"; exit 0; }
+  edit_candidate_loop "${editor}"
+}
 
+# Open, check, offer the editor back. Separate from the preamble above so a
+# second visit does not repeat the explanation.
+edit_candidate_loop() {
+  local editor="$1"
   while true; do
     "${editor}" "${CANDIDATE}" || warn "the editor exited with an error"
     chmod 600 "${CANDIDATE}"
@@ -348,17 +365,31 @@ while ! probe_run "${CANDIDATE}"; do
   ui_text "The reason is printed above each one. Installing on top of this would produce a system that starts but that nobody can sign in to."
   printf '\n'
 
-  ui_menu "What now?" \
-    "Fix it|go back to the settings that failed" \
-    "Test again|you changed something outside TaskSense — a firewall, a certificate" \
-    "Install anyway|you know why it fails and it is not a problem" \
-    "Stop|nothing has been written"
+  # "Fix it" has to mean the same thing it meant ten minutes ago. Somebody who
+  # chose the editor gets the editor back; sending them into a question flow
+  # they deliberately skipped is a different product answering a question they
+  # did not ask, and it discards the file they were working in.
+  if [ "${CONFIGURE_BY_EDITOR:-0}" = "1" ]; then
+    ui_menu "What now?" \
+      "Back to the editor|fix the settings that failed" \
+      "Test again|you changed something outside TaskSense — a firewall, a certificate" \
+      "Install anyway|you know why it fails and it is not a problem" \
+      "Stop|nothing has been written"
+  else
+    ui_menu "What now?" \
+      "Fix it|go back to the settings that failed" \
+      "Test again|you changed something outside TaskSense — a firewall, a certificate" \
+      "Install anyway|you know why it fails and it is not a problem" \
+      "Stop|nothing has been written"
+  fi
 
   case "${UI_CHOICE}" in
     1)
-      # A rejected configuration names its own variable and belongs to no single
-      # section, so it opens the whole menu rather than guessing.
-      if [ "${PROBE_FAILED[0]}" = "configuration" ]; then
+      if [ "${CONFIGURE_BY_EDITOR:-0}" = "1" ]; then
+        edit_candidate
+      elif [ "${PROBE_FAILED[0]}" = "configuration" ]; then
+        # A rejected configuration names its own variable and belongs to no
+        # single section, so it opens the whole menu rather than guessing.
         "${WIZARD_DIR}/configure.sh" --edit-candidate "${CANDIDATE}" || true
       else
         for check in "${PROBE_FAILED[@]}"; do

@@ -130,5 +130,47 @@ check "the draft carries the same mode as the file it becomes" "600" "$(mode_of 
 check "and the explanations came with it" "1" \
   "$(grep -c 'Encrypts stored credentials at rest' "${WORK}/.env.draft")"
 
+# ── 5. "Fix it" means the same thing it meant ten minutes ago ───────────────
+#
+# Somebody who chose the editor and then failed a live check was sent into the
+# question flow they had deliberately skipped — a different product answering a
+# question they did not ask, and it abandoned the file they were working in.
+
+check "the editor route is offered its own way back" "1" \
+  "$(grep -c 'Back to the editor|fix the settings that failed' "${ROOT}/scripts/wizard/install.sh")"
+check "and Fix it reopens the editor rather than the sections" "1" \
+  "$(sed -n '/case "\${UI_CHOICE}" in/,/esac/p' "${ROOT}/scripts/wizard/install.sh" \
+     | grep -c 'CONFIGURE_BY_EDITOR:-0}" = "1" \]; then$')"
+
+# ── 6. addresses that cannot mean what they appear to ───────────────────────
+#
+# From inside the container, localhost is the container. The error it produces —
+# "ECONNREFUSED 127.0.0.1:27017" — reads as "the database is down" and sends an
+# operator to look at one that is running perfectly well on the host they are
+# sitting on.
+
+probe_says() {  # probe_says <line to put in the candidate>
+  docker run --rm -v "${ROOT}:/w:ro" -w /w -e TERM=dumb bash:5 bash -c "
+    . scripts/lib.sh
+    . scripts/ui.sh
+    . scripts/wizard/probe.sh
+    printf '%s\n' '$1' > /tmp/cand.env
+    probe_reachability /tmp/cand.env" 2>&1
+}
+
+check "a localhost MongoDB URI is called out" "1" \
+  "$(probe_says 'MONGODB_URI=mongodb://localhost:27017/tasksense' | grep -c 'points at localhost')"
+check "and so is 127.0.0.1" "1" \
+  "$(probe_says 'MONGODB_URI=mongodb://127.0.0.1:27017/tasksense' | grep -c 'points at localhost')"
+check "a reachable host is not" "0" \
+  "$(probe_says 'MONGODB_URI=mongodb://mongo.bank.internal:27017/tasksense' | grep -c 'points at localhost')"
+
+# CN=cn=… — a prefix typed once and pasted once. The directory answers "invalid
+# credentials", which names the password rather than the name.
+check "a doubled DN prefix is named" "1" \
+  "$(probe_says 'LDAP_BIND_DN=CN=cn=svc-tasksense,ou=People,dc=abb,dc=internal' | grep -c 'attribute twice')"
+check "and a correct DN is left alone" "0" \
+  "$(probe_says 'LDAP_BIND_DN=cn=svc-tasksense,ou=People,dc=abb,dc=internal' | grep -c 'attribute twice')"
+
 printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

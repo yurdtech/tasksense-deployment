@@ -15,6 +15,24 @@ claim rather than take our word for it.
 
 ---
 
+## Two ways to install
+
+| | Docker Compose | Helm (Kubernetes / OpenShift) |
+| --- | --- | --- |
+| Best for | a single Linux VM | an existing cluster (banks: OpenShift) |
+| Guide | [docs/01-INSTALL-COMPOSE.md](docs/01-INSTALL-COMPOSE.md) — or the wizard below | [docs/02-INSTALL-KUBERNETES.md](docs/02-INSTALL-KUBERNETES.md), [docs/03-INSTALL-OPENSHIFT.md](docs/03-INSTALL-OPENSHIFT.md) |
+| Config | `compose/.env` | `my-values.yaml` + a Kubernetes Secret |
+| Database | bundled MongoDB container, or your own via `MONGODB_URI` | your own — the chart bundles none |
+| Exposure / TLS | loopback port + your reverse proxy ([examples/](examples/)) | Ingress + cert-manager, or Route (OpenShift) |
+| Scaling | one node | `replicaCount` / HPA |
+| Air-gapped installs | offline archive + `install.sh --offline` | mirror images with `scripts/load-images.sh --registry` |
+
+Both run the same image and the same feature set; pick one per environment.
+The wizard below covers both — for a cluster it writes the values file and
+prints the `helm` command rather than touching anything itself.
+
+---
+
 ## Install
 
 ```bash
@@ -74,11 +92,15 @@ Full walkthrough, including rotating and revoking the token:
 
 ### If the host cannot reach ghcr.io
 
-Every release also ships as a self-contained archive on the
-[Releases](https://github.com/yurdtech/tasksense-deployment/releases) page:
-container images, manifests, scripts and documentation, with checksums and a
-signature. Download it on a machine that has internet, verify it, carry it in,
-and install offline:
+Every release also ships as a self-contained archive: container images,
+manifests, scripts and documentation. It contains the private images, so it is
+**not on the public Releases page — ask your TaskSense contact for the
+download**. What is public is the proof: `SHA256SUMS`, `SHA256SUMS.sig` and
+`cosign.pub` on the
+[Releases](https://github.com/yurdtech/tasksense-deployment/releases) page, so
+you can verify an archive against a page we cannot quietly edit. Download the
+archive on a machine that has internet, verify it, carry it in, and install
+offline:
 
 ```bash
 ./scripts/verify-signature.sh tasksense-onprem-1.0.0.tar.gz

@@ -37,7 +37,14 @@ which usually does not fail loudly — it leaves the database subtly wrong.
 Patch releases (`1.1.0 → 1.1.3`) can be taken directly.
 
 Crossing a major version asks for confirmation and expects you to have read the
-release notes. Assume a longer window and rehearse it on a copy first.
+release notes — they are published with each release at
+<https://github.com/yurdtech/tasksense-deployment/releases>. Assume a longer
+window and rehearse it on a copy first.
+
+The bundled MongoDB has its own lifecycle: it stays on major 7 until a release
+note says otherwise, and moving it to a later major needs MongoDB's
+feature-compatibility steps — never just a bigger `MONGO_VERSION` in `.env`.
+When a TaskSense release requires it, the release notes carry the procedure.
 
 ---
 

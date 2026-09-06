@@ -333,7 +333,7 @@ section_for() {
   case "$1" in
     ldap|oidc) printf 'signin' ;;
     smtp) printf 'mail' ;;
-    mongo) printf 'version' ;;
+    mongo) printf 'secrets' ;;
     *) printf 'identity' ;;
   esac
 }
@@ -422,8 +422,22 @@ if mongo_volume_exists; then
       printf '\n  Type %sDELETE%s to confirm: ' "$C_BOLD" "$C_OFF"
       IFS= read -r typed
       if [ "${typed}" = "DELETE" ]; then
-        compose --env-file "${CANDIDATE}" down -v >/dev/null 2>&1 || true
-        ok "removed"
+        # Not `compose down -v`: the compose file's `env_file: .env` makes any
+        # compose command fail before compose/.env exists — which on a first
+        # install is exactly now — and a swallowed failure here reports
+        # "removed" over a volume that survives to break the install.
+        compose --env-file "${CANDIDATE}" down >/dev/null 2>&1 || true
+        # The compose down above fails whenever compose/.env does not exist yet,
+        # so take the containers holding the volumes down by their fixed names.
+        "${RUNTIME}" rm -f tasksense-app tasksense-mongo >/dev/null 2>&1 || true
+        "${RUNTIME}" volume rm tasksense-app-data >/dev/null 2>&1 || true
+        if "${RUNTIME}" volume rm "${MONGO_VOLUME}" >/dev/null 2>&1; then
+          ok "removed"
+        else
+          die "could not remove ${MONGO_VOLUME}" \
+              "Is a container still using it?  ${RUNTIME} ps -a" \
+              "Remove it yourself, then re-run:  ${RUNTIME} volume rm ${MONGO_VOLUME}"
+        fi
       else
         warn "not confirmed — the volume is untouched"
         ui_text "Nothing was deleted and nothing was lost. Installing over it would fail to authenticate, so this stops here rather than starting something that cannot work."

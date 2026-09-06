@@ -10,8 +10,9 @@
 #   1. the SHA-256 checksum — that the file arrived intact
 #   2. the cosign signature — that we produced it, and nobody altered it since
 #
-# Download SHA256SUMS, SHA256SUMS.sig and cosign.pub alongside the archive from
-# the same release page.
+# Put SHA256SUMS, SHA256SUMS.sig and cosign.pub alongside the archive — they
+# are on the public releases page; the archive itself comes from your
+# TaskSense contact.
 
 set -euo pipefail
 

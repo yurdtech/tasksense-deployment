@@ -32,8 +32,9 @@ services:
       # one setting the documentation offered and the stack refused.
       #
       # With an external database the bundled container is not started at all:
-      # the scripts pass --scale mongo=0. Nothing is left running that nobody
-      # asked for, and nothing writes to a volume nobody backs up.
+      # the scripts start the stack with `up -d --no-deps app`. Nothing is left
+      # running that nobody asked for, and nothing writes to a volume nobody
+      # backs up.
       MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin}
       STORAGE_LOCAL_ROOT: /app/api/data/uploads
       BACKUP_DIR: /app/api/data/backups

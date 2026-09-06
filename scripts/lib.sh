@@ -132,7 +132,7 @@ compose_up() {
 # ── Registry access ──────────────────────────────────────────────────────────
 
 # Where to ask for a registry token.
-SUPPORT_EMAIL="${SUPPORT_EMAIL:-info@meiksense.io}"
+SUPPORT_EMAIL="${SUPPORT_EMAIL:-info@yurdtech.az}"
 
 # The account the tokens we issue belong to.
 #

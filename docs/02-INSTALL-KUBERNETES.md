@@ -4,7 +4,7 @@ For clusters you already run. If you do not have one, [Docker
 Compose](01-INSTALL-COMPOSE.md) is easier to operate and easier to restore, and
 for a few hundred users the capacity difference is theoretical.
 
-Requires Kubernetes 1.24+ and Helm 3.8+.
+Requires Kubernetes 1.24+ (1.27+ recommended) and Helm 3.8+.
 
 ---
 
@@ -90,8 +90,12 @@ operator, create the Secret yourself and point the chart at it:
 existingSecret: tasksense-config
 ```
 
-It must contain `APP_URL`, `MONGODB_URI`, `STORAGE_SECRET` and
-`FIRST_ADMIN_EMAIL`. The chart then generates none of its own.
+It must contain `APP_URL`, `MONGODB_URI`, `STORAGE_SECRET`,
+`FIRST_ADMIN_EMAIL` — and `CORS_ALLOWED_ORIGINS`, which the chart-managed
+secret sets to the same value as `APP_URL` and without which the browser cannot
+sign in. With metrics enabled, add `METRICS_TOKEN` too: the ServiceMonitor
+reads its bearer token from this same Secret. The chart then generates none of
+its own.
 
 ---
 
@@ -180,8 +184,12 @@ networkPolicy:
     - 10.20.0.0/16      # MongoDB, the directory, the mail relay
 ```
 
-DNS to `kube-system` is allowed automatically. Without that rule the policy
-blocks the database as effectively as it blocks the internet.
+DNS to the cluster resolver is allowed automatically. Without that rule the
+policy blocks the database as effectively as it blocks the internet. The
+resolver and ingress-controller namespaces default to upstream Kubernetes
+(`kube-system`, `ingress-nginx`); on OpenShift, `values-openshift.yaml` points
+them at `openshift-dns`, `openshift-ingress` and `openshift-monitoring` — apply
+it, or the policy blocks the router and all name resolution.
 
 ---
 
@@ -215,3 +223,23 @@ curl http://localhost:8080/api/v1/version
 
 `/version` reports what is actually running, which is the first thing to check
 after an upgrade and the first line of any support conversation.
+
+---
+
+## Uninstalling
+
+```bash
+helm uninstall tasksense -n tasksense
+```
+
+The PVC survives on purpose (`resource-policy: keep`), so your uploads outlive
+an accidental uninstall. To remove everything:
+
+```bash
+kubectl delete pvc -n tasksense -l app.kubernetes.io/instance=tasksense
+kubectl delete secret ghcr -n tasksense          # the registry credential
+kubectl delete namespace tasksense               # if the namespace was only for this
+```
+
+The database is yours (`mongodbUri` pointed at it) — drop the `tasksense`
+database there separately if it should go.

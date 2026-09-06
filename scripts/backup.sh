@@ -48,15 +48,26 @@ step "Backing up TaskSense ${VERSION}"
 # mongodump runs inside the container: the database publishes no port, and this
 # way the host needs no MongoDB tooling installed.
 step "Database"
-compose exec -T mongo mongodump \
-  --username "${MONGO_USER}" --password "${MONGO_PASSWORD}" \
-  --authenticationDatabase admin \
-  --db tasksense --archive --gzip > "${STAGE}/mongodb.archive.gz" \
-  || die "mongodump failed" "Is the stack running?  ${COMPOSE[*]} ps"
+DB_INCLUDED=0
+if external_database; then
+  # The bundled container is not running, and the external cluster is not ours
+  # to reach into. Say so loudly rather than dying — the files and configuration
+  # are still worth archiving, and upgrade.sh depends on this succeeding.
+  warn "MONGODB_URI points at your own database — it is NOT in this archive"
+  note "dump it with your own tooling, e.g.:"
+  note "  mongodump --uri=\"\$MONGODB_URI\" --db tasksense --archive --gzip > mongodb.archive.gz"
+else
+  compose exec -T mongo mongodump \
+    --username "${MONGO_USER}" --password "${MONGO_PASSWORD}" \
+    --authenticationDatabase admin \
+    --db tasksense --archive --gzip > "${STAGE}/mongodb.archive.gz" \
+    || die "mongodump failed" "Is the stack running?  ${COMPOSE[*]} ps"
 
-DB_BYTES="$(wc -c < "${STAGE}/mongodb.archive.gz" | tr -d ' ')"
-[ "${DB_BYTES}" -gt 1024 ] || die "the database dump is only ${DB_BYTES} bytes — refusing to write a backup that cannot restore"
-ok "database dumped ($((DB_BYTES / 1024)) KB compressed)"
+  DB_BYTES="$(wc -c < "${STAGE}/mongodb.archive.gz" | tr -d ' ')"
+  [ "${DB_BYTES}" -gt 1024 ] || die "the database dump is only ${DB_BYTES} bytes — refusing to write a backup that cannot restore"
+  ok "database dumped ($((DB_BYTES / 1024)) KB compressed)"
+  DB_INCLUDED=1
+fi
 
 # ── Uploaded files and app data ──────────────────────────────────────────────
 step "Files"
@@ -76,14 +87,18 @@ fi
 
 # ── Manifest ─────────────────────────────────────────────────────────────────
 # restore.sh reads this to refuse a restore into an older version.
+#
+# running_version ends in `|| true`, so it exits 0 even when the app is down —
+# an `|| echo null` after it never fires. Capture and default instead.
+RUNNING="$(running_version)"
 cat > "${STAGE}/manifest.json" <<EOF
 {
   "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "version": "${VERSION}",
   "host": "$(hostname)",
   "includesConfig": $([ "${INCLUDE_CONFIG}" = "1" ] && echo true || echo false),
-  "contents": ["mongodb.archive.gz", "app-data.tar.gz"$([ "${INCLUDE_CONFIG}" = "1" ] && echo ', "env"')],
-  "runningVersion": $(running_version || echo null)
+  "contents": [$([ "${DB_INCLUDED}" = "1" ] && echo '"mongodb.archive.gz", ')"app-data.tar.gz"$([ "${INCLUDE_CONFIG}" = "1" ] && echo ', "env"')],
+  "runningVersion": ${RUNNING:-null}
 }
 EOF
 

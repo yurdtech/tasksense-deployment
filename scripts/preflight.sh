@@ -37,13 +37,15 @@ if [ "${MEM_MB}" -ge 3500 ]; then ok "$((MEM_MB / 1024)) GB memory"
 elif [ "${MEM_MB}" -eq 0 ]; then warn "could not determine memory"
 else fail "$((MEM_MB / 1024)) GB memory — 4 GB is the minimum"; fi
 
-DISK_GB=$(df -Pg / 2>/dev/null | awk 'NR==2 {print $4}' || echo 0)
+# -Pk, not -Pg: GNU and busybox df have no -g.
+DISK_GB=$(df -Pk / 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}' || echo 0)
 [ -z "${DISK_GB}" ] && DISK_GB=0
 if [ "${DISK_GB}" -ge 20 ]; then ok "${DISK_GB} GB free on /"
 else fail "${DISK_GB} GB free on / — 20 GB is the minimum, and the database grows"; fi
 
 step "Network"
-require_env_file 2>/dev/null || warn "no .env yet — skipping port and URL checks"
+# Not require_env_file: that die()s, and no || can catch an exit.
+[ -f "${ENV_FILE}" ] || warn "no .env yet — skipping port and URL checks"
 if [ -f "${ENV_FILE}" ]; then
   PORT="$(env_value HTTP_PORT)"; PORT="${PORT:-3000}"
   if command -v ss >/dev/null 2>&1; then LISTENERS="$(ss -ltn 2>/dev/null || true)"
@@ -89,7 +91,11 @@ if [ -f "${ENV_FILE}" ]; then
   if [ -z "${SECRET}" ]; then fail "STORAGE_SECRET is empty — generate one with: openssl rand -base64 32"
   elif [ "${#SECRET}" -lt 32 ]; then fail "STORAGE_SECRET is ${#SECRET} characters — 32 is the minimum"
   else ok "STORAGE_SECRET set (${#SECRET} characters)"; fi
-  [ -n "$(env_value MONGO_PASSWORD)" ] || fail "MONGO_PASSWORD is empty — generate one with: openssl rand -base64 24"
+  # Only for the bundled database. With MONGODB_URI set, the credentials live
+  # in the URI and .env.example says to leave these empty.
+  if [ -z "$(env_value MONGODB_URI)" ]; then
+    [ -n "$(env_value MONGO_PASSWORD)" ] || fail "MONGO_PASSWORD is empty — generate one with: openssl rand -hex 24"
+  fi
 fi
 
 printf '\n'

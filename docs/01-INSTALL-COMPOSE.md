@@ -132,10 +132,11 @@ echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u yurdtech --password-s
 ./scripts/install.sh
 ```
 
-**Without:** download `tasksense-onprem-<version>.tar.gz`, `SHA256SUMS`,
-`SHA256SUMS.sig` and `cosign.pub` from the
-[releases page](https://github.com/yurdtech/tasksense-deployment/releases) on a
-machine that has internet, then:
+**Without:** get `tasksense-onprem-<version>.tar.gz` from your TaskSense
+contact (it holds the private images, so it is not published openly), and
+`SHA256SUMS`, `SHA256SUMS.sig` and `cosign.pub` from the public
+[releases page](https://github.com/yurdtech/tasksense-deployment/releases), on
+a machine that has internet, then:
 
 ```bash
 ./scripts/verify-signature.sh tasksense-onprem-1.0.0.tar.gz   # do not skip
@@ -281,3 +282,27 @@ docker compose -f compose/docker-compose.yml logs app | head -40
 A configuration problem is reported in full — every invalid setting at once,
 each with what is wrong and what to do — so one edit and one restart fixes the
 file. [10-TROUBLESHOOTING](10-TROUBLESHOOTING.md) covers the common ones.
+
+---
+
+## Uninstalling
+
+Stop the stack and keep the data — reinstalling later picks it straight up:
+
+```bash
+docker compose -f compose/docker-compose.yml down
+```
+
+Remove it completely, data included:
+
+```bash
+./scripts/backup.sh                                  # last chance
+docker compose -f compose/docker-compose.yml down -v # -v deletes the volumes
+rm -f compose/.env                                   # holds the secrets
+```
+
+`down -v` deletes `tasksense-app-data` (uploads, snapshots) and
+`tasksense-mongo-data` (the database, unless you used your own). Backups under
+`./backups/` and anything in `compose/certs/` are plain files this never
+touches — remove them yourself if they should go too. An external database is
+not touched either; drop the `tasksense` database there with your DBA.

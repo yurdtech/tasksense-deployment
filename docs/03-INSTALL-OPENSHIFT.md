@@ -4,7 +4,7 @@ The same Helm chart as [Kubernetes](02-INSTALL-KUBERNETES.md), with
 `values-openshift.yaml` on top. Read that guide first — everything in it applies.
 This covers only what differs.
 
-Requires OpenShift 4.10+.
+Requires OpenShift 4.10+ (4.12+ recommended).
 
 ---
 

@@ -52,6 +52,7 @@ step "Images"
 if [ "${OFFLINE}" = "1" ]; then
   "${SCRIPT_DIR}/load-images.sh" --offline
 else
+  ensure_registry_login
   compose pull || die "could not pull the image" \
     "If this host has no route to ghcr.io, install from a release archive:" \
     "  ./scripts/install.sh --offline" \

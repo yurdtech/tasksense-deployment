@@ -1,4 +1,7 @@
-{{- if .Values.backup.enabled }}
+{{- /* Also gated on persistence: the dump lands on the data volume, and
+without one the pod would mount a claim that nothing creates and sit
+Pending forever. */ -}}
+{{- if and .Values.backup.enabled .Values.persistence.enabled }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -16,11 +19,16 @@ spec:
         spec:
           restartPolicy: OnFailure
           securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
           containers:
             - name: backup
               image: {{ .Values.backup.image }}
               command:
-                - /bin/sh
+                # bash, not sh: /bin/sh in the mongo image is dash, which
+                # rejects `-o pipefail`.
+                - /bin/bash
                 - -c
                 - |
                   set -euo pipefail

@@ -10,11 +10,13 @@ spec:
   policyTypes: [Ingress, Egress]
 
   ingress:
-    # The ingress controller, and anything else you name.
+    # The ingress controller, and anything else you name. The controller's
+    # namespace differs per distribution — values-openshift.yaml points it at
+    # openshift-ingress.
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
         {{- range .Values.networkPolicy.ingressNamespaceSelectors }}
         - namespaceSelector:
             matchLabels: {{- toYaml . | nindent 14 }}
@@ -27,7 +29,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: monitoring
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
       ports:
         - port: 3000
           protocol: TCP
@@ -35,15 +37,16 @@ spec:
 
   egress:
     # DNS. Everything below resolves a name first, so without this the policy
-    # blocks the database as effectively as it blocks the internet.
+    # blocks the database as effectively as it blocks the internet. OpenShift
+    # resolves in openshift-dns on 5353 — values-openshift.yaml sets both.
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dns.namespace }}
       ports:
-        - port: 53
+        - port: {{ .Values.networkPolicy.dns.port }}
           protocol: UDP
-        - port: 53
+        - port: {{ .Values.networkPolicy.dns.port }}
           protocol: TCP
 
     # The hosts you named: MongoDB, the directory, the mail relay, a model

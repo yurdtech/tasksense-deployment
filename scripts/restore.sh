@@ -22,7 +22,14 @@ require_env_file
 STAGE="$(mktemp -d)"
 trap 'rm -rf "${STAGE}"' EXIT
 tar xzf "${ARCHIVE}" -C "${STAGE}" || die "could not read ${ARCHIVE} — is it a TaskSense backup?"
-[ -f "${STAGE}/mongodb.archive.gz" ] || die "${ARCHIVE} has no database dump in it"
+[ -f "${STAGE}/manifest.json" ] || [ -f "${STAGE}/app-data.tar.gz" ] \
+  || die "${ARCHIVE} does not look like a TaskSense backup"
+# No dump is legitimate: backups of an external-database install carry files
+# and configuration only, and the database is restored with the DBA's tooling.
+if [ ! -f "${STAGE}/mongodb.archive.gz" ] && ! external_database; then
+  die "${ARCHIVE} has no database dump in it" \
+      "It was taken from an external-database install; this host runs the bundled MongoDB."
+fi
 
 # `head -n1` matters: the manifest embeds the /version response too, which has
 # its own "version" key, so an unrestricted match returns two values and every
@@ -79,13 +86,24 @@ step "Stopping the application"
 compose stop app
 
 step "Database"
-compose exec -T mongo mongorestore \
-  --username "${MONGO_USER}" --password "${MONGO_PASSWORD}" \
-  --authenticationDatabase admin \
-  --drop --archive --gzip < "${STAGE}/mongodb.archive.gz" \
-  || die "mongorestore failed — the application is still stopped" \
-         "Your previous data is in ${SAFETY%/*}/"
-ok "database restored"
+if external_database; then
+  if [ -f "${STAGE}/mongodb.archive.gz" ]; then
+    warn "the archive has a database dump, but MONGODB_URI points at your own cluster"
+    note "restore it there yourself:"
+    note "  mongorestore --uri=\"\$MONGODB_URI\" --drop --archive --gzip < mongodb.archive.gz"
+    confirm "Continue and restore the files only?" || { info "cancelled"; exit 0; }
+  else
+    note "external database — nothing to restore here; use your own tooling"
+  fi
+else
+  compose exec -T mongo mongorestore \
+    --username "${MONGO_USER}" --password "${MONGO_PASSWORD}" \
+    --authenticationDatabase admin \
+    --drop --archive --gzip < "${STAGE}/mongodb.archive.gz" \
+    || die "mongorestore failed — the application is still stopped" \
+           "Your previous data is in ${SAFETY%/*}/"
+  ok "database restored"
+fi
 
 if [ -f "${STAGE}/app-data.tar.gz" ]; then
   step "Files"

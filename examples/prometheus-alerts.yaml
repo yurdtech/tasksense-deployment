@@ -87,7 +87,7 @@ spec:
             summary: The TaskSense licence has expired
             description: >-
               Free-tier limits are in force. Your data is untouched and still
-              fully accessible. Renew at info@meiksense.io.
+              fully accessible. Renew at info@yurdtech.az.
 
         - alert: TaskSenseLicenceInvalid
           expr: tasksense_license_invalid == 1

@@ -22,7 +22,7 @@ feature behind the licence — only those two numbers.
 
 ## Getting one
 
-Email **info@meiksense.io** with the organisation the licence is for and how
+Email **info@yurdtech.az** with the organisation the licence is for and how
 many people will have accounts. You will receive a single line:
 
 ```
@@ -51,7 +51,7 @@ for it.
 The payload is signed, not encrypted — you can read it:
 
 ```bash
-grep LICENSE_KEY compose/.env | cut -d_ -f2- | cut -d. -f1 | base64 -d
+grep LICENSE_KEY compose/.env | sed 's/^LICENSE_KEY=tsl_//' | cut -d. -f1 | base64 -d
 {"org":"ABB Bank","plan":"pro","seats":200,"exp":"2027-08-01"}
 ```
 
@@ -68,7 +68,7 @@ your integrations are untouched and fully accessible — an expired licence is a
 billing state, not a kill switch.
 
 Renewals are a new key for the same `.env` line. Email
-**info@meiksense.io** before the date on the key.
+**info@yurdtech.az** before the date on the key.
 
 ## Going over the seat count
 

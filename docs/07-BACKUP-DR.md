@@ -88,7 +88,9 @@ forward.
 Do this once before go-live and once a year after. Twenty minutes.
 
 ```bash
-# On a scratch VM, or the same host with a different HTTP_PORT and volume names.
+# On a scratch VM. Not the same host: the compose project and volume names are
+# fixed (tasksense, tasksense-app-data, tasksense-mongo-data), so a second
+# install here would reattach the live data.
 ./scripts/install.sh
 ./scripts/restore.sh /mnt/backup/tasksense/<latest>.tar.gz
 

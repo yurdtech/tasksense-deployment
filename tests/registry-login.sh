@@ -67,7 +67,7 @@ out="$(run_case yes y)"
 check "accepting drops the old credential before asking for another" "logout ghcr.io" "${out}"
 check "and then signs in with the new one" "login ghcr.io -u yurdtech" "${out}"
 check "and then asks for a new one" "Registry access" "${out}"
-check "with somewhere to get one" "info@meiksense.io" "${out}"
+check "with somewhere to get one" "info@yurdtech.az" "${out}"
 check "and a default username, since it is not a credential" "Username [yurdtech]" "${out}"
 
 # ── 3. nothing stored ────────────────────────────────────────────────────────

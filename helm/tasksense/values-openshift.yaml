@@ -35,3 +35,12 @@ route:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
+
+# The upstream defaults name namespaces that do not exist on OpenShift, and a
+# NetworkPolicy pointing at the wrong ones blocks the router and DNS outright.
+networkPolicy:
+  ingressControllerNamespace: openshift-ingress
+  monitoringNamespace: openshift-monitoring
+  dns:
+    namespace: openshift-dns
+    port: 5353

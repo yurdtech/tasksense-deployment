@@ -94,13 +94,16 @@ Repeat for each upgrade, before running `upgrade.sh`.
 ## No route out at all
 
 Every release also ships as a signed archive containing the images, the
-manifests, the scripts and this documentation.
+manifests, the scripts and this documentation. The archive holds the private
+images, so it is not published openly — **ask your TaskSense contact for the
+download link**. The checksums and signature that prove it is ours *are*
+public, on <https://github.com/yurdtech/tasksense-deployment/releases>.
 
 On a machine that has internet:
 
 ```bash
-# From https://github.com/yurdtech/tasksense-deployment/releases
-# Download: tasksense-onprem-1.0.0.tar.gz, SHA256SUMS, SHA256SUMS.sig, cosign.pub
+# Archive: from your TaskSense contact
+# SHA256SUMS, SHA256SUMS.sig, cosign.pub: from the public releases page
 ./scripts/verify-signature.sh tasksense-onprem-1.0.0.tar.gz
 ```
 
@@ -152,7 +155,7 @@ neither one reports anything back to us.
 | Message | Cause |
 | --- | --- |
 | `denied: denied` | Not logged in, or the token has expired. Run `docker login ghcr.io` again. |
-| `unauthorized: authentication required` | Wrong username. It is the account we gave you, not your own GitHub login. |
+| `unauthorized: authentication required` | The token is wrong, expired, or was pasted with a stray newline. Log in again with a fresh copy of it. |
 | `manifest unknown` | That version does not exist. Check the releases page. |
 | Times out, no error | Proxy not configured for Docker — see above. Note that the daemon does not read your shell's `HTTPS_PROXY`. |
 | `no matching manifest for linux/...` | Unsupported architecture. We publish `amd64` and `arm64`. |

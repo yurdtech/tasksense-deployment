@@ -47,7 +47,10 @@ firstAdminEmail: ""
 
 # Supply the four above from a Secret you manage instead (Vault, sealed-secrets,
 # an external-secrets operator). It must contain APP_URL, MONGODB_URI,
-# STORAGE_SECRET and FIRST_ADMIN_EMAIL. Anything set here is then ignored.
+# STORAGE_SECRET, FIRST_ADMIN_EMAIL — and CORS_ALLOWED_ORIGINS, which the
+# chart-managed secret sets to appUrl and the browser needs to sign in. With
+# metrics on, METRICS_TOKEN too: the ServiceMonitor reads its bearer token from
+# this same secret. Anything set here is then ignored.
 existingSecret: ""
 
 # ── Optional ─────────────────────────────────────────────────────────────────
@@ -149,11 +152,20 @@ networkPolicy:
   # administrator configures, and this is the layer that bounds them.
   enabled: false
   # CIDRs the application may reach — MongoDB, the directory, the mail relay,
-  # a model endpoint. DNS to kube-dns is allowed automatically.
+  # a model endpoint. DNS to the cluster resolver is allowed automatically.
   egressCIDRs: []
   #  - 10.20.0.0/16
   # Namespaces allowed to reach the application, beyond the ingress controller.
   ingressNamespaceSelectors: []
+  # Where the ingress controller and Prometheus live, and where DNS answers.
+  # These are the upstream-Kubernetes defaults; values-openshift.yaml replaces
+  # all three, because a policy naming the wrong namespaces blocks every Route
+  # and all name resolution the moment it is enabled.
+  ingressControllerNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+  dns:
+    namespace: kube-system
+    port: 53
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 
@@ -198,6 +210,8 @@ tolerations: []
 affinity: {}
 podAnnotations: {}
 podLabels: {}
+nameOverride: ""
+fullnameOverride: ""
 
 # ── Backup ───────────────────────────────────────────────────────────────────
 

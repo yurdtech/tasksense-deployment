@@ -27,7 +27,7 @@ curl -s -H "Authorization: Bearer <token>" \
 | --- | --- | --- |
 | `absent` | No `LICENSE_KEY` in `.env` | Free-tier limits are correct behaviour. [14-LICENSING](14-LICENSING.md) |
 | `invalid` | The key was copied short, or altered | It must start with `tsl_` and include everything after it, on one line |
-| `expired` | The date inside the key has passed | Renew at info@meiksense.io. Your data is untouched |
+| `expired` | The date inside the key has passed | Renew at info@yurdtech.az. Your data is untouched |
 | `valid` | The licence is fine | The limit you hit is the one in the key — check `over` on `/api/v1/team/seats` |
 
 **On-premise, exceeding the seat count does not block sign-in.** If somebody

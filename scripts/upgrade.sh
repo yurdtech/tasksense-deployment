@@ -58,6 +58,7 @@ step "Fetching ${TARGET}"
 if [ "${OFFLINE}" = "1" ]; then
   "${SCRIPT_DIR}/load-images.sh" --offline
 else
+  ensure_registry_login
   IMAGE="$(env_value TASKSENSE_IMAGE)"; IMAGE="${IMAGE:-ghcr.io/yurdtech/tasksense}"
   "${RUNTIME}" pull "${IMAGE}:${TARGET}" || die "could not pull ${IMAGE}:${TARGET}" \
     "Check the version exists, or use --offline with a release archive."

@@ -51,23 +51,13 @@ Full walkthroughs in [05-IDENTITY](05-IDENTITY.md).
 
 ### Active Directory / LDAP
 
-All four of URL, bind DN, bind password and base DN are needed; a partial
-configuration disables directory sign-in rather than half-enabling it.
-
-| Setting | Default | Notes |
-| --- | --- | --- |
-| `LDAP_URL` | — | Must be `ldaps://`. Plain `ldap://` is refused on-premise: it puts every password on the wire. |
-| `LDAP_BIND_DN` | — | Read-only service account. |
-| `LDAP_BIND_PASSWORD` | — | |
-| `LDAP_BASE_DN` | — | Subtree to search. |
-| `LDAP_USER_FILTER` | `(sAMAccountName={{username}})` | `{{username}}` is replaced, escaped. |
-| `LDAP_TLS_CA` | — | PEM path inside the container. Mount it. |
-| `LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | Setting it false accepts any certificate and defeats `ldaps`. Lab use only. |
-| `LDAP_ATTR_EMAIL` | `mail` | Email is how a directory identity joins a local account. |
-| `LDAP_ATTR_NAME` | `displayName` | |
-| `LDAP_ATTR_GROUPS` | `memberOf` | If your directory does not maintain it, a reverse group search is used automatically. |
-| `LDAP_GROUP_MAP` | — | `<group DN>=<role>` pairs, `;` separated. Re-read at every sign-in. |
-| `LDAP_LABEL` | `Sign in with your directory account` | Form heading. |
+**No environment variables.** Directory sign-in is configured by a workspace
+administrator inside the application — Admin → Authentication: several
+independent directories, encrypted bind passwords (keyed off
+`STORAGE_SECRET`), the CA certificate pasted as PEM text, a live connection
+test per directory, and changes that apply without a restart. Leftover
+`LDAP_*` lines from an older `.env` are ignored. Walkthrough:
+[05-IDENTITY](05-IDENTITY.md).
 
 ### OIDC
 

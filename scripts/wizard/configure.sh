@@ -238,7 +238,7 @@ section_signin() {
   ui_text "Pick one primary method. Local passwords stay available whichever you choose, and you should keep at least one local administrator — otherwise an identity-provider outage locks you out of your own instance."
 
   ui_menu "How will people sign in?" \
-    "Active Directory / LDAP|the usual answer inside a bank" \
+    "Active Directory / LDAP|configured IN THE APP after install — nothing to type here" \
     "OIDC|Keycloak, AD FS, Azure AD, Okta" \
     "Local passwords only|no directory — accounts live in TaskSense" \
     "Decide later|configure it after the install"
@@ -251,72 +251,18 @@ section_signin() {
   esac
 }
 
+# There are no LDAP_* environment variables any more — directory sign-in is
+# configured by the workspace administrator inside the application, where every
+# directory (several independent domains, if the organisation has them) gets an
+# encrypted bind password and its own live connection test, and changes apply
+# without a restart. The wizard therefore has nothing to write and nothing to
+# probe; its job is to say where the setting moved and how the first
+# administrator gets in to reach it.
 signin_ldap() {
   printf '\n'
-  ui_text "Six settings. The wizard tests them against your real directory before anything is installed, so a wrong bind DN is caught here rather than by the first person who cannot sign in."
-
-  ui_ask "LDAP_URL" "$(example_default LDAP_URL)" \
-    "Your domain controller. ldaps:// only — a plain ldap:// bind sends the service account password across the network in clear text, and on-premise the application refuses it." ui_valid_ldap_url
-  cfg_set LDAP_URL "${UI_VALUE}"
-
-  ui_ask "LDAP_BIND_DN" "$(example_default LDAP_BIND_DN)" \
-    "A read-only service account. It looks users up; it never needs to write, and it should not be a domain administrator."
-  cfg_set LDAP_BIND_DN "${UI_VALUE}"
-
-  ui_secret "LDAP_BIND_PASSWORD" "The service account's password. Type it — this one is not ours to generate." 0
-  cfg_set LDAP_BIND_PASSWORD "${UI_VALUE}"
-
-  ui_ask "LDAP_BASE_DN" "$(example_default LDAP_BASE_DN)" \
-    "Where the search starts. Narrower is faster and safer: point it at the OU that holds staff rather than the top of the domain."
-  cfg_set LDAP_BASE_DN "${UI_VALUE}"
-
-  ui_ask "LDAP_USER_FILTER" "$(example_default LDAP_USER_FILTER)" \
-    "How a typed username becomes a directory entry. {{username}} is replaced with what the user typed. sAMAccountName is right for Active Directory; uid for OpenLDAP."
-  cfg_set LDAP_USER_FILTER "${UI_VALUE}"
-
-  printf '\n'
-  if ui_yesno "Is the directory certificate issued by your own CA?" y; then
-    ui_ask "LDAP_TLS_CA" "$(example_default LDAP_TLS_CA)" \
-      "The path INSIDE the container. Copy the CA file into compose/certs/ on this host — that directory is mounted at /certs, read-only — and leave this as /certs/<filename>."
-    cfg_set LDAP_TLS_CA "${UI_VALUE}"
-    check_ca_present "${UI_VALUE}"
-  fi
-
-  printf '\n'
-  if ui_yesno "Map directory groups to TaskSense roles?" y; then
-    ui_ask "LDAP_GROUP_MAP" "$(example_default LDAP_GROUP_MAP)" \
-      "group DN=role, separated by semicolons. Re-evaluated at every sign-in, so removing somebody from the group in AD takes effect on their next login — you do not have to touch TaskSense."
-    cfg_set LDAP_GROUP_MAP "${UI_VALUE}"
-  fi
-}
-
-# The path just given is the one inside the container; the file has to be on
-# this host, in compose/certs. Those are two different things and the setting
-# only mentions one of them, which is why "I put the certificate on the server"
-# and "the application can read the certificate" come apart so easily.
-#
-# Checking here rather than leaving it to the live checks costs nothing and
-# arrives while the operator still has the file path in their head.
-check_ca_present() {
-  local inside="$1" name
-  case "${inside}" in
-    /certs/*) name="${inside#/certs/}" ;;
-    *)
-      warn "that path is not under /certs, so the compose file will not mount it"
-      ui_hint "Only compose/certs is mounted into the container. A path anywhere else needs a mount you add yourself — docs/05-IDENTITY.md."
-      return 0
-      ;;
-  esac
-
-  if [ -f "${COMPOSE_DIR}/certs/${name}" ]; then
-    ok "found ${COMPOSE_DIR}/certs/${name}"
-    return 0
-  fi
-
-  warn "there is no ${name} in ${COMPOSE_DIR}/certs"
-  ui_text "The path above is correct for inside the container — but the file has to exist on this host for the container to see it:"
-  ui_hint "  cp /etc/ssl/certs/${name} ${COMPOSE_DIR}/certs/"
-  ui_hint "The live checks will refuse to pass until it is there, so this can be done now or in a moment."
+  ok "nothing to configure here — LDAP moved into the application"
+  ui_text "After the install: sign in as the administrator (FIRST_ADMIN_EMAIL — claim the account with \"Create account\" on the login screen, which sets its password), then open Admin → Authentication. Add your directories there — server URL, service account, base DN, user filter, group-to-role mapping, and the CA certificate pasted as text (no file mounts). Every directory has a live \"Test connection\" that runs the same code sign-in does."
+  ui_hint "Self-registration is closed by default on-premise, so once LDAP is on, accounts only come from your directory or an invite — docs/05-IDENTITY.md."
 }
 
 signin_oidc() {
@@ -507,12 +453,10 @@ configure_summary() {
     ui_summary_secret "Database password" "$(cfg_get MONGO_PASSWORD)"
   fi
 
-  if [ -n "$(cfg_get LDAP_URL)" ]; then
-    ui_summary_add "Sign-in" "LDAP — $(cfg_get LDAP_URL)"
-  elif [ -n "$(cfg_get OIDC_ISSUER)" ]; then
+  if [ -n "$(cfg_get OIDC_ISSUER)" ]; then
     ui_summary_add "Sign-in" "OIDC — $(cfg_get OIDC_ISSUER)"
   else
-    ui_summary_add "Sign-in" "local passwords"
+    ui_summary_add "Sign-in" "local passwords (LDAP, if wanted, is set up in the app)"
   fi
 
   if [ -n "$(cfg_get SMTP_HOST)" ]; then
@@ -547,7 +491,7 @@ configure_edit() {
       "Version and access|release, bind address, port" \
       "Identity|APP_URL, administrator" \
       "Secrets|storage key, database password, licence" \
-      "Sign-in|LDAP, OIDC, local passwords" \
+      "Sign-in|OIDC, local passwords (LDAP lives in the app)" \
       "Mail|SMTP relay" \
       "File storage|upload limit" \
       "AI features|agents and the scheduler" \

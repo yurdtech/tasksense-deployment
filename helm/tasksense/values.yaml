@@ -61,11 +61,11 @@ licenseKey: ""
 replicaCount: 1
 
 # Extra environment variables, for anything the chart does not model —
-# LDAP_*, OIDC_*, SMTP_*, EGRESS_ALLOWLIST, SESSION_TTL_HOURS. Reference
+# OIDC_*, SMTP_*, EGRESS_ALLOWLIST, SESSION_TTL_HOURS. Reference
 # docs/04-CONFIGURATION.md; secrets belong in `existingSecret` or
-# `extraEnvFrom`, not here.
+# `extraEnvFrom`, not here. (There are no LDAP_* variables: directory
+# sign-in is configured inside the application, Admin → Authentication.)
 extraEnv: {}
-#  LDAP_URL: ldaps://dc01.corp.internal:636
 #  SESSION_TTL_HOURS: "12"
 
 # Secrets and ConfigMaps to load wholesale.

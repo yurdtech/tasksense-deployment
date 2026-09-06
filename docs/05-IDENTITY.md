@@ -12,7 +12,32 @@ identity-provider outage should not lock you out of your own installation.
 The common case for an on-premise installation, and the one to start with if you
 run AD.
 
-### What TaskSense does
+**LDAP is configured inside the application, not in `.env`.** There are no
+`LDAP_*` environment variables: a workspace administrator opens
+**Admin → Authentication** and manages the directories there — several
+independent domains if the organisation has them (head office and each
+subsidiary's own forest), tried in order at every sign-in. Bind passwords are
+stored AES-256-GCM encrypted (keyed off `STORAGE_SECRET`), the CA certificate
+is pasted as PEM text (no file on the server, no mount), every directory has a
+live **Test connection** that runs the same code sign-in does, and a save
+applies within about 30 seconds — no restart, no container access.
+
+> Upgrading from a version that used `LDAP_*` in `.env`: those lines are now
+> ignored. Re-enter the directory in Admin → Authentication (the connection
+> test will confirm it) and delete them from `.env`.
+
+### Getting to the screen on a fresh install
+
+1. Set `FIRST_ADMIN_EMAIL` in `.env` (the wizard asks for it). First boot
+   creates that account **without a password**.
+2. Open TaskSense, choose **Create account** with that email and set a
+   password — this claims the bootstrap admin. (The register form stays
+   visible until the claim happens, even though self-registration is closed
+   by default on-premise.)
+3. Go to **Admin → Authentication**, add your directories, run each one's
+   **Test connection**, save.
+
+### What TaskSense does at sign-in
 
 1. Binds as a read-only service account.
 2. Searches for the user with the filter you supply.
@@ -20,6 +45,10 @@ run AD.
    that checks it. No password is stored locally, so a compromised TaskSense
    database yields no directory credentials.
 4. Reads their group membership and maps it to a role.
+5. First sign-in creates the account on the spot, in the installation's single
+   workspace. There is ONE login form: people type an email **or** a directory
+   username — the directories are tried first, the local account is the
+   fallback.
 
 ### What you need from your directory team
 
@@ -28,33 +57,12 @@ run AD.
 | An `ldaps://` URL | `ldaps://dc01.bank.internal:636` |
 | A read-only service account | `CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal` |
 | The subtree to search | `DC=bank,DC=internal` |
-| Your issuing CA, as PEM | `bank-ca.pem` |
+| Your issuing CA, as PEM text | contents of `bank-ca.pem` |
 | Two groups, for admins and users | `CN=TaskSense-Admins,OU=Groups,DC=bank,DC=internal` |
 
-### Configuration
-
-```bash
-LDAP_URL=ldaps://dc01.bank.internal:636
-LDAP_BIND_DN=CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal
-LDAP_BIND_PASSWORD=<service account password>
-LDAP_BASE_DN=DC=bank,DC=internal
-LDAP_USER_FILTER=(sAMAccountName={{username}})
-LDAP_TLS_CA=/certs/bank-ca.pem
-LDAP_GROUP_MAP=CN=TaskSense-Admins,OU=Groups,DC=bank,DC=internal=admin;CN=TaskSense-Users,OU=Groups,DC=bank,DC=internal=member
-LDAP_LABEL=Sign in with your bank account
-```
-
-Put the CA where the container can see it. `compose/certs/` is mounted at
-`/certs`, read-only:
-
-```bash
-cp /etc/ssl/certs/bank-ca.pem compose/certs/
-```
-
-`LDAP_TLS_CA` is the path **inside** the container — `/certs/bank-ca.pem` —
-not the path on the host. Getting that wrong fails at first sign-in rather than
-at startup, which is why `./tasksense` binds to the directory and tells you
-before installing.
+All of it goes into the Admin → Authentication form. Use `ldaps://` — the
+application refuses plain `ldap://` on-premise unless the directory's
+lab-only "allow an insecure connection" switch is set.
 
 ### Choosing the user filter
 
@@ -70,14 +78,15 @@ the query.
 
 Restrict it if you do not want every directory account to have access:
 
-```bash
-LDAP_USER_FILTER=(&(sAMAccountName={{username}})(memberOf=CN=TaskSense-Users,OU=Groups,DC=bank,DC=internal))
+```
+(&(sAMAccountName={{username}})(memberOf=CN=TaskSense-Users,OU=Groups,DC=bank,DC=internal))
 ```
 
 ### Group to role mapping
 
-Semicolon-separated `<group DN>=<role>`. Roles: `admin`, `lead`, `member`,
-`viewer`, or any custom role you have defined.
+Semicolon-separated `<group DN>=<role>` in the directory's "group to role
+mapping" field. Roles: `admin`, `lead`, `member`, `viewer`, or any custom role
+you have defined.
 
 Re-read at **every** sign-in. Removing someone from a group in AD drops their
 access at their next login, with no action in TaskSense. The corollary: role
@@ -90,15 +99,19 @@ they should not sign in at all.
 
 ### Testing it
 
+Use the directory's own **Test connection** button: it signs in as the service
+account, and — given a real username, optionally with that user's password —
+also checks the filter, the attributes, and the resolved role, end to end.
+Nothing is saved by a test. To cross-check from the host first:
+
 ```bash
-# From the host, before involving TaskSense:
 ldapsearch -H ldaps://dc01.bank.internal:636 \
   -D "CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal" -W \
   -b "DC=bank,DC=internal" "(sAMAccountName=arustamli)" mail displayName memberOf
 ```
 
-If that returns the user, TaskSense will find them too. Then sign in through the
-web interface and check the result:
+If that returns the user, TaskSense will find them too. Sign-in activity lands
+in the application log:
 
 ```bash
 docker compose -f compose/docker-compose.yml logs app | grep -i ldap
@@ -108,12 +121,13 @@ docker compose -f compose/docker-compose.yml logs app | grep -i ldap
 
 | Symptom | Cause |
 | --- | --- |
-| "The directory is not reachable" | Service account credentials, or the host/port. The exact reason is in the log. |
-| "clear text" error at startup | `LDAP_URL` uses `ldap://`. On-premise requires `ldaps://`. |
-| Certificate errors | `LDAP_TLS_CA` is missing, wrong, or not mounted into the container. |
-| "Invalid username or password" for a user you know exists | The filter does not match them. Test it with `ldapsearch` first. |
-| Everyone signs in as a plain member | `LDAP_GROUP_MAP` group DNs do not match. Copy them exactly from `ldapsearch` output — the whole DN, not the `CN`. |
-| "Your directory account has no email address" | The entry has no `mail` attribute. Email is how TaskSense joins the directory identity to a local record. Set `LDAP_ATTR_EMAIL` if yours uses another attribute. |
+| "The directory is not reachable" | Service account credentials, or the host/port. The Test connection result names the actual reason. |
+| "clear text" refusal | The server URL uses `ldap://`. Use `ldaps://` (or, for an isolated lab only, the insecure switch). |
+| Certificate errors | The pasted CA is missing or the wrong one. Paste the issuing CA's PEM into the directory's CA field. |
+| "Invalid username or password" for a user you know exists | The filter does not match them. Run Test connection with their username. |
+| Everyone signs in as a plain member | The group → role mapping's DNs do not match. Copy them exactly from `ldapsearch` output — the whole DN, not the `CN`. |
+| "Your directory account has no email address" | The entry has no `mail` attribute. Email is how TaskSense joins the directory identity to a local record. Change the email attribute field if yours uses another. |
+| Directory sign-in silently stopped after `STORAGE_SECRET` changed | Stored bind passwords can no longer be decrypted. Re-enter them in Admin → Authentication. |
 
 ---
 
@@ -152,9 +166,15 @@ the identity is joined to a TaskSense account.
 
 ## Local passwords
 
-Always available. Requirements are set in Admin → Access control (minimum
-length, 6–32 characters). The policy applies to new accounts as well as to
-password changes.
+Available unless an administrator turns the method off in
+Admin → Authentication (directory-only installations). **Self-registration is
+closed by default on-premise**: accounts come from the directory, from an
+admin invite, or from the one bootstrap exception — `FIRST_ADMIN_EMAIL`, whose
+unclaimed account keeps the register form reachable until its password is set.
+An admin can reopen self-registration on the same screen. Password
+requirements are set in Admin → Access control (minimum length, 6–32
+characters); the policy applies to new accounts as well as to password
+changes.
 
 There is no self-service password reset — no assumption is made that the
 installation can send email. An administrator sets a password in

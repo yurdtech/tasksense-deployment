@@ -52,8 +52,8 @@ ok "logs (last 2000 lines)"
 # than pattern-matching values: a password can look like anything, but the key
 # it sits under is predictable.
 if [ -f "${ENV_FILE}" ]; then
-  # Second expression: credentials embedded in URIs (MONGODB_URI, LDAP_URL),
-  # which no key name matches.
+  # Second expression: credentials embedded in URIs (MONGODB_URI and the
+  # like), which no key name matches.
   sed -E -e 's/^([A-Z_]*(PASSWORD|SECRET|TOKEN|KEY|PASS)[A-Z_]*)=.*/\1=<redacted>/' \
          -e 's#(://)[^@/[:space:]]+@#\1<redacted>@#g' \
       "${ENV_FILE}" > "${STAGE}/env.redacted"

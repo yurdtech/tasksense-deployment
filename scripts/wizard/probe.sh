@@ -71,15 +71,14 @@ probe_supported() {
 # parsing `--json` keeps this free of a JSON parser in bash — and it is what
 # lets a failure be attributed to the section that caused it.
 probe_one() {
-  local image="$1" envfile="$2" check="$3" sample="${4:-}" log
+  local image="$1" envfile="$2" check="$3" log
   log="$(mktemp)"
 
   local -a args=(run --rm --env-file "${envfile}")
-  # LDAPS against an internal CA needs the CA visible inside the container, at
-  # the path LDAP_TLS_CA names.
+  # Kept for anything an operator drops into compose/certs (it is mounted
+  # read-only in the real deployment too).
   [ -d "${COMPOSE_DIR}/certs" ] && args+=(-v "${COMPOSE_DIR}/certs:/certs:ro")
   args+=("${image}" node dist/probe/cli.js "${check}")
-  [ -n "${sample}" ] && args+=(--user "${sample}")
 
   if "${RUNTIME}" "${args[@]}" >"${log}" 2>&1; then
     sed 's/^/  /' "${log}"
@@ -112,9 +111,9 @@ probe_config() {
   return 0
 }
 
-# probe_run <candidate.env> [sample-username]
+# probe_run <candidate.env>
 probe_run() {
-  local candidate="$1" sample="${2:-}" image envfile
+  local candidate="$1" image envfile
   PROBE_FAILED=()
 
   detect_runtime
@@ -140,8 +139,10 @@ probe_run() {
 
   local -a checks=()
   # Only what is configured. "Not configured" is not a fault, and asking the
-  # probe about an unconfigured channel just prints a dash.
-  grep -q '^LDAP_URL=' "${candidate}" && checks+=(ldap)
+  # probe about an unconfigured channel just prints a dash. There is no ldap
+  # check any more: directory sign-in is configured inside the application
+  # (Admin → Authentication), which has its own live "Test connection" — the
+  # environment simply has nothing to probe.
   grep -q '^OIDC_ISSUER=' "${candidate}" && checks+=(oidc)
   grep -q '^SMTP_HOST=' "${candidate}" && checks+=(smtp)
   grep -q '^MONGODB_URI=' "${candidate}" && checks+=(mongo)
@@ -154,15 +155,7 @@ probe_run() {
 
   local check
   for check in "${checks[@]}"; do
-    if [ "${check}" = "ldap" ] && [ -z "${sample}" ]; then
-      ui_text "The service account bind is checked on its own. Naming somebody who exists in the directory also tests LDAP_USER_FILTER and the group mapping — which is where the second class of mistake lives."
-      ui_ask "A username to look up (optional)" "-" \
-        "Any real account, for example the one you would sign in with. Nothing is written and no password is needed. Leave the dash to check the bind only."
-      [ "${UI_VALUE}" != "-" ] && sample="${UI_VALUE}"
-      printf '\n'
-    fi
-
-    if probe_one "${image}" "${envfile}" "${check}" "$([ "${check}" = "ldap" ] && printf '%s' "${sample}")"; then
+    if probe_one "${image}" "${envfile}" "${check}"; then
       :
     else
       PROBE_FAILED+=("${check}")
@@ -175,6 +168,6 @@ probe_run() {
 
 # Executed rather than sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
-  [ -n "${1:-}" ] || die "usage: probe.sh <candidate.env> [sample-username]"
-  probe_run "$1" "${2:-}"
+  [ -n "${1:-}" ] || die "usage: probe.sh <candidate.env>"
+  probe_run "$1"
 fi

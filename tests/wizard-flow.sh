@@ -56,15 +56,7 @@ answers = [
     "  tasksense  \n",                      # MONGO_USER — pasted, with spaces
     "g\n",                                  # MONGO_PASSWORD: generate
     "n\n",                                  # licence key?
-    "1",                                    # sign-in: LDAP  (menu, no newline)
-    "ldaps://dc01.abb.internal:636\n",      # LDAP_URL
-    "CN=svc-tasksense,OU=Service Accounts,DC=abb,DC=internal\n",
-    "bind-secret\n",                        # LDAP_BIND_PASSWORD
-    "DC=abb,DC=internal\n",                 # LDAP_BASE_DN
-    "(sAMAccountName={{username}})\n",      # LDAP_USER_FILTER
-    "y\n",                                  # own CA?
-    " /certs/abb-ca.crt\n",                 # LDAP_TLS_CA — pasted, leading space
-    "n\n",                                  # group map?
+    "1",                                    # sign-in: LDAP (informational — configured in the app, no prompts)
     "n\n",                                  # mail?
     "25\n",                                 # STORAGE_MAX_FILE_MB
     "n\n",                                  # AI features?
@@ -176,24 +168,16 @@ check "MONGO_PASSWORD generated" "ok" "$([ "${#MONGO_PW}" -ge 24 ] && echo ok ||
 check "and is safe to put inside a connection string" "ok" \
   "$(case "${MONGO_PW}" in *[/:@?\#%+=]*) echo "contains a URI-reserved character" ;; *) echo ok ;; esac)"
 
-# The menu selection routed to the LDAP sub-flow, and the awkward characters
-# made it through a terminal intact.
-check "LDAP_URL" "ldaps://dc01.abb.internal:636" "$(value_of "${OUT}" LDAP_URL)"
-check "LDAP_BIND_DN keeps its commas and equals signs" \
-  "CN=svc-tasksense,OU=Service Accounts,DC=abb,DC=internal" "$(value_of "${OUT}" LDAP_BIND_DN)"
-check "LDAP_USER_FILTER keeps its braces" "(sAMAccountName={{username}})" \
-  "$(value_of "${OUT}" LDAP_USER_FILTER)"
+# Choosing LDAP writes NOTHING: there are no LDAP_* variables any more —
+# directory sign-in is configured inside the application. The wizard's whole
+# job here is to say where the setting moved.
+check "no LDAP_URL written" "" "$(value_of "${OUT}" LDAP_URL)"
+check "no LDAP_BIND_DN written" "" "$(value_of "${OUT}" LDAP_BIND_DN)"
+check "no LDAP_BIND_PASSWORD written" "" "$(value_of "${OUT}" LDAP_BIND_PASSWORD)"
 
-# The one that was actually reported: a leading space here is invisible, has no
-# validator to catch it, and surfaces as "no such file or directory, open
-# ' /certs/abb-ca.crt'" long afterwards.
-check "LDAP_TLS_CA is trimmed" "/certs/abb-ca.crt" "$(value_of "${OUT}" LDAP_TLS_CA)"
-
-# And the file is not on this host, so it says so while the path is still in
-# the operator's head rather than leaving it to the live checks.
 TRANSCRIPT="$(cat "${WORK}/transcript.txt" 2>/dev/null | tr -d '\r')"
-check "warns that the CA file is not in compose/certs" "1" \
-  "$(printf '%s' "${TRANSCRIPT}" | grep -c 'no abb-ca.crt in' || true)"
+check "points the operator at Admin → Authentication" "1" \
+  "$(printf '%s' "${TRANSCRIPT}" | grep -q 'Admin → Authentication' && echo 1 || echo 0)"
 
 # Declined sections leave nothing set.
 check "no mail configured" "" "$(value_of "${OUT}" SMTP_HOST)"

@@ -61,7 +61,8 @@ render() {  # render <answers-file> <output>
 printf '\nwizard renderer\n\n'
 
 # ── 1. A full answer set ─────────────────────────────────────────────────────
-# What the wizard collects from somebody installing with Active Directory.
+# What the wizard collects for an OIDC installation. (LDAP is configured in
+# the application now, so no LDAP_* answers exist for the renderer to place.)
 
 cat > "${WORK}/answers.env" <<'EOF'
 TASKSENSE_VERSION=1.0.0
@@ -73,11 +74,9 @@ FIRST_ADMIN_EMAIL=infra@abb.internal
 STORAGE_SECRET=Zt7xKQm2vN8pLdR4sYcW1jH6bF0aGuEo9iTnMkPx3vQ=
 MONGO_USER=tasksense
 MONGO_PASSWORD=hV2mQ8sLpX4tZnB7kRdY
-LDAP_URL=ldaps://dc01.abb.internal:636
-LDAP_BIND_DN=CN=svc-tasksense,OU=Service Accounts,DC=abb,DC=internal
-LDAP_BIND_PASSWORD=bind-secret
-LDAP_BASE_DN=DC=abb,DC=internal
-LDAP_USER_FILTER=(sAMAccountName={{username}})
+OIDC_ISSUER=https://sso.abb.internal/realms/corporate
+OIDC_CLIENT_ID=tasksense
+OIDC_CLIENT_SECRET=s3cr{e}t=with,braces=and.equals
 STORAGE_MAX_FILE_MB=25
 AGENT_EXECUTOR=off
 AGENT_DISPATCHER=off
@@ -109,22 +108,20 @@ check "STORAGE_SECRET written" "Zt7xKQm2vN8pLdR4sYcW1jH6bF0aGuEo9iTnMkPx3vQ=" \
 # An optional the operator answered is uncommented; one they did not stays
 # commented, so the file still documents it in place.
 check "answered optional is active" "1" \
-  "$(active_keys_of "${WORK}/rendered.env" | grep -c '^LDAP_URL$')"
+  "$(active_keys_of "${WORK}/rendered.env" | grep -c '^OIDC_ISSUER$')"
 check "unanswered optional stays commented" "0" \
-  "$(active_keys_of "${WORK}/rendered.env" | grep -c '^OIDC_ISSUER$' || true)"
+  "$(active_keys_of "${WORK}/rendered.env" | grep -c '^SMTP_HOST$' || true)"
 
-# A value containing = and { } survives — LDAP filters and DNs are full of both,
-# and a naive sed-based renderer mangles them.
-check "LDAP_USER_FILTER survives intact" "(sAMAccountName={{username}})" \
-  "$(value_of "${WORK}/rendered.env" LDAP_USER_FILTER)"
-check "LDAP_BIND_DN survives its commas and equals signs" \
-  "CN=svc-tasksense,OU=Service Accounts,DC=abb,DC=internal" \
-  "$(value_of "${WORK}/rendered.env" LDAP_BIND_DN)"
+# A value containing = , { } survives — secrets and URLs are full of such
+# characters, and a naive sed-based renderer mangles them.
+check "OIDC_CLIENT_SECRET survives its braces, commas and equals signs" \
+  "s3cr{e}t=with,braces=and.equals" \
+  "$(value_of "${WORK}/rendered.env" OIDC_CLIENT_SECRET)"
 
 # The comments are the reason for rendering the example rather than emitting a
 # minimal file. Losing them would make .env unreadable to the next operator.
 #
-# Prose only: `#LDAP_URL=` is a commented-out setting, and answering it is
+# Prose only: `#OIDC_ISSUER=` is a commented-out setting, and answering it is
 # supposed to uncomment it. Counting those as comments would make this test fail
 # for the renderer doing its job.
 prose_comments() { grep -c '^#\([^A-Z]\|$\)' "$1"; }

@@ -237,11 +237,10 @@ ui_ask() {
     IFS= read -r answer
 
     # Trim. `IFS= read` keeps leading and trailing whitespace, and a path or a
-    # DN pasted out of a document or an email routinely carries one —
+    # URL pasted out of a document or an email routinely carries one —
     # invisibly. What that produces is not a validation error but a
-    # working-looking value that fails much later: LDAP_TLS_CA=" /certs/ca.pem"
-    # is reported as "no such file or directory, open ' /certs/ca.pem'", where
-    # the only evidence is a space nobody notices inside a quoted string.
+    # working-looking value that fails much later, where the only evidence is
+    # a space nobody notices inside a quoted string.
     answer="${answer#"${answer%%[![:space:]]*}"}"
     answer="${answer%"${answer##*[![:space:]]}"}"
     answer="${answer:-${default}}"
@@ -392,14 +391,6 @@ ui_valid_email() {
   case "$1" in
     ?*@?*.?*) return 0 ;;
     *) printf 'that does not look like an email address'; return 1 ;;
-  esac
-}
-
-ui_valid_ldap_url() {
-  case "$1" in
-    ldaps://*) return 0 ;;
-    ldap://*) printf 'use ldaps:// — a plain ldap:// bind sends every password in clear text, and on-premise the application refuses it'; return 1 ;;
-    *) printf 'must start with ldaps://'; return 1 ;;
   esac
 }
 

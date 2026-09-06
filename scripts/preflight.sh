@@ -63,11 +63,13 @@ if [ -f "${ENV_FILE}" ]; then
     *)         fail "APP_URL must start with http:// or https:// (found: '${APP_URL:-empty}')" ;;
   esac
 
+  # There are no LDAP_* variables any more — directory sign-in is configured
+  # inside the application (Admin → Authentication). A leftover value from an
+  # older install is ignored by the app; say so rather than validate it.
   LDAP_URL="$(env_value LDAP_URL)"
-  case "${LDAP_URL}" in
-    ldap://*) fail "LDAP_URL uses ldap:// — the bind password would be sent in clear text. Use ldaps://" ;;
-    ldaps://*) ok "LDAP_URL uses ldaps" ;;
-  esac
+  if [ -n "${LDAP_URL}" ]; then
+    note "LDAP_URL found in .env — ignored since 1.x: LDAP is configured in the app (Admin → Authentication)"
+  fi
 fi
 
 step "Registry"

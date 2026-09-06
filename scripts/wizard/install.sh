@@ -325,13 +325,13 @@ fi
 # ── 7. Live checks ───────────────────────────────────────────────────────────
 
 ui_step 6 9 "Testing the answers"
-ui_text "Now that the image is here, the application's own code checks what you entered — the same LDAP client, the same configuration parser it will use once installed. A wrong bind DN or an untrusted CA is worth finding here, not from the first colleague who cannot sign in."
+ui_text "Now that the image is here, the application's own code checks what you entered — the same configuration parser and the same clients it will use once installed. A wrong database URI or an unreachable mail relay is worth finding here, not after going live. (LDAP is not checked here: it is configured in the app, which has its own live connection test.)"
 printf '\n'
 
 # Which section owns which check, so a failure sends you back to the right one.
 section_for() {
   case "$1" in
-    ldap|oidc) printf 'signin' ;;
+    oidc) printf 'signin' ;;
     smtp) printf 'mail' ;;
     mongo) printf 'secrets' ;;
     *) printf 'identity' ;;

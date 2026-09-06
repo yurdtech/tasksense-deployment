@@ -172,8 +172,10 @@ including scheme and path. This is the most common SSO failure.
 
 ### Everyone signs in as a plain member
 
-`LDAP_GROUP_MAP` group DNs do not match what the directory returns. Copy them
-from `ldapsearch` output — the full DN, not just the `CN`.
+The group → role mapping in Admin → Authentication does not match what the
+directory returns. Copy the group DNs from `ldapsearch` output — the full DN,
+not just the `CN` — and re-run that directory's "Test connection" with a real
+username: the result shows which role resolved.
 
 ### Locked out entirely
 

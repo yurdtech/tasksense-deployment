@@ -92,8 +92,12 @@ Okta, but a SAML-only deployment is not supported today.
 
 ### Directory sign-in, in detail
 
-1. Bind as the read-only service account from `LDAP_BIND_DN`.
-2. Search for the user with your `LDAP_USER_FILTER`. The username is RFC-4515
+Directory settings live in the application (Admin → Authentication), not in
+`.env`; bind passwords are stored AES-256-GCM encrypted, keyed off
+`STORAGE_SECRET`, and are never echoed by any endpoint. At sign-in:
+
+1. Bind as the read-only service account the admin configured.
+2. Search for the user with the configured filter. The username is RFC-4515
    escaped first, so a value like `*)(objectClass=*` cannot rewrite the filter.
 3. Bind **as the user** with the password they typed. This is the only thing
    that verifies it; the application never sees a stored hash and never writes
@@ -110,8 +114,14 @@ Specific behaviours worth knowing:
   cannot be enumerated.
 - **A filter matching two entries is refused** rather than binding as whichever
   came first.
-- **`ldap://` is rejected** on an on-premise installation. Use `ldaps://` with
-  `LDAP_TLS_CA` pointing at your issuing CA.
+- **`ldap://` is rejected** on an on-premise installation unless the
+  directory's lab-only insecure switch is set. Use `ldaps://`, pasting your
+  issuing CA into the directory's CA field.
+- **Several independent directories** can be configured; sign-in tries them in
+  order, and one domain's outage does not lock out the others.
+- **Enabling a directory requires a passed connection test**, and a
+  configuration that would disable every sign-in method is refused — the
+  settings screen cannot lock everybody out.
 - **Group membership is re-read at every sign-in.** Removing someone from a
   directory group takes effect at their next login with no action in TaskSense.
   The corollary: local role edits to a directory-managed account do not persist.
@@ -284,7 +294,7 @@ Before going live:
 - [ ] `compose/.env` is mode `600` and owned by the service account
 - [ ] TLS terminated at the reverse proxy, with a certificate your clients trust
 - [ ] `BIND_ADDRESS=127.0.0.1` so only the proxy can reach the container
-- [ ] `LDAP_URL` uses `ldaps://` and `LDAP_TLS_CA` points at your issuing CA
+- [ ] Every directory in Admin → Authentication uses `ldaps://` with your issuing CA pasted, and the insecure switch is off
 - [ ] At least one local administrator, so an identity-provider outage cannot lock you out
 - [ ] `SESSION_TTL_HOURS` set to your policy
 - [ ] `SWAGGER_ENABLED` left off

@@ -11,52 +11,43 @@
 # whole time. Nothing compared the two.
 #
 # Nothing could have: the only authority on which values are valid is the
-# schema, and the schema is in the image. So this asks the image. It needs a
-# pull, and skips loudly rather than quietly when it cannot get one — a
+# schema, and the schema is in the image. So this asks the image — the version
+# compose/.env.example pins. It needs that image, and skips loudly rather than
+# quietly when it is not here and there is no GHCR_TOKEN to pull it with — a
 # credential-gated test that silently passes is worse than no test.
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${TASKSENSE_TEST_IMAGE:-ghcr.io/yurdtech/tasksense:1.0.0}"
+# shellcheck source=helpers/common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers/common.sh"
 
-command -v docker >/dev/null 2>&1 || { printf '\n  SKIPPED: docker is not installed\n\n'; exit 0; }
+docker_usable || skip "no container daemon"
 
 printf '\n.env.example against the application it configures\n\n'
 
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-  if ! docker pull -q "${IMAGE}" >/dev/null 2>&1; then
-    printf '  \033[33mSKIPPED\033[0m — %s is not available here.\n' "${IMAGE}"
-    printf '  Sign in first:  docker login ghcr.io -u yurdtech\n'
-    printf '  Or point at another build:  TASKSENSE_TEST_IMAGE=… tests/env-example.sh\n\n'
-    exit 0
-  fi
-fi
+IMAGE="$(app_test_image)" || skip "ghcr.io/yurdtech/tasksense:$(example_version) is not on this host and GHCR_TOKEN is not set.
+  Sign in and set GHCR_TOKEN, or point at another build:  TASKSENSE_TEST_IMAGE=... tests/env-example.sh"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-PASS=0
-FAIL=0
-check() {
+verdict() {  # verdict <name> <rc> <output>
   if [ "$2" = "0" ]; then printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1))
   else printf '  \033[31m✗\033[0m %s\n%s\n' "$1" "$(printf '%s' "$3" | sed 's/^/      /')"; FAIL=$((FAIL + 1)); fi
 }
 
-# The example, plus the six values it deliberately leaves for the operator and
-# the four compose supplies. Everything else is exactly as shipped — the point
-# is to catch a default that cannot be used, not to test our own filling-in.
+# The example with its <CHANGE_ME_…> values filled in, plus what compose
+# supplies (the stack settings, and the MONGODB_URI it derives). Everything
+# else exactly as shipped — the point is to catch a default that cannot be
+# used, not to test our own filling-in.
+stack_settings() {
+  printf 'DEPLOYMENT_MODE=onprem\nNODE_ENV=production\nPORT=3000\n'
+  printf 'MONGODB_URI=mongodb://placeholder:placeholder@mongo:27017/?authSource=admin\n'
+  printf 'TMPDIR=/app/api/data/tmp\nMIGRATE_ON_BOOT=manual\n'
+}
 prepare() {
-  local out="$1"
-  sed -e 's/^STORAGE_SECRET=$/STORAGE_SECRET=0123456789012345678901234567890123456789/' \
-      -e 's/^MONGO_PASSWORD=$/MONGO_PASSWORD=012345678901234567890123/' \
-      "${ROOT}/compose/.env.example" > "${out}"
-  {
-    printf 'DEPLOYMENT_MODE=onprem\n'
-    printf 'NODE_ENV=production\n'
-    printf 'PORT=3000\n'
-    printf 'MONGODB_URI=mongodb://placeholder:placeholder@mongo:27017/?authSource=admin\n'
-  } >> "${out}"
+  fixture_env "$1"
+  stack_settings >> "$1"
 }
 
 prepare "${WORK}/example.env"
@@ -68,23 +59,27 @@ rc=$?
 case "${out}" in
   *"Invalid environment configuration"*|*"nvalid enum value"*) rc=1 ;;
 esac
-check "every value in .env.example is one the application accepts" "${rc}" "${out}"
+verdict "every value in .env.example is one the application accepts" "${rc}" "${out}"
 
 # And the file the wizard writes, which is rendered from the example and so
 # inherits anything wrong with it.
-TASKSENSE_ENV_FILE="${WORK}/example.env" "${ROOT}/scripts/wizard/configure.sh" \
-  --render-only "${WORK}/rendered.env" >/dev/null 2>&1
-{
-  printf 'DEPLOYMENT_MODE=onprem\nNODE_ENV=production\nPORT=3000\n'
-  printf 'MONGODB_URI=mongodb://placeholder:placeholder@mongo:27017/?authSource=admin\n'
-} >> "${WORK}/rendered.env"
+# The renderer needs bash 4; on a Mac's bash 3.2 it runs in bash:5 instead.
+grep -v -e '^DEPLOYMENT_MODE=' -e '^NODE_ENV=' -e '^PORT=' -e '^MONGODB_URI=' -e '^TMPDIR=' -e '^MIGRATE_ON_BOOT=' \
+  "${WORK}/example.env" > "${WORK}/answers.env"
+if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+  TASKSENSE_ENV_FILE="${WORK}/answers.env" "${ROOT}/scripts/wizard/configure.sh" \
+    --render-only "${WORK}/rendered.env" >/dev/null 2>&1
+else
+  docker run --rm --user "$(id -u):$(id -g)" -v "${ROOT}:/w:ro" -v "${WORK}:/out" -w /w \
+    -e TASKSENSE_ENV_FILE=/out/answers.env bash:5 ./scripts/wizard/configure.sh --render-only /out/rendered.env >/dev/null 2>&1
+fi
+stack_settings >> "${WORK}/rendered.env"
 
 out="$(docker run --rm --env-file "${WORK}/rendered.env" "${IMAGE}" node dist/probe/cli.js oidc 2>&1)"
 rc=$?
 case "${out}" in
   *"Invalid environment configuration"*|*"nvalid enum value"*) rc=1 ;;
 esac
-check "and so is everything in the file the wizard renders from it" "${rc}" "${out}"
+verdict "and so is everything in the file the wizard renders from it" "${rc}" "${out}"
 
-printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
-[ "${FAIL}" -eq 0 ]
+finish

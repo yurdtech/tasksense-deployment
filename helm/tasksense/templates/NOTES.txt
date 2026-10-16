@@ -1,59 +1,137 @@
-TaskSense {{ .Values.image.tag | default .Chart.AppVersion }} is installing.
+{{- $fullname := include "tasksense.fullname" . -}}
+{{- $worker := include "tasksense.suffixedName" (dict "root" $ "suffix" "worker") -}}
+{{- $migrate := include "tasksense.suffixedName" (dict "root" $ "suffix" "migrate") -}}
+{{- $preBackup := include "tasksense.suffixedName" (dict "root" $ "suffix" "pre-upgrade-backup") -}}
+{{- $ns := .Release.Namespace -}}
+{{- $v := .Values -}}
+TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }}, release {{ .Release.Name }} (revision {{ .Release.Revision }}) in {{ $ns }}.
 
-Watch it come up:
+  image        {{ include "tasksense.image" . }}
+  api          1 replica, strategy Recreate, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
+  worker       {{ if $v.worker.enabled }}on — {{ $worker }}, heap {{ $v.worker.heapMb }} MB{{ else }}off (the API runs Jira landings itself; worker.enabled=true for a migration){{ end }}
+  migrations   {{ if $v.migrations.enabled }}pre-install/pre-upgrade Job, MIGRATE_ON_BOOT=manual{{ else }}at boot (MIGRATE_ON_BOOT=auto){{ end }}
+  backups      {{ if $v.backup.enabled }}nightly "{{ $v.backup.schedule }}"{{ if $v.backup.suspend }} (suspended){{ end }} -> PVC {{ include "tasksense.backupClaimName" . }}, kept {{ $v.backup.retentionDays }} days{{ if and $v.migrations.enabled $v.migrations.backupBeforeUpgrade }}; dump before every upgrade{{ end }}{{ else }}off{{ end }}
+  security     {{ if include "tasksense.isOpenShift" . }}OpenShift posture (uid/fsGroup from the SCC){{ else }}Kubernetes posture (runAsUser {{ $v.podSecurityContext.runAsUser | default 1001 }}){{ end }}; AGENT_EXECUTOR=off; sessions {{ $v.config.sessionTtlHours }}h; Swagger {{ ternary "on" "off" (eq (toString $v.config.swaggerEnabled) "true") }}
 
-  kubectl rollout status deploy/{{ include "tasksense.fullname" . }} -n {{ .Release.Namespace }}
+1. Watch it come up:
 
-{{- if eq .Values.migrations.onBoot "manual" }}
-
-Schema migrations ran in a Job before the pods started. If the release failed
-here, that Job is where the reason is:
-
-  kubectl logs job/{{ include "tasksense.fullname" . }}-migrate -n {{ .Release.Namespace }}
+     kubectl -n {{ $ns }} rollout status deploy/{{ $fullname }} --timeout=10m
+{{- if $v.worker.enabled }}
+     kubectl -n {{ $ns }} rollout status deploy/{{ $worker }}
 {{- end }}
+{{- if $v.migrations.enabled }}
 
-{{- if .Values.ingress.enabled }}
+2. Schema migrations ran in a Job before the pod started. If the release failed
+   there, the reason is in its log (the Job is kept for {{ $v.migrations.ttlSecondsAfterFinished }}s):
 
-Reach it at:
-{{- range .Values.ingress.hosts }}
-  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+     kubectl -n {{ $ns }} logs job/{{ $migrate }}
+{{- if .Release.IsUpgrade }}
+{{- if include "tasksense.preUpgradeBackup" . }}
+
+   The database was dumped first:
+
+     kubectl -n {{ $ns }} logs job/{{ $preBackup }}
+{{- else if and $v.backup.enabled $v.migrations.backupBeforeUpgrade }}
+
+   NOTE: no pre-upgrade dump was taken this time — the backups volume is
+   created by this revision. Every later upgrade takes one.
 {{- end }}
-{{- else if .Values.route.enabled }}
-
-Reach it at:
-
-  kubectl get route {{ include "tasksense.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}'
+{{- end }}
 {{- else }}
 
-No Ingress or Route is enabled. To try it locally:
+2. Migrations run when the API boots (migrations.enabled=false); its log shows them:
 
-  kubectl port-forward svc/{{ include "tasksense.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
-  curl http://localhost:8080/api/v1/health
+     kubectl -n {{ $ns }} logs deploy/{{ $fullname }}
 {{- end }}
 
-{{- if .Values.firstAdminEmail }}
+3. Reach it:
+{{- if $v.ingress.enabled }}
+{{- range $h := $v.ingress.hosts }}
+     http{{ if $v.ingress.tls }}s{{ end }}://{{ if kindIs "string" $h }}{{ $h }}{{ else }}{{ $h.host }}{{ end }}
+{{- else }}
+     {{ $v.appUrl }}
+{{- end }}
+{{- else if $v.route.enabled }}
+     https://{{ $v.route.host | default (include "tasksense.appHost" .) | default "<generated>" }}
+     kubectl -n {{ $ns }} get route {{ $fullname }} -o jsonpath='{.spec.host}{"\n"}'
+{{- else }}
+     No Ingress or Route is enabled. To try it from this machine:
 
-{{ .Values.firstAdminEmail }} is the administrator of the new workspace, and has
-NO password — sign in through your identity provider, or register with that
-address to set one. No default credential ships with the product.
+     kubectl -n {{ $ns }} port-forward svc/{{ $fullname }} 8080:{{ $v.service.port }}
+     curl -s http://localhost:8080/api/v1/health/ready
 {{- end }}
 
-{{- if not .Values.persistence.enabled }}
+4. Check it end to end:
 
-WARNING: persistence is off. Uploaded files live in the pod and disappear when
-it restarts. Point Admin → Storage at object storage, or enable persistence.
+     helm test {{ .Release.Name }} -n {{ $ns }}
+{{- if $v.firstAdminEmail }}
+
+5. {{ $v.firstAdminEmail }} is the administrator of the new workspace (first
+   install only) and has NO password: sign in through your identity provider
+   or directory (Admin → Authentication), or register with that address to set
+   one. No default credential ships with the product.
 {{- end }}
+{{- /* ── warnings ── */}}
+{{- if and $v.existingSecret (not $v.appUrl) }}
 
-{{- if and .Values.persistence.enabled (not .Values.backup.enabled) }}
-
-Backups are not scheduled. Set backup.enabled, or point your own backup tooling
-at MongoDB and the data volume — docs/07-BACKUP-DR.md. A backup you have never
-restored is a hypothesis.
+WARNING: appUrl is empty, so APP_URL and CORS_ALLOWED_ORIGINS must be keys of
+  the Secret {{ $v.existingSecret }} (the chart 1.0 layout). Set appUrl instead.
 {{- end }}
+{{- if not $v.persistence.enabled }}
 
-{{- if not .Values.networkPolicy.enabled }}
+WARNING: persistence is off. Uploaded files and staged imports live in the pod
+  and disappear when it restarts. Trials only.
+{{- else }}
+{{- $sizeValue := $v.persistence.size }}
+{{- if not $v.persistence.existingClaim }}
+{{- $pvc := lookup "v1" "PersistentVolumeClaim" $ns (include "tasksense.dataClaimName" .) }}
+{{- $current := dig "spec" "resources" "requests" "storage" "" ($pvc | default (dict)) }}
+{{- if and $current (ne (toString $current) (toString $v.persistence.size)) }}
+{{- $sizeValue = $current }}
+
+NOTE: the data claim {{ include "tasksense.dataClaimName" . }} keeps its size ({{ $current }}); persistence.size is
+  {{ $v.persistence.size }}. The chart never resizes a bound claim. To grow it, where the
+  storage class allows expansion:
+  kubectl -n {{ $ns }} patch pvc {{ include "tasksense.dataClaimName" . }} -p '{"spec":{"resources":{"requests":{"storage":"{{ $v.persistence.size }}"}}}}'
+{{- end }}
+{{- end }}
+{{- $size := include "tasksense.toBytes" $sizeValue | int64 }}
+{{- $need := mulf (include "tasksense.str" $v.config.jiraBackupMaxGb | float64) 2147483648 | int64 }}
+{{- if lt $size $need }}
+
+WARNING: the data volume ({{ $sizeValue }}) is less than twice
+  config.jiraBackupMaxGb ({{ include "tasksense.str" $v.config.jiraBackupMaxGb }} GB). A Jira site backup is staged on
+  this volume in full and kept {{ $v.config.jiraBackupRetentionDays }} days; size it for 2x plus your attachments.
+{{- end }}
+{{- end }}
+{{- if not $v.backup.enabled }}
+
+Backups are not scheduled by the chart. Point your own tooling at MongoDB and
+  the data volume, or set backup.enabled=true — and since migrations are
+  forward-only, take a dump before every upgrade. docs/07-BACKUP-DR.md
+{{- else }}
+
+The backup CronJob dumps the database only. Snapshot the data volume
+  ({{ include "tasksense.dataClaimName" . }}) with your storage tooling. A backup you have never restored is a hypothesis.
+{{- end }}
+{{- if not $v.networkPolicy.enabled }}
 
 networkPolicy is off. The application makes outbound requests to URLs an
-administrator configures (webhooks, importers, model endpoints); the policy is
-what bounds them at the network layer. Worth turning on — see values.yaml.
+  administrator configures (webhooks, importers, model endpoints); the policy
+  bounds them at the network layer. Worth turning on — see values.yaml.
 {{- end }}
+{{- if eq (toString $v.config.swaggerEnabled) "true" }}
+
+NOTE: the Swagger UI is on (/api/v1/swagger). Banks usually turn it off: config.swaggerEnabled=false.
+{{- end }}
+{{- if eq (include "tasksense.str" $v.config.sessionTtlHours) "0" }}
+
+WARNING: config.sessionTtlHours=0 — sign-ins never expire.
+{{- end }}
+{{- if eq (toString $v.image.tag) "latest" }}
+
+WARNING: image.tag=latest — a restart can land on a different version than the
+  migrations ran for. Pin a version.
+{{- end }}
+
+Docs: docs/02-INSTALL-KUBERNETES.md, docs/03-INSTALL-OPENSHIFT.md — support: info@yurdtech.az

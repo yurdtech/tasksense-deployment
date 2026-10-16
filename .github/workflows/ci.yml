@@ -59,33 +59,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: compose file is valid
-        run: |
-          set -euo pipefail
-          # `env_file: .env` means compose refuses to parse without one.
-          sed -e 's/^STORAGE_SECRET=$/STORAGE_SECRET=0123456789012345678901234567890123456789/' \
-              -e 's/^MONGO_PASSWORD=$/MONGO_PASSWORD=0123456789012345678901/' \
-              compose/.env.example > compose/.env
-          docker compose -f compose/docker-compose.yml config >/dev/null
-          rm -f compose/.env
+      - name: compose file — bundled, external MongoDB, import worker
+        run: ./tests/compose-topologies.sh
 
       - uses: azure/setup-helm@v4
-      - name: chart lints and renders
+      # Every scenario lints and renders as an install AND as an upgrade; the
+      # two security postures are audited on the rendered output; and every
+      # guard that protects the single-active-API rule (and the rest) must
+      # still refuse with its own message — a guard that silently stops
+      # firing is worse than none.
+      - name: chart — scenarios, security posture, refusals
         run: |
           set -euo pipefail
-          helm lint helm/tasksense \
-            --set appUrl=https://tasksense.example.internal \
-            --set mongodbUri='mongodb://u:p@mongo:27017/?authSource=admin' \
-            --set storageSecret=0123456789012345678901234567890123456789 \
-            --set firstAdminEmail=admin@example.internal
-          # And with the OpenShift overlay, which clears the uid the base sets —
-          # a chart that renders one way and not the other is half tested.
-          helm template tasksense helm/tasksense \
-            -f helm/tasksense/values-openshift.yaml \
-            --set appUrl=https://tasksense.example.internal \
-            --set mongodbUri='mongodb://u:p@mongo:27017/?authSource=admin' \
-            --set storageSecret=0123456789012345678901234567890123456789 \
-            --set firstAdminEmail=admin@example.internal >/dev/null
+          chart=helm/tasksense
+          for f in "$chart"/ci/*-values.yaml; do
+            echo "::group::$f"
+            helm lint --strict "$chart" -f "$f"
+            helm template tasksense "$chart" -f "$f" >/dev/null
+            helm template tasksense "$chart" -f "$f" --is-upgrade >/dev/null
+            echo "::endgroup::"
+          done
+          base="$chart/ci/default-values.yaml"
+          [ "$(helm template t "$chart" -f "$base" | grep -c 'runAsUser:')" -gt 0 ]
+          [ "$(helm template t "$chart" -f "$base" --api-versions route.openshift.io/v1 | grep -c 'runAsUser:')" -eq 0 ]
+          [ "$(helm template t "$chart" -f "$chart/values-openshift.yaml" -f "$base" | grep -c 'runAsUser:')" -eq 0 ]
+          helm template t "$chart" -f "$chart/ci/full-values.yaml" | grep -A1 'name: AGENT_EXECUTOR' | grep -q '"off"'
+          while IFS='|' read -r expect args; do
+            [ -n "$expect" ] || continue
+            # shellcheck disable=SC2086
+            if out="$(helm template t "$chart" -f "$base" $args 2>&1)"; then echo "did not fail: $args"; exit 1; fi
+            printf '%s' "$out" | grep -q -- "$expect" || { echo "wrong message for $args:"; echo "$out"; exit 1; }
+          done <<'CASES'
+          replicaCount=2 is not supported|--set replicaCount=2
+          autoscaling.enabled=true is not supported|--set autoscaling.enabled=true
+          podDisruptionBudget.enabled=true is not supported|--set podDisruptionBudget.enabled=true
+          needs persistence.accessMode=ReadWriteMany|--set worker.enabled=true
+          requires persistence.enabled=true|--set worker.enabled=true --set persistence.enabled=false
+          storageSecret must be at least 32 characters|--set storageSecret=tooshort
+          config.agentExecutor=on is not allowed|--set config.agentExecutor=on
+          extraEnv.AGENT_EXECUTOR cannot be set|--set extraEnv.AGENT_EXECUTOR=on
+          mutually exclusive|--set ingress.enabled=true --set route.enabled=true
+          ingress.uploadMaxBody (21g) is smaller|--set ingress.enabled=true --set config.jiraBackupMaxGb=40
+          metrics.token is required|--set metrics.enabled=true
+          mongodbUri is required|--set mongodbUri=
+          no certificate is mounted|--set certs.caBundle=bank-ca.pem
+          leaves too little|--set heapMb=2000
+          these values come from chart 1.0|--set config=null
+          CASES
+          for s in scripts/helm-airgap-bundle.sh scripts/helm-airgap-load.sh scripts/wizard/platform-helm.sh; do bash -n "$s"; done
 
   tests:
     runs-on: ubuntu-latest
@@ -122,6 +143,18 @@ jobs:
             printf '%s' "${GHCR_TOKEN}" | docker login ghcr.io -u yurdtech --password-stdin
           fi
           ./tests/env-example.sh
+
+      - name: lib.sh helpers and the 1.0 → 1.1 carry-over
+        run: ./tests/lib-helpers.sh
+
+      - name: preflight blocks what it must
+        run: ./tests/preflight-checks.sh
+
+      - name: install, backup, upgrade, rollback, restore (fake docker)
+        run: ./tests/lifecycle.sh
+
+      - name: verify-signature and load-images
+        run: ./tests/release-tools.sh
 
       - name: the flow, driven through a real pty
         run: ./tests/wizard-flow.sh

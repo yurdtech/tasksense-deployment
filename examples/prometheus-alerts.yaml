@@ -1,17 +1,34 @@
-# TaskSense alerting rules.
+# TaskSense alerting rules — for Docker Compose and for Kubernetes.
 #
 # Kubernetes, with the Prometheus Operator:
-#   kubectl apply -f examples/prometheus-alerts.yaml -n <monitoring-namespace>
+#   kubectl apply -n <monitoring-namespace> -f examples/prometheus-alerts.yaml
 #
-# Plain Prometheus: copy the `groups:` block into your rule_files.
+# Plain Prometheus (the usual Compose setup): copy everything under `spec:`
+# — the `groups:` list — into a rules file listed in `rule_files:`, then
+#   promtool check rules <that file>
 #
-# The two at the top are outages. The two after them are the failures that stay
-# silent until somebody cannot do their job — an expired licence and a full seat
-# cap both present as "a user cannot be invited", days after the cause.
+# Where each metric comes from — not all of them are TaskSense's own:
 #
-# The latency and error-rate thresholds are deliberately loose. Tighten them
-# once you know what normal looks like on your hardware; an alert that fires
-# during every backup window is an alert people learn to close.
+#   tasksense_*                        TaskSense, GET /api/v1/metrics (Bearer METRICS_TOKEN).
+#                                      Only the API process exports metrics; the import
+#                                      worker has no HTTP listener and exports none.
+#   up                                 Prometheus itself, for the TaskSense scrape job.
+#   probe_success                      blackbox_exporter probing /api/v1/health/ready
+#                                      (index and schema state ride on that response;
+#                                      TaskSense has no metric for them). Module config:
+#                                      docs/09-MONITORING.md.
+#   tasksense_backup_last_success_timestamp_seconds
+#                                      NOT exported by TaskSense. Written by your backup
+#                                      cron through node_exporter's textfile collector
+#                                      (Compose) — the line is in docs/09-MONITORING.md.
+#   kube_* / kubelet_*                 kube-state-metrics and the kubelet (Kubernetes only).
+#
+# Job and label names: the expressions match a scrape job whose name contains
+# "tasksense" and a probe job named "tasksense-health". Rename to match yours.
+#
+# The thresholds are deliberately loose. Tighten them once you know what normal
+# looks like on your hardware; an alert that fires during every backup window
+# is an alert people learn to close.
 
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -22,17 +39,19 @@ metadata:
     # Match your Prometheus's ruleSelector, e.g. release: kube-prometheus-stack
 spec:
   groups:
+    # ── Outages ──────────────────────────────────────────────────────────────
     - name: tasksense.availability
       rules:
         - alert: TaskSenseDown
-          expr: up{job=~".*tasksense.*"} == 0
+          expr: up{job=~".*tasksense.*"} == 0 or absent(up{job=~".*tasksense.*"})
           for: 2m
           labels:
             severity: critical
           annotations:
-            summary: TaskSense is not responding to scrapes
+            summary: TaskSense is not answering its metrics scrape
             description: >-
-              No instance has answered for 2 minutes. Check the pods, then
+              Nothing has answered for 2 minutes. The API is one process by design,
+              so this is the whole service. Check the container or pod, then
               /api/v1/health/ready — if that fails, the cause is usually MongoDB.
             runbook: docs/10-TROUBLESHOOTING.md
 
@@ -45,26 +64,152 @@ spec:
             summary: TaskSense cannot reach MongoDB
             description: >-
               MongoDB is the only data store and there is no fallback, so the
-              application can serve nothing. Readiness is already failing, which
-              takes the instance out of the Service.
+              application can serve nothing. /api/v1/health/ready is already
+              answering 503.
 
-        - alert: TaskSenseRestarting
-          expr: increase(kube_pod_container_status_restarts_total{container="tasksense"}[15m]) > 2
+        - alert: TaskSenseHealthProbeFailing
+          # blackbox_exporter, module tasksense_ready (docs/09-MONITORING.md).
+          # Fails on a non-2xx answer as well as on a degraded index state.
+          expr: probe_success{job="tasksense-health"} == 0
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: TaskSense is restarting repeatedly
+            summary: TaskSense readiness or index health is not OK
             description: >-
-              Usually memory pressure, or a liveness probe pointed at an endpoint
-              that touches the database. The log line before each restart says
-              which.
+              Either /api/v1/health/ready is failing (then TaskSenseMongoDown or
+              TaskSenseDown is usually firing too), or it answers but reports
+              "indexes" other than "ready". Right after an upgrade or a restore,
+              "building" is normal for a while on a large database; "degraded"
+              means an index failed to build — the application log names it.
+              Queries that need that index are slow until it exists.
 
+        - alert: TaskSenseSchemaAhead
+          # blackbox_exporter, module tasksense_schema (docs/09-MONITORING.md).
+          expr: probe_success{job="tasksense-schema"} == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense is running against a database a newer release migrated
+            description: >-
+              /api/v1/health reports schema state "ahead": the application was
+              rolled back without restoring the pre-upgrade backup. It keeps
+              serving, but migrations are forward-only — finish the rollback
+              properly (docs/08-UPGRADE.md) or upgrade again.
+
+    # ── Errors and latency ───────────────────────────────────────────────────
+    - name: tasksense.performance
+      rules:
+        - alert: TaskSenseErrorRate
+          expr: >-
+            (
+              sum(rate(tasksense_http_requests_total{status=~"5.."}[10m]))
+                /
+              sum(rate(tasksense_http_requests_total[10m]))
+            ) > 0.05
+            and sum(rate(tasksense_http_requests_total[10m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of TaskSense requests are failing
+            description: >-
+              Every 5xx is logged with its stack trace and a requestId. Search
+              the log for that id to follow one request end to end.
+
+        - alert: TaskSenseSlowRequests
+          # The live-update streams and the long-running import, restore and
+          # export routes are excluded: a stream's "duration" is how long the
+          # browser kept it open, which is hours by design.
+          expr: >-
+            histogram_quantile(0.95,
+              sum by (le) (rate(tasksense_http_request_duration_seconds_bucket{route!~".*(stream|import|export|backup|attachments).*"}[10m]))
+            ) > 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: TaskSense p95 request latency is above 1 s
+            description: >-
+              Most often MongoDB: an undersized cache (MONGO_CACHE_GB) or a slow
+              network path. Check tasksense_mongo_operation_seconds and
+              tasksense_mongo_pool_wait_seconds before adding CPU. See
+              docs/11-SIZING.md.
+
+        - alert: TaskSenseEventLoopLag
+          # p99 event-loop delay since the previous scrape. While it is high the
+          # single API process answers nobody — every user feels it at once.
+          # If two Prometheus servers scrape the same instance each sees about
+          # half the samples; the alert still works.
+          expr: tasksense_event_loop_lag_p99_seconds > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: The TaskSense API is blocked for {{ $value | humanizeDuration }} at p99
+            description: >-
+              Something is running synchronously on the request path — usually a
+              very large import or report. If it coincides with a Jira landing,
+              run the import worker (docs/15-SCALING-AND-HA.md) so landings stop
+              sharing the API's process.
+
+        - alert: TaskSenseMongoPoolExhausted
+          expr: increase(tasksense_mongo_pool_checkout_failures_total{reason="timeout"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: Requests are timing out waiting for a MongoDB connection
+            description: >-
+              Every connection in the pool (MONGODB_MAX_POOL_SIZE) was busy for
+              longer than the operation deadline. Look for slow queries on the
+              database side before raising the pool size.
+
+        - alert: TaskSenseMongoPoolCleared
+          # A network error or a replica-set failover. One is a blip; several in
+          # a row is a link or an election storm.
+          expr: increase(tasksense_mongo_pool_cleared_total[15m]) > 3
+          for: 0m
+          labels:
+            severity: info
+          annotations:
+            summary: TaskSense's MongoDB connection pool was reset {{ $value }} times in 15 minutes
+
+    # ── Backups ──────────────────────────────────────────────────────────────
+    - name: tasksense.backup
+      rules:
+        - alert: TaskSenseBackupTooOld
+          # Compose: written by the backup cron (docs/09-MONITORING.md).
+          # 26 h = the 24 h RPO plus room for one slow night.
+          expr: time() - tasksense_backup_last_success_timestamp_seconds > 26 * 3600
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The last successful TaskSense backup is {{ $value | humanizeDuration }} old
+            description: >-
+              The recovery point objective is 24 hours. Check the cron log
+              (/var/log/tasksense-backup.log) and the backup target's free space.
+
+        - alert: TaskSenseBackupCronJobTooOld
+          # Kubernetes: the chart's backup CronJob, through kube-state-metrics.
+          expr: time() - kube_cronjob_status_last_successful_time{cronjob=~".*tasksense.*backup.*"} > 26 * 3600
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: The TaskSense backup CronJob has not succeeded for {{ $value | humanizeDuration }}
+            description: >-
+              kubectl get jobs -n <namespace> and the last Job's logs say why.
+              The dumps land on the backup PVC; check its free space too.
+
+    # ── Licence ──────────────────────────────────────────────────────────────
     - name: tasksense.licence
       rules:
         - alert: TaskSenseLicenceExpiring
-          # -1 means there is no date to count to. tasksense_license_perpetual
-          # and tasksense_license_valid say which of the reasons applies.
+          # -1 means there is no date to count to; tasksense_license_perpetual
+          # and tasksense_license_valid say which reason applies.
           expr: tasksense_license_expires_in_days >= 0 and tasksense_license_expires_in_days < 30
           for: 1h
           labels:
@@ -74,11 +219,9 @@ spec:
             description: >-
               On expiry the instance drops to free-tier limits — 10 accounts and
               500 automation runs a month. Data is never blocked and nobody is
-              signed out; the limits simply come back.
+              signed out; the limits simply come back. Renew at info@yurdtech.az.
 
         - alert: TaskSenseLicenceExpired
-          # An expired licence used to be indistinguishable from an unlicensed
-          # instance on every gauge, so this could not be written honestly.
           expr: tasksense_license_expired == 1
           for: 1h
           labels:
@@ -120,36 +263,34 @@ spec:
             severity: info
           annotations:
             summary: TaskSense is at {{ $value | humanizePercentage }} of its licensed seats
-            description: >-
-              Nothing is blocked when it is passed. Worth raising before the
-              renewal conversation rather than after it.
 
-    - name: tasksense.performance
+    # ── Kubernetes only (kube-state-metrics, kubelet) ────────────────────────
+    # Harmless on Compose — the series do not exist, so these never fire.
+    - name: tasksense.kubernetes
       rules:
-        - alert: TaskSenseSlowRequests
+        - alert: TaskSenseRestarting
+          expr: increase(kube_pod_container_status_restarts_total{pod=~".*tasksense.*"}[15m]) > 2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.pod }} / {{ $labels.container }} is restarting repeatedly"
+            description: >-
+              Usually memory: the heap (heapMb / worker.heapMb) is too close to
+              the container limit, or a Jira landing in the API process instead
+              of the worker. The log line before each restart says which.
+
+        - alert: TaskSenseDataVolumeFilling
           expr: >-
-            histogram_quantile(0.95,
-              sum by (le) (rate(tasksense_http_request_duration_seconds_bucket[10m]))
-            ) > 1
+            kubelet_volume_stats_available_bytes{persistentvolumeclaim=~".*tasksense.*"}
+              /
+            kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*tasksense.*"} < 0.15
           for: 15m
           labels:
             severity: warning
           annotations:
-            summary: TaskSense p95 request latency is above 1s
+            summary: "PVC {{ $labels.persistentvolumeclaim }} has less than 15% free"
             description: >-
-              Most often an undersized MongoDB cache — check memory before CPU.
-              See docs/11-SIZING.md.
-
-        - alert: TaskSenseErrorRate
-          expr: >-
-            sum(rate(tasksense_http_requests_total{status=~"5.."}[10m]))
-              /
-            sum(rate(tasksense_http_requests_total[10m])) > 0.05
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: More than 5% of TaskSense requests are failing
-            description: >-
-              Every 5xx is logged with a stack trace and a requestId. Search the
-              logs for that id to find one end to end.
+              The data volume holds attachments and the upload staging area
+              (TMPDIR). A Jira backup import needs about twice the backup's size
+              free. The backup PVC holds the nightly dumps.

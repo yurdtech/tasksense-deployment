@@ -1,0 +1,10 @@
+{{- include "tasksense.validate" . -}}
+# The non-secret configuration of every TaskSense process (API, worker,
+# migration). Rendered explicitly, so this object is an honest record of what
+# is running: `kubectl get configmap {{ include "tasksense.configMapName" . }} -o yaml`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tasksense.configMapName" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "config") | nindent 4 }}
+data: {{- include "tasksense.configData" . | nindent 2 }}

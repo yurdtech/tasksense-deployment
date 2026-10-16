@@ -1,32 +1,41 @@
 apiVersion: v2
 name: tasksense
-description: TaskSense — task intelligence platform, on-premise
+description: TaskSense — task intelligence platform, on-premise (Kubernetes and OpenShift)
 type: application
 
 # The chart version moves independently of the application: a change to a
-# template is a new chart version even when the image is unchanged.
-version: 1.0.0
+# template is a new chart version even when the image is unchanged. The release
+# workflow stamps both fields; 1.1.0 is the first chart for the enterprise
+# packaging (single active API, optional import worker, pre-upgrade dump).
+version: 1.1.0
 
-# Overridden by --set image.tag, but this is what you get if you forget, and it
-# should be a version that exists rather than "latest".
-appVersion: "1.0.0"
+# The image tag you get when image.tag is empty. It is always a version that
+# exists — never "latest".
+appVersion: "1.1.0"
+
+# OpenShift 4.12 is Kubernetes 1.25 — the oldest platform this chart is tested
+# against (CronJob timeZone, Pod Security Admission, batch/v1 everywhere).
+kubeVersion: ">=1.25.0-0"
 
 home: https://github.com/yurdtech/tasksense-deployment
 sources:
   - https://github.com/yurdtech/tasksense-deployment
 maintainers:
   - name: YurdTech
-    email: support@yurdtech.az
+    email: info@yurdtech.az
 
 keywords:
   - tasks
   - project-management
   - on-premise
+  - openshift
 
 annotations:
   # No MongoDB subchart. In a cluster the database is almost always something
   # the platform team already runs — an operator, a managed service, a
   # StatefulSet with their own backup policy — and bundling one would either be
   # ignored or, worse, quietly used in production without a backup story.
-  # `mongodbUri` is required; docs/02-INSTALL-KUBERNETES.md covers the options.
+  # `mongodbUri` (or MONGODB_URI in existingSecret) is required;
+  # docs/02-INSTALL-KUBERNETES.md and docs/16-EXTERNAL-DATABASES.md cover it.
   artifacthub.io/prerelease: "false"
+  artifacthub.io/license: Proprietary

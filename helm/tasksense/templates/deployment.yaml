@@ -3,57 +3,60 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "tasksense.fullname" . }}
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
+  # One active API process — never more (see replicaCount in values.yaml).
+  replicas: {{ int .Values.replicaCount }}
+  revisionHistoryLimit: 5
   selector:
     matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
   strategy:
-    {{- if and .Values.persistence.enabled (eq .Values.persistence.accessMode "ReadWriteOnce") }}
-    # A ReadWriteOnce volume cannot be mounted by the old and new pod at once,
-    # so a rolling update would deadlock: the new pod waits for a volume the
-    # old one still holds. Recreate accepts a few seconds of downtime instead
-    # of hanging until the deadline.
+    # Never two API processes at once, not even for the seconds of a rollout:
+    # the in-process schedulers would both fire. Recreate stops the old pod
+    # before the new one starts (and a ReadWriteOnce volume could not be
+    # mounted by both anyway).
     type: Recreate
-    {{- else }}
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
-    {{- end }}
   template:
     metadata:
       labels:
-        {{- include "tasksense.selectorLabels" . | nindent 8 }}
+        {{- include "tasksense.apiPodLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
       annotations:
-        # Restarts the pods when the configuration changes. Without it, a
-        # `helm upgrade` that only alters a value leaves the old value running
-        # and the release looks applied when it is not.
-        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        # Restarts the pod when chart-rendered configuration changes. Without
+        # it, a `helm upgrade` that only alters a value leaves the old value
+        # running. (A change inside an existingSecret needs
+        # `kubectl rollout restart`.)
+        checksum/config: {{ include "tasksense.configChecksum" . }}
         {{- with .Values.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
     spec:
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      serviceAccountName: {{ include "tasksense.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ int .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
       {{- end }}
-      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" false) | nindent 6 }}
+      {{- include "tasksense.appPodSecurityContext" . | nindent 6 }}
+      initContainers:
+        {{- include "tasksense.prepareDataInitContainer" . | nindent 8 }}
       containers:
         - name: tasksense
           image: {{ include "tasksense.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # No command/args: the image's tini + `node dist/main.js`.
+          {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
           ports:
             - name: http
               containerPort: 3000
-          env: {{- include "tasksense.env" . | nindent 12 }}
-          envFrom: {{- include "tasksense.envFrom" . | nindent 12 }}
+              protocol: TCP
+          env: {{- include "tasksense.processEnv" (dict "root" $ "role" "api" "heapMb" .Values.heapMb) | nindent 12 }}
+          {{- include "tasksense.envFrom" (dict "root" $ "hook" false) | nindent 10 }}
 
           # Liveness must NOT touch MongoDB. /health and /health/ready both do,
-          # and pointing this at either restarts every replica during a database
-          # failover — the one moment when killing the application lengthens the
-          # outage rather than ending it.
+          # and pointing this at either restarts the pod during a database
+          # failover — the one moment when killing the application lengthens
+          # the outage rather than ending it.
           livenessProbe:
             httpGet:
               path: /api/v1/health/live
@@ -73,34 +76,38 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
-          # Covers the slow first boot: connecting, and applying migrations when
-          # migrations.onBoot is auto. Generous, because the alternative is a
-          # pod killed halfway through a schema change.
+          # Covers the slow first boot: connecting, building indexes, and — with
+          # migrations.enabled=false — applying migrations at boot (30 minutes
+          # then, 5 otherwise). Generous, because the alternative is a pod
+          # killed halfway through a schema change.
           startupProbe:
             httpGet:
               path: /api/v1/health/live
               port: http
             periodSeconds: 5
-            failureThreshold: 60
+            failureThreshold: {{ ternary 60 360 (eq (toString .Values.migrations.enabled) "true") }}
 
           resources: {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /app/api/data
-            {{- end }}
-            # readOnlyRootFilesystem is on, and Node writes temporary files.
+            # readOnlyRootFilesystem is on; small scratch only. Large staging
+            # goes to TMPDIR on the data volume.
             - name: tmp
               mountPath: /tmp
+            {{- include "tasksense.certsMount" . | nindent 12 }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
-        {{- if .Values.persistence.enabled }}
-        - name: data
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "tasksense.fullname" .)) }}
-        {{- end }}
+        {{- include "tasksense.dataVolume" . | nindent 8 }}
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
+        {{- include "tasksense.certsVolume" (dict "root" $ "hook" false) | nindent 8 }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

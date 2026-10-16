@@ -1,32 +1,154 @@
+{{- include "tasksense.validate" . -}}
 {{- if .Values.ingress.enabled }}
+{{- /*
+Three Ingress objects for the same host(s), because three kinds of traffic need
+different proxy settings and Ingress annotations apply per object:
+
+  <release>          /                  default body (ingress.maxBody, 25m) and timeouts
+  <release>-stream   the two SSE paths  buffering off, 24h — buffered, the
+                                        interface looks frozen; with the default
+                                        60s read timeout the stream drops
+  <release>-upload   ingress.uploadPaths  large body (ingress.uploadMaxBody, 21g),
+                                        request buffering off (nginx would
+                                        otherwise spool a 20 GB body to its own
+                                        disk first), long timeouts
+
+ingress-nginx merges them into one server per host; the most specific path wins.
+Its use-regex (needed for the attachment routes, which carry ids) applies to
+every path of the host, which is harmless here: the plain paths match the same.
+F5 NGINX (nginx.org/*) annotations are set too; other controllers ignore both.
+*/ -}}
+{{- $fullname := include "tasksense.fullname" . -}}
+{{- $ing := .Values.ingress -}}
+
+{{- $hosts := list -}}
+{{- range $ing.hosts -}}
+{{- if kindIs "string" . -}}
+{{- $hosts = append $hosts (dict "host" . "paths" (list)) -}}
+{{- else -}}
+{{- $hosts = append $hosts (dict "host" .host "paths" (.paths | default (list))) -}}
+{{- end -}}
+{{- end -}}
+{{- if not $hosts -}}
+{{- $hosts = list (dict "host" (include "tasksense.appHost" .) "paths" (list)) -}}
+{{- end -}}
+
+{{- /* Operator annotations: cert-manager keys only on the main object, so one
+       Certificate owns the TLS secret the three objects share. */ -}}
+{{- $common := dict -}}
+{{- $mainOnly := dict -}}
+{{- range $k, $val := ($ing.annotations | default dict) -}}
+{{- if or (hasPrefix "cert-manager.io/" $k) (hasPrefix "acme.cert-manager.io/" $k) -}}
+{{- $_ := set $mainOnly $k (toString $val) -}}
+{{- else -}}
+{{- $_ := set $common $k (toString $val) -}}
+{{- end -}}
+{{- end -}}
+
+{{- $t := include "tasksense.str" $ing.timeoutSeconds -}}
+{{- $st := include "tasksense.str" $ing.streamTimeoutSeconds -}}
+{{- $ut := include "tasksense.str" $ing.uploadTimeoutSeconds -}}
+
+{{- $mainDefaults := dict
+      "nginx.ingress.kubernetes.io/proxy-body-size" (toString $ing.maxBody)
+      "nginx.ingress.kubernetes.io/proxy-read-timeout" $t
+      "nginx.ingress.kubernetes.io/proxy-send-timeout" $t
+      "nginx.org/client-max-body-size" (toString $ing.maxBody)
+      "nginx.org/proxy-read-timeout" (printf "%ss" $t)
+      "nginx.org/proxy-send-timeout" (printf "%ss" $t) -}}
+{{- $main := merge (deepCopy $common) (deepCopy $mainOnly) $mainDefaults -}}
+
+{{- $streamDefaults := dict
+      "nginx.ingress.kubernetes.io/proxy-buffering" "off"
+      "nginx.ingress.kubernetes.io/proxy-read-timeout" $st
+      "nginx.ingress.kubernetes.io/proxy-send-timeout" $st
+      "nginx.org/proxy-buffering" "False"
+      "nginx.org/proxy-read-timeout" (printf "%ss" $st)
+      "nginx.org/proxy-send-timeout" (printf "%ss" $st) -}}
+{{- $stream := merge (deepCopy ($ing.streamAnnotations | default dict)) $streamDefaults (deepCopy $common) -}}
+
+{{- $uploadPaths := list -}}
+{{- $regex := false -}}
+{{- range $ing.uploadPaths -}}
+{{- $p := ternary (dict "path" (toString .) "pathType" $ing.uploadPathType) (deepCopy .) (kindIs "string" .) -}}
+{{- if not $p.pathType -}}{{- $_ := set $p "pathType" $ing.uploadPathType -}}{{- end -}}
+{{- if eq (toString $p.pathType) "ImplementationSpecific" -}}{{- $regex = true -}}{{- end -}}
+{{- $uploadPaths = append $uploadPaths $p -}}
+{{- end -}}
+{{- $uploadDefaults := dict
+      "nginx.ingress.kubernetes.io/proxy-body-size" (toString $ing.uploadMaxBody)
+      "nginx.ingress.kubernetes.io/proxy-request-buffering" "off"
+      "nginx.ingress.kubernetes.io/proxy-read-timeout" $ut
+      "nginx.ingress.kubernetes.io/proxy-send-timeout" $ut
+      "nginx.org/client-max-body-size" (toString $ing.uploadMaxBody)
+      "nginx.org/proxy-read-timeout" (printf "%ss" $ut)
+      "nginx.org/proxy-send-timeout" (printf "%ss" $ut) -}}
+{{- if $regex -}}
+{{- $_ := set $uploadDefaults "nginx.ingress.kubernetes.io/use-regex" "true" -}}
+{{- $_ := set $uploadDefaults "nginx.org/path-regex" "case_sensitive" -}}
+{{- end -}}
+{{- $upload := merge (deepCopy ($ing.uploadAnnotations | default dict)) $uploadDefaults (deepCopy $common) -}}
+
+{{- $objects := list
+      (dict "name" $fullname "role" "main" "annotations" $main)
+      (dict "name" (include "tasksense.suffixedName" (dict "root" $ "suffix" "stream")) "role" "stream" "annotations" $stream)
+      (dict "name" (include "tasksense.suffixedName" (dict "root" $ "suffix" "upload")) "role" "upload" "annotations" $upload) -}}
+{{- range $i, $obj := $objects }}
+{{- if or (ne $obj.role "upload") $uploadPaths }}
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "tasksense.fullname" . }}
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
-  annotations: {{- toYaml . | nindent 4 }}
-  {{- end }}
+  name: {{ $obj.name }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
+  annotations:
+    {{- range $k, $val := $obj.annotations }}
+    {{ $k }}: {{ toString $val | quote }}
+    {{- end }}
 spec:
-  {{- with .Values.ingress.className }}
+  {{- with $ing.className }}
   ingressClassName: {{ . }}
   {{- end }}
-  {{- with .Values.ingress.tls }}
+  {{- with $ing.tls }}
   tls: {{- toYaml . | nindent 4 }}
   {{- end }}
   rules:
-    {{- range .Values.ingress.hosts }}
-    - host: {{ .host | quote }}
+    {{- range $h := $hosts }}
+    - host: {{ $h.host | quote }}
       http:
         paths:
-          {{- range .paths }}
-          - path: {{ .path }}
+          {{- if eq $obj.role "main" }}
+          {{- range ($h.paths | default (list (dict "path" "/" "pathType" "Prefix"))) }}
+          - path: {{ .path | default "/" }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  name: http
+          {{- end }}
+          {{- else if eq $obj.role "stream" }}
+          {{- range (list "/api/v1/state/stream" "/api/v1/agents/events/stream") }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}
+                port:
+                  name: http
+          {{- end }}
+          {{- else }}
+          {{- range $uploadPaths }}
+          - path: {{ .path | quote }}
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ include "tasksense.fullname" $ }}
+                name: {{ $fullname }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  name: http
+          {{- end }}
           {{- end }}
     {{- end }}
+{{- end }}
+{{- end }}
 {{- end }}

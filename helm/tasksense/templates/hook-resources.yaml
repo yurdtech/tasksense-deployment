@@ -1,0 +1,75 @@
+{{- include "tasksense.validate" . -}}
+{{- if .Values.migrations.enabled }}
+{{- /*
+Short-lived copies for the pre-install / pre-upgrade Jobs.
+
+Helm applies hooks BEFORE the release's ordinary resources, so on a first
+install the release's ConfigMap, Secret, certificate ConfigMap, pull secret and
+ServiceAccount do not exist yet when the migration Job starts: the pod would
+wait for them (CreateContainerConfigError, or no pod at all) until the install
+timed out. These copies are created first (weight -10) and deleted once all
+hooks of the install/upgrade succeed, so the secret copy does not outlive the
+migration that needed it. After a FAILED hook Helm deletes only the failed Job's
+own resources: the copies then stay until the next attempt replaces them
+(before-hook-creation) — or `kubectl delete secret <release>-hook-secrets`.
+
+Annotating the ordinary objects as hooks instead would take them out of the
+release: `helm uninstall` would leave them behind and `helm upgrade` would
+stop tracking changes to them.
+*/ -}}
+{{- $hookAnnotations := dict "helm.sh/hook" "pre-install,pre-upgrade" "helm.sh/hook-weight" "-10" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded,hook-failed" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tasksense.hookConfigMapName" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "hook") | nindent 4 }}
+  annotations: {{- toYaml $hookAnnotations | nindent 4 }}
+data: {{- include "tasksense.configData" . | nindent 2 }}
+{{- if not .Values.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "tasksense.hookSecretName" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "hook") | nindent 4 }}
+  annotations: {{- toYaml $hookAnnotations | nindent 4 }}
+type: Opaque
+stringData: {{- include "tasksense.secretData" . | nindent 2 }}
+{{- end }}
+{{- if .Values.certs.files }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "hook-certs") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "hook") | nindent 4 }}
+  annotations: {{- toYaml $hookAnnotations | nindent 4 }}
+data:
+  {{- range $name, $pem := .Values.certs.files }}
+  {{ $name }}: |
+    {{- $pem | trim | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.imageCredentials.create }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "tasksense.registrySecretName" (dict "root" $ "hook" true) }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "hook") | nindent 4 }}
+  annotations: {{- toYaml $hookAnnotations | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ include "tasksense.dockerconfigjson" . | b64enc }}
+{{- end }}
+{{- if .Values.serviceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "tasksense.hookServiceAccountName" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "hook") | nindent 4 }}
+  annotations: {{- toYaml $hookAnnotations | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
+{{- end }}

@@ -7,6 +7,8 @@
 #   ./tasksense install        the installation wizard
 #   ./tasksense status         health, version, containers
 #   ./tasksense logs           follow the application log
+#   ./tasksense preflight      check this host and compose/.env (scripts/preflight.sh)
+#   ./tasksense upgrade | backup | restore | rollback | diagnostics | configure
 #   ./tasksense --help
 #
 # This asks questions. For unattended installs — configuration management,
@@ -106,7 +108,7 @@ EOF
 
   case "${UI_CHOICE}" in
     1) run_wizard ;;
-    2) "${SCRIPT_DIR}/preflight.sh" || true ;;
+    2) "${SCRIPT_DIR}/preflight.sh" --host-only || true ;;
     3) verify_prompt ;;
     4) doc_index ;;
     5) exit 0 ;;
@@ -119,8 +121,9 @@ verify_prompt() {
   "${SCRIPT_DIR}/verify-signature.sh" "${UI_VALUE}" || true
 }
 
-# A map, not a list — a directory listing of fourteen files does not tell an
-# operator which one they need at 2am.
+# A map, not a list — a directory listing of eighteen files does not tell an
+# operator which one they need at 2am. Anything in docs/ the map does not name
+# is listed after it, so a new page is never invisible here.
 doc_index() {
   cat <<EOF
 
@@ -129,6 +132,7 @@ doc_index() {
     docs/11-SIZING.md            CPU, memory and disk for your number of users
     docs/13-REGISTRY-ACCESS.md   getting the image: token, mirror, or archive
     docs/14-LICENSING.md         what the licence key does, and what it does not
+    docs/18-PRE-INSTALL-CHECKLIST.md  firewall, DNS, TLS, accounts — before the change window
 
   ${C_BOLD}Installing${C_OFF}
     docs/01-INSTALL-COMPOSE.md   one VM with Docker or Podman
@@ -147,13 +151,31 @@ doc_index() {
     docs/10-TROUBLESHOOTING.md   symptoms, causes, fixes
     docs/12-AI-MODELS.md         AI features on an internal model (optional)
 
+  ${C_BOLD}For the architecture and the change board${C_OFF}
+    docs/15-SCALING-AND-HA.md    one API process, the import worker, HA
+    docs/16-EXTERNAL-DATABASES.md  your own MongoDB: replica set, TLS, roles
+    docs/17-ENVIRONMENT.md       every variable, its default, the bank value
+
 EOF
+  local f listed="00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18" n
+  for f in "${ROOT_DIR}"/docs/[0-9][0-9]-*.md; do
+    [ -f "${f}" ] || continue
+    n="$(basename "${f}")"; n="${n%%-*}"
+    case " ${listed} " in *" ${n} "*) continue ;; esac
+    printf '    docs/%s\n' "$(basename "${f}")"
+  done
+  printf '\n'
 }
 
 main() {
   case "${1:-}" in
     -h|--help|help) usage; exit 0 ;;
     install|setup)  shift; run_wizard "$@"; exit $? ;;
+    preflight)      shift; "${SCRIPT_DIR}/preflight.sh" "$@"; exit $? ;;
+    rollback)
+      shift
+      [ -f "${ENV_FILE}" ] || die "nothing is installed here" "Run ./tasksense to install."
+      "${SCRIPT_DIR}/rollback.sh" "$@"; exit $? ;;
     status|logs|upgrade|backup|restore|diagnostics|configure)
       detect_state
       [ "${STATE}" = "fresh" ] && die "nothing is installed here" \

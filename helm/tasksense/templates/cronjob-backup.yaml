@@ -1,63 +1,36 @@
-{{- /* Also gated on persistence: the dump lands on the data volume, and
-without one the pod would mount a claim that nothing creates and sit
-Pending forever. */ -}}
-{{- if and .Values.backup.enabled .Values.persistence.enabled }}
+{{- include "tasksense.validate" . -}}
+{{- if .Values.backup.enabled }}
+# Nightly mongodump of config.mongodbDatabase onto the backups claim. Covers
+# the database only — the attachments on the data volume need a volume
+# snapshot or your backup tooling (docs/07-BACKUP-DR.md).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "tasksense.fullname" . }}-backup
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "backup" "max" 52) }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "backup") | nindent 4 }}
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
+  {{- with .Values.backup.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  suspend: {{ eq (toString .Values.backup.suspend) "true" }}
   concurrencyPolicy: Forbid
+  # A run missed by more than an hour (controller down, cluster upgrade) is
+  # skipped rather than started at a busy time of day.
+  startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
+    metadata:
+      labels: {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "backup") | nindent 8 }}
     spec:
-      backoffLimit: 2
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ int .Values.backup.activeDeadlineSeconds }}
       template:
-        spec:
-          restartPolicy: OnFailure
-          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
-          {{- with .Values.imagePullSecrets }}
-          imagePullSecrets: {{- toYaml . | nindent 12 }}
+        metadata:
+          labels: {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "backup") | nindent 12 }}
+          {{- with .Values.backup.podAnnotations }}
+          annotations: {{- toYaml . | nindent 12 }}
           {{- end }}
-          containers:
-            - name: backup
-              image: {{ .Values.backup.image }}
-              command:
-                # bash, not sh: /bin/sh in the mongo image is dash, which
-                # rejects `-o pipefail`.
-                - /bin/bash
-                - -c
-                - |
-                  set -euo pipefail
-                  STAMP="$(date -u +%Y%m%d-%H%M%SZ)"
-                  OUT="/data/backups/mongodump-${STAMP}.archive.gz"
-                  mkdir -p /data/backups
-
-                  mongodump --uri="${MONGODB_URI}" --db=tasksense --archive="${OUT}" --gzip
-
-                  # A dump that is implausibly small is worse than no dump: it
-                  # looks like a backup until the day it is needed.
-                  SIZE="$(wc -c < "${OUT}")"
-                  if [ "${SIZE}" -lt 1024 ]; then
-                    echo "dump is only ${SIZE} bytes — refusing to keep it" >&2
-                    rm -f "${OUT}"
-                    exit 1
-                  fi
-                  echo "wrote ${OUT} (${SIZE} bytes)"
-
-                  find /data/backups -name 'mongodump-*.archive.gz' \
-                    -mtime +{{ .Values.backup.retentionDays }} -delete
-              envFrom:
-                - secretRef:
-                    name: {{ include "tasksense.secretName" . }}
-              volumeMounts:
-                - name: data
-                  mountPath: /data
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "tasksense.fullname" .)) }}
+        spec: {{- include "tasksense.dumpPodSpec" (dict "root" $ "hook" false "kind" "nightly" "prefix" "mongodump") | nindent 10 }}
 {{- end }}

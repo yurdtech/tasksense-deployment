@@ -1,0 +1,70 @@
+{{- include "tasksense.validate" . -}}
+# `helm test <release>`: the API answers ready (MongoDB reachable, indexes and
+# schema reported) and reports the version it is running — through the
+# Service, the way the Ingress / Route reaches it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "test-ready") }}
+  # No part-of label: outside the release's NetworkPolicy (which admits it by
+  # component=test), so it can reach the Service.
+  labels:
+    {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "test") | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  serviceAccountName: {{ include "tasksense.serviceAccountName" . }}
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" false) | nindent 2 }}
+  {{- include "tasksense.appPodSecurityContext" . | nindent 2 }}
+  containers:
+    - name: ready
+      image: {{ include "tasksense.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      {{- include "tasksense.containerSecurityContext" . | nindent 6 }}
+      env:
+        - name: TARGET
+          value: {{ printf "http://%s:%d" (include "tasksense.fullname" .) (int .Values.service.port) | quote }}
+        - name: EXPECTED_VERSION
+          value: {{ ternary "" (include "tasksense.appVersion" .) (not (empty .Values.image.digest)) | quote }}
+      command:
+        - node
+        - -e
+        - |
+          const http = require("http");
+          const get = (path) => new Promise((resolve, reject) => {
+            const req = http.get(process.env.TARGET + path, { timeout: 15000 }, (res) => {
+              let body = "";
+              res.on("data", (chunk) => (body += chunk));
+              res.on("end", () => resolve({ status: res.statusCode, body }));
+            });
+            req.on("timeout", () => req.destroy(new Error("timed out after 15s")));
+            req.on("error", reject);
+          });
+          (async () => {
+            const ready = await get("/api/v1/health/ready");
+            console.log("GET /api/v1/health/ready ->", ready.status, ready.body);
+            if (ready.status !== 200) throw new Error("not ready (MongoDB unreachable, or still starting)");
+            const health = JSON.parse(ready.body);
+            if (health.schema && health.schema.state && health.schema.state !== "current") {
+              console.warn("WARNING: schema state is '" + health.schema.state + "' — the database is ahead of this version (a rollback without a database restore?)");
+            }
+            const version = await get("/api/v1/version");
+            console.log("GET /api/v1/version ->", version.status, version.body);
+            if (version.status !== 200) throw new Error("version endpoint answered " + version.status);
+            const expected = process.env.EXPECTED_VERSION;
+            if (expected && !version.body.includes(expected)) {
+              console.warn("WARNING: expected version " + expected + " — is an old pod still serving?");
+            }
+            console.log("OK");
+          })().catch((err) => { console.error("FAILED:", err.message); process.exit(1); });
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          memory: 256Mi

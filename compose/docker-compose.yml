@@ -1,145 +1,245 @@
-# TaskSense — on-premise stack.
+# TaskSense — on-premise stack (Docker Compose ≥ 2.20, or Podman with the
+# docker-compose provider).
 #
-#   cp .env.example .env && $EDITOR .env
+#   cp .env.example .env && chmod 600 .env && $EDITOR .env
+#   ../scripts/preflight.sh
 #   ../scripts/install.sh
 #
-# Two containers: the application (API and web UI on one port) and MongoDB.
-# Put your own reverse proxy in front for TLS — see docs/01-INSTALL-COMPOSE.md.
+# You never edit this file. Everything — including using your own MongoDB and
+# turning the import worker on — is a setting in .env:
 #
-# Neither container reaches the internet. Everything the application talks to
+#   COMPOSE_PROFILES=bundled-mongo                 the default: MongoDB beside the app
+#   COMPOSE_PROFILES=                              your own MongoDB (set MONGODB_URI)
+#   COMPOSE_PROFILES=bundled-mongo,import-worker   plus a separate Jira-import process
+#
+# Services, in start order:
+#
+#   mongo    (profile bundled-mongo)  the bundled database. No published port.
+#   migrate  one-shot: applies pending schema migrations, then exits 0. Every
+#            `up` runs it; with nothing pending it is a two-second no-op.
+#   app      the API and the web UI on one port. Starts only after migrate
+#            succeeded, so a failed migration never serves traffic.
+#   worker   (profile import-worker)  runs Jira-backup landings and nothing
+#            user-facing, so a multi-gigabyte import cannot take the API down.
+#
+# The API is ONE process by design (in-process schedulers, in-process change
+# feed). Never scale `app` — HA is the restart policy plus a MongoDB replica set.
+# See docs/15-SCALING-AND-HA.md.
+#
+# Put your own reverse proxy in front for TLS — see docs/01-INSTALL-COMPOSE.md.
+# No container reaches the internet: everything the application talks to
 # (identity, mail, object storage, language models) is a host you configure.
 
 name: tasksense
 
+# Docker's json-file driver is unbounded by default; a busy API fills the disk
+# over months without this. 50 MB × 5 files = 250 MB per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+# What app, worker and migrate share: one image, one configuration file, one
+# data volume, the same hardening.
+#
+# `env_file` names TASKSENSE_ENV_FILE so the scripts — and a configuration kept
+# outside this directory, e.g. /etc/tasksense/tasksense.env — can point compose
+# at it. Unset, it is the .env beside this file, which is the normal case.
+x-tasksense: &tasksense
+  image: ${TASKSENSE_IMAGE:-ghcr.io/yurdtech/tasksense}:${TASKSENSE_VERSION:?set TASKSENSE_VERSION in .env}
+  env_file: ${TASKSENSE_ENV_FILE:-.env}
+  logging: *logging
+  volumes:
+    # Uploads, the nightly in-app snapshots, agent workspaces, and the staging
+    # directory for large uploads (TMPDIR below). Shared by app, worker and
+    # migrate: the worker lands a Jira backup from the file the API received.
+    - app-data:/app/api/data
+    # Your internal CA, for MongoDB TLS, SMTP, OIDC and an LLM gateway.
+    # Read-only, and empty unless you put something there — see certs/README.md.
+    - ./certs:/certs:ro
+  # The image already runs as a non-root user (uid 1001, gid 0); these close
+  # the rest. The root filesystem is read-only: the data volume and a small
+  # /tmp are the only writable paths.
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=256m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+# Not overridable from .env: these describe the stack, not the site.
+#
+# DEPLOYMENT_MODE=onprem makes the application refuse to start on a
+# configuration that would be merely unwise in the hosted product — a
+# development NODE_ENV, a missing STORAGE_SECRET, demo sign-in.
+#
+# MONGODB_URI: yours when set in .env, the bundled one otherwise. (`environment`
+# outranks `env_file`, so the fallback has to be spelled out here or a URI in
+# .env would be silently replaced.)
+#
+# TMPDIR: Jira site backups (up to JIRA_BACKUP_MAX_GB) and attachments are
+# staged in the OS temp directory before they are processed. /tmp is a small
+# tmpfs on purpose, and the worker must see the file the API received — so the
+# staging directory lives on the shared data volume.
+x-stack-env: &stack-env
+  DEPLOYMENT_MODE: onprem
+  NODE_ENV: production
+  PORT: "3000"
+  MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGO_USER:-}:${MONGO_PASSWORD:-}@mongo:27017/?authSource=admin}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-${APP_URL:-}}
+  STORAGE_LOCAL_ROOT: /app/api/data/uploads
+  BACKUP_DIR: /app/api/data/backups
+  TMPDIR: /app/api/data/tmp
+
+# "Wait for the bundled MongoDB to be healthy — if it is part of this
+# deployment." With bundled-mongo removed from COMPOSE_PROFILES there is no
+# mongo service, and `required: false` turns the dependency into a no-op
+# instead of an invalid project. This is what lets one file serve both layouts.
+x-mongo-ready: &mongo-ready
+  mongo:
+    condition: service_healthy
+    required: false
+
 services:
-  app:
-    image: ${TASKSENSE_IMAGE:-ghcr.io/yurdtech/tasksense}:${TASKSENSE_VERSION:?set TASKSENSE_VERSION in .env}
-    container_name: tasksense-app
+  mongo:
+    image: ${MONGO_IMAGE:-mongo}:${MONGO_VERSION:-7}
+    container_name: tasksense-mongo
+    profiles: ["bundled-mongo"]
     restart: unless-stopped
-    env_file: .env
+    # The WiredTiger cache is the database's main memory consumer. Left to
+    # itself it takes half of (host RAM - 1 GB) — the HOST's RAM, not this
+    # container's limit — and gets OOM-killed under load. Keep it at about half
+    # of MONGO_MEMORY_LIMIT.
+    command: ["--auth", "--bind_ip_all", "--wiredTigerCacheSizeGB", "${MONGO_CACHE_GB:-1}"]
     environment:
-      # Not overridable from .env: these describe the stack, not the site.
-      # DEPLOYMENT_MODE=onprem makes the application refuse to start on a
-      # configuration that would be merely unwise in the hosted product —
-      # a development NODE_ENV, a missing STORAGE_SECRET, demo sign-in.
-      DEPLOYMENT_MODE: onprem
-      NODE_ENV: production
-      PORT: "3000"
-      # Your own database, when you set MONGODB_URI in .env; the bundled one
-      # otherwise. This used to be unconditional, so a URI set in .env was
-      # silently ignored — `environment:` outranks `env_file:` — while
-      # docs/04-CONFIGURATION.md said to point it at your own cluster. It was the
-      # one setting the documentation offered and the stack refused.
+      # Not `${MONGO_USER:?…}`: compose interpolates the whole file before it
+      # decides which services run, and an installation using its own MongoDB
+      # leaves these empty on purpose. scripts/preflight.sh enforces them where
+      # they matter. An empty pair does not open the database — with --auth and
+      # no root user nothing can authenticate, so the failure is a refused
+      # connection rather than an open database.
       #
-      # With an external database the bundled container is not started at all:
-      # the scripts start the stack with `up -d --no-deps app`. Nothing is left
-      # running that nobody asked for, and nothing writes to a volume nobody
-      # backs up.
-      MONGODB_URI: ${MONGODB_URI:-mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/?authSource=admin}
-      STORAGE_LOCAL_ROOT: /app/api/data/uploads
-      BACKUP_DIR: /app/api/data/backups
-
-    ports:
-      # Bound to the loopback interface so only the reverse proxy on this host
-      # can reach it. Docker writes its own iptables rules ahead of the host
-      # firewall's, so a plain "3000:3000" would be reachable from the network
-      # even with the port denied in ufw/firewalld.
-      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-3000}:3000"
-
+      # MongoDB reads these ONLY when it creates an empty data volume. Changing
+      # them later does not change the existing user — see
+      # docs/10-TROUBLESHOOTING.md, "Authentication failed".
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-}
+    # No `ports:` on purpose. The database is reachable only over the internal
+    # compose network. To inspect it, exec into the container.
     volumes:
-      # Uploads, nightly snapshots and agent execution workspaces.
-      - app-data:/app/api/data
-
-      # Your internal CA, for an SMTP relay using a certificate your
-      # organisation issued. Read-only, and empty unless you put something
-      # there — see certs/README.md. (The LDAP CA does not go here: directory
-      # sign-in is configured inside the app, where the CA is pasted as text.)
-      - ./certs:/certs:ro
-
-    depends_on:
-      mongo:
-        condition: service_healthy
-
+      - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/health"]
-      interval: 30s
+      # `ping` is allowed before authentication, so no credentials are needed.
+      test: ["CMD", "mongosh", "--quiet", "--norc", "--eval", "db.adminCommand('ping').ok"]
+      interval: 15s
       timeout: 5s
-      start_period: 60s
-      retries: 3
-
-    # The image already runs as a non-root user; these close the rest.
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
+      start_period: 30s
+      retries: 5
+    # A clean shutdown flushes the journal; the 10 s default can cut it short.
+    stop_grace_period: 60s
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "${MONGO_CPU_LIMIT:-2}"
+          memory: ${MONGO_MEMORY_LIMIT:-2g}
+    logging: *logging
 
+  migrate:
+    <<: *tasksense
+    container_name: tasksense-migrate
+    command: ["node", "dist/database/migrations/cli.js", "up"]
+    # One-shot. It exits when the schema is current; restarting it would loop.
+    restart: "no"
+    environment:
+      <<: *stack-env
+      NODE_OPTIONS: --max-old-space-size=${APP_HEAP_MB:-1536}
+    # The image's baked healthcheck probes the HTTP server, which this job never
+    # starts — without this it would sit at "unhealthy" after a clean run.
+    healthcheck:
+      disable: true
+    depends_on: *mongo-ready
     deploy:
       resources:
         limits:
           cpus: "${APP_CPU_LIMIT:-2}"
           memory: ${APP_MEMORY_LIMIT:-2g}
 
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
-
-  mongo:
-    image: ${MONGO_IMAGE:-mongo}:${MONGO_VERSION:-7}
-    container_name: tasksense-mongo
+  app:
+    <<: *tasksense
+    container_name: tasksense-app
     restart: unless-stopped
-    command: ["--auth", "--bind_ip_all"]
     environment:
-      # Not `${MONGO_USER:?…}`. Compose interpolates the whole file before it
-      # decides which services to run, so that guard fired for installations
-      # using their own MongoDB — where these two are deliberately empty, and
-      # this service is never started at all:
-      #
-      #   error while interpolating services.mongo.environment.
-      #   MONGO_INITDB_ROOT_USERNAME: required variable MONGO_USER is missing
-      #   a value: set MONGO_USER in .env
-      #
-      # Which names MONGO_USER, the one thing the operator was right to leave
-      # empty. The requirement is enforced in scripts/install.sh instead, where
-      # it can tell the two kinds of installation apart.
-      #
-      # An empty pair here does not open the database: the server runs with
-      # --auth and creates no root user, so nothing can authenticate to it. The
-      # application then fails to connect, which is the safe failure rather than
-      # the quiet one.
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-}
-
-    # No `ports:` on purpose. The database is reachable only from the app over
-    # the internal compose network. To inspect it, exec into the container.
-    volumes:
-      - mongo-data:/data/db
-
+      <<: *stack-env
+      # The migrate service applied them already. `manual` makes the API refuse
+      # to start if anything is still pending rather than migrate on its own.
+      MIGRATE_ON_BOOT: manual
+      # `all` runs every workload in this process. With the import-worker
+      # profile on it must be `api` — scripts/preflight.sh refuses otherwise.
+      WORKER_ROLE: ${WORKER_ROLE:-all}
+      # V8 sizes its heap from the HOST's memory, so without a cap a container
+      # with a memory limit is OOM-killed before the collector runs. Keep it at
+      # about 75% of APP_MEMORY_LIMIT.
+      NODE_OPTIONS: --max-old-space-size=${APP_HEAP_MB:-1536}
+    ports:
+      # Bound to the loopback interface so only the reverse proxy on this host
+      # can reach it. Docker writes its own iptables rules ahead of the host
+      # firewall's, so a plain "3000:3000" would be reachable from the network
+      # even with the port denied in ufw/firewalld.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-3000}:3000"
+    depends_on:
+      <<: *mongo-ready
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 15s
+      # Readiness: fails while MongoDB is unreachable, which is what an operator
+      # (and `docker ps`) should see.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 30s
       timeout: 5s
-      start_period: 30s
-      retries: 5
-
-    security_opt:
-      - no-new-privileges:true
-
+      start_period: 60s
+      retries: 3
+    # Time for in-flight requests, SSE streams and scheduler ticks to finish on
+    # `docker compose stop` before the process is killed.
+    stop_grace_period: 45s
     deploy:
       resources:
         limits:
-          cpus: "${MONGO_CPU_LIMIT:-2}"
-          memory: ${MONGO_MEMORY_LIMIT:-2g}
+          cpus: "${APP_CPU_LIMIT:-2}"
+          memory: ${APP_MEMORY_LIMIT:-2g}
 
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "5"
+  worker:
+    <<: *tasksense
+    container_name: tasksense-worker
+    profiles: ["import-worker"]
+    restart: unless-stopped
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *stack-env
+      MIGRATE_ON_BOOT: manual
+      # Forced: this process runs Jira landings and nothing else. Landings are
+      # lease-based, so a worker that dies hands its job to the next start at
+      # the last checkpoint, and the API never notices.
+      WORKER_ROLE: worker
+      NODE_OPTIONS: --max-old-space-size=${WORKER_HEAP_MB:-4096}
+    # No `ports:` — the worker serves no HTTP at all.
+    depends_on:
+      <<: *mongo-ready
+      migrate:
+        condition: service_completed_successfully
+    # The image's healthcheck probes the API port, which the worker never opens;
+    # it would report "unhealthy" forever while working perfectly.
+    healthcheck:
+      disable: true
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPU_LIMIT:-2}"
+          memory: ${WORKER_MEMORY_LIMIT:-6g}
 
 volumes:
   app-data:

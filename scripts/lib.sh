@@ -1,16 +1,45 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced by every script here; not meant to be run directly.
+#
+# Bash 3.2 compatible on purpose: the plain scripts run on an operator's Mac as
+# well as on the server. No associative arrays, and every array that can be
+# empty is expanded as ${a[@]+"${a[@]}"} — bash before 4.4 treats an empty
+# "${a[@]}" as unbound under `set -u`.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_DIR="${ROOT_DIR}/compose"
-# TASKSENSE_ENV_FILE exists so the tests can point the configuration reader at a
-# fixture. Nothing in normal operation sets it, and it is named for this project
-# rather than something generic like ENV_FILE, which a stray export elsewhere in
-# an operator's shell could collide with.
+EXAMPLE_FILE="${COMPOSE_DIR}/.env.example"
+# TASKSENSE_ENV_FILE points the scripts — and compose, which reads the same
+# variable for `env_file:` — at a configuration kept somewhere else, such as
+# /etc/tasksense/tasksense.env, or at a test fixture. Unset, it is compose/.env.
+# Named for this project rather than something generic like ENV_FILE, which a
+# stray export elsewhere in an operator's shell could collide with.
 ENV_FILE="${TASKSENSE_ENV_FILE:-${COMPOSE_DIR}/.env}"
+case "${ENV_FILE}" in /*) ;; *) ENV_FILE="${PWD}/${ENV_FILE}" ;; esac
+
+# Fixed names from docker-compose.yml. Containers are addressed by name where
+# compose's profile handling would get in the way (stopping a worker whose
+# profile has just been switched off, for instance).
+APP_CONTAINER=tasksense-app
+WORKER_CONTAINER=tasksense-worker
+MONGO_CONTAINER=tasksense-mongo
+# shellcheck disable=SC2034  # read by backup.sh, restore.sh and the panel
+APP_VOLUME="${APP_VOLUME:-tasksense-app-data}"
+MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
+DEFAULT_IMAGE=ghcr.io/yurdtech/tasksense
+
+# Where upgrade.sh records what rollback.sh needs: line 1 the version it came
+# from, line 2 `backup=<archive>` taken just before it. (Line 1 alone is the
+# format 1.0 wrote, and is still read.)
+STATE_FILE="${ROOT_DIR}/.previous-version"
+BACKUPS_DIR="${ROOT_DIR}/backups"
+
+# `depends_on: required: false` — what makes the bundled database optional —
+# arrived in Docker Compose 2.20.
+COMPOSE_MIN_VERSION=2.20.0
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
@@ -59,12 +88,56 @@ die() {
   exit 1
 }
 
+# A question whose safe answer is no. ASSUME_YES=1 (--yes) answers yes.
 confirm() {
   local prompt="$1" reply
   if [ "${ASSUME_YES:-0}" = "1" ]; then return 0; fi
+  [ -t 0 ] || return 1
   read -r -p "${prompt} [y/N] " reply
   [ "${reply}" = "y" ] || [ "${reply}" = "Y" ]
 }
+
+# A question whose safe answer is yes — restoring data after a failed
+# upgrade, for instance. Enter, --yes and a missing terminal all mean yes.
+confirm_yes() {
+  local prompt="$1" reply
+  if [ "${ASSUME_YES:-0}" = "1" ] || [ ! -t 0 ]; then return 0; fi
+  read -r -p "${prompt} [Y/n] " reply
+  case "${reply}" in n|N|no|NO) return 1 ;; *) return 0 ;; esac
+}
+
+# ── Versions ─────────────────────────────────────────────────────────────────
+
+semver_valid() {
+  printf '%s' "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+}
+
+# version_cmp A B → prints -1, 0 or 1. Compares the numeric X.Y.Z only; a
+# pre-release suffix sorts before its release (1.1.0-rc.1 < 1.1.0).
+version_cmp() {
+  local a="${1#v}" b="${2#v}" ai bi i
+  local a_pre="" b_pre=""
+  case "${a}" in *-*) a_pre="${a#*-}"; a="${a%%-*}" ;; esac
+  case "${b}" in *-*) b_pre="${b#*-}"; b="${b%%-*}" ;; esac
+  a="${a%%+*}"; b="${b%%+*}"
+  for i in 1 2 3; do
+    ai="$(printf '%s' "${a}" | cut -d. -f"${i}")"; ai="${ai:-0}"
+    bi="$(printf '%s' "${b}" | cut -d. -f"${i}")"; bi="${bi:-0}"
+    case "${ai}${bi}" in *[!0-9]*) ai=0; bi=0 ;; esac
+    if [ "${ai}" -lt "${bi}" ]; then printf -- '-1'; return 0; fi
+    if [ "${ai}" -gt "${bi}" ]; then printf '1'; return 0; fi
+  done
+  if [ -n "${a_pre}" ] && [ -z "${b_pre}" ]; then printf -- '-1'; return 0; fi
+  if [ -z "${a_pre}" ] && [ -n "${b_pre}" ]; then printf '1'; return 0; fi
+  if [ "${a_pre}" = "${b_pre}" ]; then printf '0'; return 0; fi
+  if [ "$(printf '%s\n%s\n' "${a_pre}" "${b_pre}" | LC_ALL=C sort | head -n1)" = "${a_pre}" ]; then
+    printf -- '-1'
+  else
+    printf '1'
+  fi
+}
+
+version_ge() { [ "$(version_cmp "$1" "$2")" != "-1" ]; }
 
 # ── Container runtime ────────────────────────────────────────────────────────
 # Podman ships a compose-compatible CLI, and several banks forbid the Docker
@@ -78,7 +151,7 @@ detect_runtime() {
     RUNTIME=podman
   else
     die "no container runtime found" \
-        "Install Docker 24+ or Podman 4+, or set CONTAINER_RUNTIME."
+        "Install Docker 24+ (with the compose plugin ${COMPOSE_MIN_VERSION}+) or Podman 4+, or set CONTAINER_RUNTIME."
   fi
 
   if "${RUNTIME}" compose version >/dev/null 2>&1; then
@@ -87,46 +160,409 @@ detect_runtime() {
     COMPOSE=("${RUNTIME}-compose")
   else
     die "${RUNTIME} has no compose support" \
-        "Install the compose plugin (docker-compose-plugin / podman-compose)."
+        "Install the compose plugin (docker-compose-plugin ${COMPOSE_MIN_VERSION}+)."
   fi
   export RUNTIME
 }
 
-# Run compose against this repo's stack, from any working directory.
-compose() {
-  ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" "$@" )
+# The compose implementation's version, e.g. 2.29.7. Empty when it cannot say.
+compose_version() {
+  local out
+  out="$("${COMPOSE[@]}" version --short 2>/dev/null || "${COMPOSE[@]}" version 2>/dev/null || true)"
+  printf '%s' "${out}" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1
 }
 
-# Is the database somebody else's?
+# Run compose against this repo's stack, from any working directory, with the
+# configuration the scripts read — including when TASKSENSE_ENV_FILE moved it.
+compose() {
+  if [ -f "${ENV_FILE}" ]; then
+    ( cd "${COMPOSE_DIR}" && TASKSENSE_ENV_FILE="${ENV_FILE}" "${COMPOSE[@]}" --env-file "${ENV_FILE}" "$@" )
+  else
+    ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" "$@" )
+  fi
+}
+
+container_exists()  { "${RUNTIME}" container inspect "$1" >/dev/null 2>&1; }
+container_running() {
+  [ "$("${RUNTIME}" container inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" = "true" ]
+}
+
+# Stop one container by name if it runs. Its restart policy (unless-stopped)
+# then keeps it down until the next `compose up` that includes it.
+stop_container() {
+  local name="$1" reason="${2:-}"
+  container_running "${name}" || return 0
+  [ -n "${reason}" ] && note "stopping ${name} — ${reason}"
+  "${RUNTIME}" stop -t 45 "${name}" >/dev/null
+}
+
+# The application tier: everything that writes to the database except the
+# database. Stopped before a consistent backup or a restore, worker first so no
+# landing is mid-write when the API goes.
+stop_app_tier() {
+  stop_container "${WORKER_CONTAINER}"
+  stop_container "${APP_CONTAINER}"
+}
+
+# Bring the stack up as COMPOSE_PROFILES describes it.
 #
-# MONGODB_URI set in .env means an existing cluster — a replica set, a managed
-# service, a DBA's server. The bundled container is then not wanted, and
-# starting it anyway leaves a database running that nobody asked for, that
-# nothing writes to, and that appears in every `docker ps` a security review
-# runs.
+# `compose up` never stops a service whose profile was switched off since the
+# last run — its container just keeps running. A worker left running after the
+# import-worker profile was removed would keep landing imports beside an API
+# that now does the same; a bundled MongoDB left running after the move to an
+# external one is a database nobody backs up. So those two are stopped here,
+# by name, before anything starts.
+compose_up() {
+  if ! import_worker_enabled; then
+    stop_container "${WORKER_CONTAINER}" "the import-worker profile is not in COMPOSE_PROFILES"
+  fi
+  if ! bundled_mongo_enabled; then
+    stop_container "${MONGO_CONTAINER}" "the bundled-mongo profile is not in COMPOSE_PROFILES"
+  fi
+  # `up -d` waits for `migrate` to finish before it starts app and worker, and
+  # fails — naming the service — if a migration fails.
+  compose up -d
+}
+
+# Apply pending schema migrations with the configured version's image, as a
+# one-shot run of the migrate service (the bundled MongoDB is started first and
+# waited for, when it is part of this deployment).
+run_migrations() {
+  compose run --rm -T migrate
+}
+
+# How many migrations the configured version would apply. Empty when it cannot
+# tell — which callers must treat as "possibly some".
+migration_pending_count() {
+  compose run --rm -T migrate node dist/database/migrations/cli.js status 2>/dev/null \
+    | sed -n 's/^\([0-9][0-9]*\) pending.*/\1/p' | head -n1 || true
+}
+
+# ── Configuration ────────────────────────────────────────────────────────────
+
+require_env_file() {
+  [ -f "${ENV_FILE}" ] || die "no configuration at ${ENV_FILE}" \
+    "cp ${EXAMPLE_FILE} ${ENV_FILE} && chmod 600 ${ENV_FILE}" \
+    "then replace every <CHANGE_ME_…> value and run ./scripts/preflight.sh."
+}
+
+# Read one value out of .env without sourcing it: the file holds secrets that
+# may contain characters the shell would interpret. The last definition wins,
+# as it does for compose. Surrounding quotes and a Windows line ending are
+# removed, as compose removes them.
+#
+# An absent file is "nothing is configured", not an error — the guided installer
+# asks about the image registry before any .env exists. Without this guard GNU
+# sed exits 2 on the missing file, `set -o pipefail` propagates it, and `set -e`
+# ends the script with no message at all. It survives on Alpine, whose busybox
+# sed is quieter, which is exactly the kind of difference that reaches a
+# customer's RHEL host and not our test container.
+env_value() {
+  local key="$1" file="${2:-${ENV_FILE}}" value
+  [ -f "${file}" ] || return 0
+  value="$(sed -n "s/^${key}=//p" "${file}" | tail -n1 | tr -d '\r')"
+  case "${value}" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+  esac
+  printf '%s' "${value}"
+}
+
+# Is KEY assigned (even to nothing) on an active line?
+env_has_key() {
+  local key="$1" file="${2:-${ENV_FILE}}"
+  [ -f "${file}" ] && grep -q "^${key}=" "${file}"
+}
+
+# env_set FILE KEY VALUE — set a value in place.
+#
+# Replaces the active line; failing that, uncomments the example's `#KEY=` line
+# so the setting stays where the file documents it; failing that, appends. The
+# value goes through the environment, never a sed or awk program, so a
+# password full of / & \ arrives intact. The file keeps its inode and mode.
+env_set() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp "${file}.XXXXXX")"
+  ENV_SET_KEY="${key}" ENV_SET_VALUE="${value}" awk '
+    BEGIN { k = ENVIRON["ENV_SET_KEY"]; v = ENVIRON["ENV_SET_VALUE"]; active = 0; commented = 0 }
+    { lines[NR] = $0 }
+    index($0, k "=") == 1 { active = 1 }
+    index($0, "#" k "=") == 1 && !commented { commented = NR }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (active && index(lines[i], k "=") == 1) { print k "=" v; continue }
+        if (!active && i == commented) { print k "=" v; continue }
+        print lines[i]
+      }
+      if (!active && !commented) print k "=" v
+    }' "${file}" > "${tmp}"
+  cat "${tmp}" > "${file}"
+  rm -f "${tmp}"
+}
+
+require_env_values() {
+  local key value missing=()
+  for key in "$@"; do
+    value="$(env_value "${key}")"
+    [ -n "${value}" ] || missing+=("${key}")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    die "${ENV_FILE} is missing required values: ${missing[*]}" \
+        "Each is described in the file itself and in docs/17-ENVIRONMENT.md."
+  fi
+}
+
+# Active lines still holding the example's <CHANGE_ME_…> marker, by key.
+placeholder_keys() {
+  local file="${1:-${ENV_FILE}}"
+  [ -f "${file}" ] || return 0
+  grep -E '^[A-Za-z_][A-Za-z0-9_]*=.*<CHANGE_ME' "${file}" | sed 's/=.*//' || true
+}
+
+# The required keys that are empty or still a placeholder, given which
+# database the file describes. Used by the wizard's editor route.
+unfinished_keys() {
+  local file="${1:-${ENV_FILE}}" key value
+  local -a required=(TASKSENSE_VERSION APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET)
+  if ENV_FILE="${file}" bundled_mongo_enabled; then
+    required+=(MONGO_USER MONGO_PASSWORD)
+  else
+    required+=(MONGODB_URI)
+  fi
+  for key in "${required[@]}"; do
+    value="$(env_value "${key}" "${file}")"
+    case "${value}" in
+      ""|*"<CHANGE_ME"*) printf '%s\n' "${key}" ;;
+    esac
+  done
+}
+
+# ── Topology ─────────────────────────────────────────────────────────────────
+
+# COMPOSE_PROFILES, without spaces.
+env_profiles() { env_value COMPOSE_PROFILES | tr -d ' '; }
+
+profile_enabled() {
+  case ",$(env_profiles)," in *",$1,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Is the database somebody else's? MONGODB_URI set means the application talks
+# to that cluster, whatever else is running — compose prefers it over the
+# bundled address.
 external_database() {
   [ -n "$(env_value MONGODB_URI)" ]
 }
 
-# Bring the stack up, without the bundled database when it is not wanted.
+# Does this deployment run the bundled MongoDB container?
 #
-# `--no-deps app` rather than a profile or a scale.
-#
-# A profile cannot express it: `depends_on: mongo` makes compose reject the whole
-# project when the profiled service is disabled — "service app depends on
-# undefined service mongo: invalid compose project".
-#
-# `--scale mongo=0` would also work. `--no-deps app` is preferred for naming what
-# to start rather than what to leave out: it says the thing directly, and it does
-# not depend on how a compose version treats a dependency it has been told to
-# scale away. If the stack ever gains a second service that belongs with the
-# application, it has to be named here too.
-compose_up() {
-  if external_database; then
-    compose up -d --no-deps app
+# No configuration yet means the default, which is yes. A configuration with no
+# COMPOSE_PROFILES line is a 1.0 one, from before the profiles existed: there
+# the bundled database ran exactly when MONGODB_URI was empty.
+bundled_mongo_enabled() {
+  [ -f "${ENV_FILE}" ] || return 0
+  if env_has_key COMPOSE_PROFILES; then
+    profile_enabled bundled-mongo
   else
-    compose up -d
+    ! external_database
   fi
+}
+
+import_worker_enabled() {
+  [ -f "${ENV_FILE}" ] || return 1
+  profile_enabled import-worker
+}
+
+mongo_db_name() {
+  local db; db="$(env_value MONGODB_DB)"
+  printf '%s' "${db:-tasksense}"
+}
+
+# image:tag of the application, for the configured version or the one given.
+app_image() {
+  local image version="${1:-}"
+  image="$(env_value TASKSENSE_IMAGE)"
+  [ -n "${version}" ] || version="$(env_value TASKSENSE_VERSION)"
+  printf '%s:%s' "${image:-${DEFAULT_IMAGE}}" "${version}"
+}
+
+# image:tag of MongoDB — the bundled server, and the mongodump/mongorestore
+# used for an external database.
+mongo_image() {
+  local image version
+  image="$(env_value MONGO_IMAGE)"; version="$(env_value MONGO_VERSION)"
+  printf '%s:%s' "${image:-mongo}" "${version:-7}"
+}
+
+# ── Carrying a 1.0 configuration forward ─────────────────────────────────────
+#
+# 1.0 had no profiles: the scripts started `--no-deps app` when MONGODB_URI was
+# set, and the whole stack otherwise. From 1.1 the bundled database is the
+# bundled-mongo profile, so a 1.0 .env read as-is would run NO database — the
+# application would then fail to reach `mongo:27017` and say only that.
+#
+# And 1.1 serves the API browser unless SWAGGER_ENABLED=false, where 1.0 served
+# it only when asked. A 1.0 install that never asked is kept that way.
+#
+# Applied once, announced, with a copy of the original kept under backups/.
+# Called by install.sh, upgrade.sh and preflight.sh, so whichever an operator
+# runs first after updating these files, the configuration is right before
+# compose reads it.
+migrate_legacy_env() {
+  local file="${1:-${ENV_FILE}}" profiles keep stamp
+  [ -f "${file}" ] || return 0
+  grep -q '^COMPOSE_PROFILES=' "${file}" && return 0
+
+  if [ -n "$(env_value MONGODB_URI "${file}")" ]; then profiles=""; else profiles="bundled-mongo"; fi
+
+  stamp="$(date -u +%Y%m%d-%H%M%SZ)"
+  mkdir -p "${BACKUPS_DIR}"
+  keep="${BACKUPS_DIR}/env-before-1.1-${stamp}"
+  ( umask 077; cp "${file}" "${keep}" )
+
+  {
+    printf '\n\n'
+    printf '# ── Added on %s: this file predates 1.1 ─────────────────────────\n' "${stamp}"
+    printf '# The bundled MongoDB is a compose profile since 1.1. Empty means your own\n'
+    printf '# MongoDB (MONGODB_URI). See compose/.env.example, section 2.\n'
+    printf 'COMPOSE_PROFILES=%s\n' "${profiles}"
+  } >> "${file}"
+  if ! env_has_key SWAGGER_ENABLED "${file}"; then
+    {
+      printf '# 1.0 served the API browser only when asked; 1.1 serves it unless this\n'
+      printf '# says false. Kept as it was.\n'
+      printf 'SWAGGER_ENABLED=false\n'
+    } >> "${file}"
+  fi
+
+  step "Configuration carried over from 1.0"
+  ok "COMPOSE_PROFILES=${profiles}  ($([ -n "${profiles}" ] && echo "bundled MongoDB, as before" || echo "your own MongoDB, as before"))"
+  grep -q '^SWAGGER_ENABLED=false$' "${file}" && ok "SWAGGER_ENABLED=false  (the API browser stays off, as before)"
+  note "the original is kept at ${keep}"
+  note "compare with compose/.env.example for the settings 1.1 added — every one has a default"
+}
+
+# ── MongoDB connection strings ───────────────────────────────────────────────
+#
+# Handled with parameter expansion only. A connection string carries a
+# password, and anything passed as an argument to a command is visible in `ps`
+# to every user on the host.
+
+# The URI without a database in its path, for mongodump/mongorestore — which
+# are then told the database with --db / --nsInclude, and refuse both at once.
+# A database in the path was also the authentication database when no
+# authSource was given; it is kept as authSource, so the credentials still
+# authenticate where they did. The application keeps using the original URI.
+mongo_uri_without_db() {
+  local uri="$1" scheme rest authority path="" query="" lower
+  scheme="${uri%%://*}"
+  rest="${uri#*://}"
+  case "${rest}" in *\?*) query="${rest#*\?}"; rest="${rest%%\?*}" ;; esac
+  authority="${rest%%/*}"
+  case "${rest}" in */*) path="${rest#*/}" ;; esac
+  if [ -n "${path}" ]; then
+    lower="$(printf '%s' "&${query}" | tr '[:upper:]' '[:lower:]')"
+    case "${lower}" in
+      *"&authsource="*) ;;
+      *) query="${query:+${query}&}authSource=${path}" ;;
+    esac
+  fi
+  printf '%s://%s/%s' "${scheme}" "${authority}" "${query:+?${query}}"
+}
+
+# Run a shell script inside a throwaway MongoDB-tools container that can reach
+# the external database. The connection string is handed over in the
+# environment (TS_MONGO_URI, named but not valued on the command line) and the
+# script turns it into a --config file, so it never appears in `ps` on this
+# host or inside the container. compose/certs is mounted at /certs, as for the
+# application, so a tlsCAFile in the URI resolves the same way.
+#
+#   with_mongo_tools <uri> <script> [docker-run options…]   (stdin/stdout passed through)
+with_mongo_tools() {
+  local uri="$1" script="$2"; shift 2
+  local -a args=(run --rm -i -e TS_MONGO_URI -e TS_DB -e TS_SRC_DB -v "${COMPOSE_DIR}/certs:/certs:ro")
+  case "${uri}" in *host.docker.internal*) args+=(--add-host host.docker.internal:host-gateway) ;; esac
+  TS_MONGO_URI="${uri}" "${RUNTIME}" "${args[@]}" "$@" --entrypoint sh "$(mongo_image)" -c "${script}"
+}
+
+# Shell, run inside a mongo container: write a credential from the container's
+# environment into a mode-600 tools config file named by $CFG, removed on exit.
+# The YAML value is single-quoted with embedded quotes doubled, so any
+# password survives. (`read -d ''` rather than $(cat <<…): bash 3.2 misparses
+# quotes in a here-document inside a command substitution.)
+# shellcheck disable=SC2034  # used by backup.sh and restore.sh
+read -r -d '' MONGO_CFG_FROM_URI <<'SH' || true
+set -e
+umask 077
+CFG="$(mktemp)"
+trap 'rm -f "$CFG"' EXIT
+q="$(printf '%s' "$TS_MONGO_URI" | sed "s/'/''/g")"
+printf "uri: '%s'\n" "$q" > "$CFG"
+unset TS_MONGO_URI q
+SH
+# shellcheck disable=SC2034  # used by backup.sh and restore.sh
+read -r -d '' MONGO_CFG_FROM_ROOT_PASSWORD <<'SH' || true
+set -e
+umask 077
+CFG="$(mktemp)"
+trap 'rm -f "$CFG"' EXIT
+q="$(printf '%s' "$MONGO_INITDB_ROOT_PASSWORD" | sed "s/'/''/g")"
+printf "password: '%s'\n" "$q" > "$CFG"
+unset q
+SH
+
+# The first host and its port, for a reachability check. Credentials ignored.
+uri_host() {
+  local u="${1#*://}"
+  u="${u##*@}"; u="${u%%/*}"; u="${u%%\?*}"; u="${u%%,*}"
+  case "${u}" in \[*) u="${u#\[}"; printf '%s' "${u%%]*}"; return ;; esac
+  printf '%s' "${u%%:*}"
+}
+uri_port() {
+  local u="${1#*://}" default="${2:-27017}"
+  u="${u##*@}"; u="${u%%/*}"; u="${u%%\?*}"; u="${u%%,*}"
+  case "${u}" in \[*\]:*) printf '%s' "${u##*:}"; return ;; \[*) printf '%s' "${default}"; return ;; esac
+  case "${u}" in *:*) printf '%s' "${u##*:}" ;; *) printf '%s' "${default}" ;; esac
+}
+# For messages and manifests: the URI with its credentials replaced.
+uri_redacted() {
+  local uri="$1" scheme rest
+  scheme="${uri%%://*}"; rest="${uri#*://}"
+  case "${rest%%/*}" in *@*) rest="***@${rest#*@}" ;; esac
+  printf '%s://%s' "${scheme}" "${rest%%\?*}"
+}
+
+# Can this host open a TCP connection to host:port? Bounded, because a
+# firewall that drops rather than refuses would otherwise hold it for minutes —
+# and `timeout` is not on every host (macOS has none).
+tcp_reachable() {
+  local host="$1" port="$2" secs="${3:-5}" pid ticks=0
+  ( exec 3<>"/dev/tcp/${host}/${port}" ) >/dev/null 2>&1 &
+  pid=$!
+  while kill -0 "${pid}" 2>/dev/null; do
+    if [ "${ticks}" -ge $((secs * 10)) ]; then
+      kill "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+    ticks=$((ticks + 1))
+  done
+  wait "${pid}"
+}
+
+# A compose memory size (512m, 2g, 6G, 1536mb) in MiB. Empty when unreadable.
+size_to_mb() {
+  local v n unit
+  v="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  v="${v%b}"
+  n="${v%[kmg]}"; unit="${v#"${n}"}"
+  case "${n}" in ''|*[!0-9]*) return 0 ;; esac
+  case "${unit}" in
+    g) printf '%s' $((n * 1024)) ;;
+    m) printf '%s' "${n}" ;;
+    k) printf '%s' $((n / 1024)) ;;
+    "") printf '%s' $((n / 1024 / 1024)) ;;
+  esac
 }
 
 # ── Registry access ──────────────────────────────────────────────────────────
@@ -147,7 +583,7 @@ REGISTRY_ACCOUNT="${REGISTRY_ACCOUNT:-yurdtech}"
 registry_host() {
   local image
   image="$(env_value TASKSENSE_IMAGE 2>/dev/null)"
-  image="${image:-ghcr.io/yurdtech/tasksense}"
+  image="${image:-${DEFAULT_IMAGE}}"
   case "${image}" in
     */*/*) printf '%s' "${image%%/*}" ;;
     *) printf 'docker.io' ;;
@@ -223,10 +659,12 @@ EOF
 }
 
 # Called before pulling. Silent when a credential is already stored, or when the
-# image comes from somewhere that does not need one.
+# image comes from somewhere that does not need one. The host defaults to the
+# configured image's; load-images.sh names ghcr.io explicitly, because it reads
+# from there even when .env already points at the mirror it is filling.
 ensure_registry_login() {
-  local host
-  host="$(registry_host)"
+  local host="${1:-}"
+  [ -n "${host}" ] || host="$(registry_host)"
 
   # Only our registry needs a token. A mirrored image is the customer's own
   # problem to authenticate, and they have already done it if it works.
@@ -245,7 +683,7 @@ ensure_registry_login() {
   if have_registry_login "${host}"; then
     note "a credential for ${host} is already stored on this host"
     note "whether it can read this image only shows at the pull"
-    if ! confirm "  Sign in again with a different token?"; then
+    if [ ! -t 0 ] || ! confirm "  Sign in again with a different token?"; then
       return 0
     fi
     "${RUNTIME}" logout "${host}" >/dev/null 2>&1 || true
@@ -254,10 +692,17 @@ ensure_registry_login() {
   prompt_registry_login "${host}"
 }
 
-# ── State left by earlier installs ───────────────────────────────────────────
+# Pull one image, or say plainly that it is already here.
+ensure_image() {
+  local image="$1"
+  if "${RUNTIME}" image inspect "${image}" >/dev/null 2>&1; then
+    note "${image} is already on this host"
+    return 0
+  fi
+  "${RUNTIME}" pull "${image}"
+}
 
-# The volume named in docker-compose.yml.
-MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
+# ── State left by earlier installs ───────────────────────────────────────────
 
 # MongoDB writes MONGO_INITDB_ROOT_USERNAME and _PASSWORD exactly once: when it
 # first creates its data directory. An existing volume keeps whatever it was
@@ -269,9 +714,9 @@ MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
 # finish: the second attempt uses a new password against the first attempt's
 # database, and the error names neither.
 mongo_volume_exists() {
-  # An external database has no volume of ours, and its credentials are not
-  # ours to explain.
-  external_database && return 1
+  # Without the bundled database there is no volume of ours, and the
+  # credentials of somebody else's server are not ours to explain.
+  bundled_mongo_enabled || return 1
   "${RUNTIME}" volume inspect "${MONGO_VOLUME}" >/dev/null 2>&1
 }
 
@@ -301,38 +746,18 @@ explain_stale_mongo_volume() {
 EOF
 }
 
-# ── Configuration ────────────────────────────────────────────────────────────
-require_env_file() {
-  [ -f "${ENV_FILE}" ] || die "no configuration at ${ENV_FILE}" \
-    "cp ${COMPOSE_DIR}/.env.example ${ENV_FILE}" \
-    "then edit it — the values marked REQUIRED have no defaults."
-}
+# ── Upgrade state ────────────────────────────────────────────────────────────
 
-# Read one value out of .env without sourcing it: the file holds secrets that
-# may contain characters the shell would interpret.
-#
-# An absent file is "nothing is configured", not an error — the guided installer
-# asks about the image registry before any .env exists. Without this guard GNU
-# sed exits 2 on the missing file, `set -o pipefail` propagates it, and `set -e`
-# ends the script with no message at all. It survives on Alpine, whose busybox
-# sed is quieter, which is exactly the kind of difference that reaches a
-# customer's RHEL host and not our test container.
-env_value() {
-  local key="$1"
-  [ -f "${ENV_FILE}" ] || return 0
-  sed -n "s/^${key}=//p" "${ENV_FILE}" | tail -n1
+record_upgrade_state() {  # record_upgrade_state <previous-version> <backup-archive>
+  printf '%s\nbackup=%s\n' "$1" "$2" > "${STATE_FILE}"
 }
-
-require_env_values() {
-  local key value missing=()
-  for key in "$@"; do
-    value="$(env_value "${key}")"
-    [ -n "${value}" ] || missing+=("${key}")
-  done
-  if [ ${#missing[@]} -gt 0 ]; then
-    die "${ENV_FILE} is missing required values: ${missing[*]}" \
-        "Each is described in the file itself and in docs/04-CONFIGURATION.md."
-  fi
+recorded_previous_version() {
+  [ -f "${STATE_FILE}" ] || return 0
+  head -n1 "${STATE_FILE}" | tr -d '\r'
+}
+recorded_pre_upgrade_backup() {
+  [ -f "${STATE_FILE}" ] || return 0
+  sed -n 's/^backup=//p' "${STATE_FILE}" | tail -n1
 }
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -359,6 +784,13 @@ wait_for_health() {
   done
   printf '\n'
   return 1
+}
+
+# "current", "ahead" (the database was migrated by a newer release than the one
+# running — what an application-only rollback leaves), or empty when unknown.
+schema_state() {
+  curl -fsS --max-time 5 "$(health_url)" 2>/dev/null \
+    | tr -d ' \n' | sed -n 's/.*"schema":{[^}]*"state":"\([a-z]*\)".*/\1/p' || true
 }
 
 running_version() {

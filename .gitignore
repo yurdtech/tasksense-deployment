@@ -34,3 +34,6 @@ tasksense-diagnostics-*.tar.gz
 !cosign.pub
 
 .DS_Store
+
+# Air-gap bundle output (scripts/helm-airgap-bundle.sh)
+dist/

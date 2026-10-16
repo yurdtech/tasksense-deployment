@@ -29,8 +29,13 @@ many people will have accounts. You will receive a single line:
 LICENSE_KEY=tsl_eyJvcmciOiJBQkIgQmFuayIsInBsYW4iOiJwcm8i…
 ```
 
-Put it in `compose/.env` (or `licenseKey` in your Helm values) and restart. The
-guided installer asks for it during setup.
+Put it in `compose/.env` and apply it with
+`docker compose -f compose/docker-compose.yml up -d` — or, on Kubernetes, as the
+`LICENSE_KEY` key of the Secret the chart reads, followed by `helm upgrade`. It
+is read once at startup. The guided installer asks for it during setup.
+
+The key is not a password, but it cannot be revoked (below): keep it with your
+other secrets, not in a ticket or a wiki page.
 
 That is the whole process. There is no account to create, no portal to sign in
 to, and nothing to install.
@@ -51,9 +56,19 @@ for it.
 The payload is signed, not encrypted — you can read it:
 
 ```bash
-grep LICENSE_KEY compose/.env | sed 's/^LICENSE_KEY=tsl_//' | cut -d. -f1 | base64 -d
+p=$(grep '^LICENSE_KEY=' compose/.env | sed 's/^LICENSE_KEY=tsl_//' | cut -d. -f1 | tr '_-' '/+')
+while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done
+printf '%s' "$p" | base64 -d; echo
+```
+
+Expected — your organisation, seats and expiry:
+
+```json
 {"org":"ABB Bank","plan":"pro","seats":200,"exp":"2027-08-01"}
 ```
+
+(The key is `tsl_<payload>.<signature>`, both base64url; the second and third
+lines turn the payload into the padded alphabet `base64 -d` reads.)
 
 You should be able to see what you were sold. What nobody can do is change a
 number in it: altering the payload breaks the signature, and the instance falls
@@ -80,13 +95,18 @@ You can see it three ways:
 
 ```bash
 curl -s -H "Authorization: Bearer <token>" \
-  http://localhost:3000/api/v1/team/seats
+  http://127.0.0.1:3000/api/v1/team/seats
+```
+
+Expected, for example:
+
+```json
 {"used":213,"limit":200,"plan":"pro","over":13}
 ```
 
 - **Admin → Plan & billing** shows seats used against the licence
 - **`tasksense_seats_over_limit`** in the Prometheus metrics — `0` while within
-  it. `docs/09-MONITORING.md` has an alert for it
+  it. [09-MONITORING](09-MONITORING.md) has an alert for it
 - The **application log** repeats the licence line daily
 
 ## Checking the state

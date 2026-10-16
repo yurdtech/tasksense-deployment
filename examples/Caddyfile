@@ -1,34 +1,103 @@
-# TaskSense behind Caddy.
+# TaskSense behind Caddy (2.8 or newer).
 #
 #   sudo cp examples/Caddyfile /etc/caddy/Caddyfile
-#   sudo systemctl reload caddy
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 #
-# Caddy needs no special configuration for the live-update streams — it does not
-# buffer proxied responses — which is why this file is four lines and the nginx
-# equivalent is not.
+# Replace tasksense.bank.internal (it must equal APP_URL in compose/.env). The
+# same five things as examples/nginx.conf, in Caddy's terms:
+#
+#   1. Upstream keep-alive shorter than the application's 65 s. Caddy's own
+#      default idle time is 2 minutes — longer than the application's — so
+#      without the "keepalive 60s" below Caddy can send a request down a socket
+#      the application is closing, and an upload fails with a reset.
+#   2. X-Forwarded-For and X-Forwarded-Proto are set by Caddy on every request;
+#      X-Real-IP is added below.
+#   3. The live-update streams are flushed immediately (Caddy does this for
+#      text/event-stream on its own; flush_interval -1 makes it explicit).
+#   4. Upload routes get a 21 GB body limit, everything else 25 MB. Caddy
+#      streams request bodies to the application rather than spooling them to
+#      disk, and has no request timeout by default, so nothing else is needed.
+#   5. The access log masks the ?ticket= value and the credential in the path
+#      of the inbound-mail, invite and hook routes. Authorization headers are
+#      already redacted by Caddy unless log_credentials is turned on.
+#
+# The application sets its own Content-Security-Policy, HSTS and frame
+# options, and its own cache headers for /assets/ — do not add a second set.
 
-tasksense.bank.internal {
-    reverse_proxy localhost:3000
+(tasksense_upstream) {
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Real-IP {remote_host}
+		transport http {
+			keepalive 60s
+		}
+	}
 }
 
-# ── With a certificate you already have ──────────────────────────────────────
+tasksense.bank.internal {
+	# By default Caddy obtains and renews a certificate itself, which needs it
+	# to reach a certificate authority. On an isolated network use one from
+	# your internal PKI instead (full chain first, then the key):
+	# tls /etc/ssl/certs/tasksense.crt /etc/ssl/private/tasksense.key
+
+	log {
+		output file /var/log/caddy/tasksense-access.log {
+			roll_size 100MiB
+			roll_keep 10
+		}
+		format filter {
+			wrap json
+			# Masks the ?ticket= value and the path tokens of the inbound-mail,
+			# invite and hook routes — the same values the application masks in
+			# its own log. Caddy < 2.8: put this line inside a "fields { }" block.
+			request>uri regexp "(/api/v1/(?:inbound-mail|service-desk/inbound|invites|automation/hooks)/)[^/?]+|([?&]ticket=)[^&]*" "${1}${2}***"
+		}
+	}
+
+	# Live updates (server-sent events).
+	@stream path_regexp stream ^/api/v1/(state|agents/events)/stream$
+	handle @stream {
+		reverse_proxy 127.0.0.1:3000 {
+			header_up X-Real-IP {remote_host}
+			flush_interval -1
+			transport http {
+				keepalive 60s
+			}
+		}
+	}
+
+	# Uploads and long-running imports — the same routes as in nginx.conf:
+	# Jira site backup, Jira/Confluence/CSV import, workspace restore, task and
+	# document attachments, and the Jira-compatible attachment route. The
+	# application enforces the real per-route ceilings (STORAGE_MAX_FILE_MB,
+	# STORAGE_MAX_VIDEO_FILE_MB, JIRA_BACKUP_MAX_GB) and answers 413 itself.
+	@upload path_regexp upload ^/(api/v1/(integrations/(jira|confluence|csv)/|import/)|api/v1/(tasks|docs)/[^/]+/attachments/?$|rest/api/[23]/issue/[^/]+/attachments/?$)
+	handle @upload {
+		request_body {
+			max_size 21GB
+		}
+		import tasksense_upstream
+	}
+
+	# Everything else: the web interface and the API.
+	handle {
+		request_body {
+			max_size 25MB
+		}
+		import tasksense_upstream
+	}
+}
+
+# ── Optional: keep the API reference off the user network ──────────────────
 #
-# By default Caddy obtains and renews certificates itself, which needs it to
-# reach a CA. On an isolated network, supply your own from your internal PKI:
+# With SWAGGER_ENABLED=false (recommended) /api/v1/swagger answers 404. The
+# static API reference (/api-docs) is always served without sign-in. To allow
+# it only from an internal segment, add inside the site block, ABOVE the other
+# handle blocks (named-matcher handles are tried in the order they appear):
 #
-# tasksense.bank.internal {
-#     tls /etc/ssl/certs/tasksense.crt /etc/ssl/private/tasksense.key
-#     reverse_proxy localhost:3000
-# }
-#
-# ── Larger uploads ───────────────────────────────────────────────────────────
-#
-# Caddy does not cap request bodies by default, so STORAGE_MAX_FILE_MB is the
-# only limit. To enforce one here as well:
-#
-# tasksense.bank.internal {
-#     request_body {
-#         max_size 25MB
-#     }
-#     reverse_proxy localhost:3000
-# }
+#	@apidocs {
+#		path /api-docs /api-docs/*
+#		not remote_ip 10.20.0.0/16
+#	}
+#	handle @apidocs {
+#		respond "Forbidden" 403
+#	}

@@ -20,20 +20,10 @@
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-for tool in docker python3; do
-  command -v "${tool}" >/dev/null 2>&1 || { printf '\n  SKIPPED: %s is not installed\n\n' "${tool}"; exit 0; }
-done
+# shellcheck source=helpers/common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers/common.sh"
 
 printf '\nunfinished answers\n\n'
-
-PASS=0
-FAIL=0
-check() {
-  if [ "$2" = "$3" ]; then printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1))
-  else printf '  \033[31m✗\033[0m %s\n      expected: %s\n      actual:   %s\n' "$1" "$2" "$3"; FAIL=$((FAIL + 1)); fi
-}
 
 # ── 1. the draft lives beside the file it becomes ────────────────────────────
 
@@ -54,8 +44,11 @@ check "it is removed only once it has become compose/.env" "1" \
 
 # The three branches of the stale-volume question used to end the run with die,
 # which is what triggered the trap.
-check "no branch of the volume question calls die" "0" \
-  "$(sed -n '/if mongo_volume_exists; then/,/^fi$/p' "${ROOT}/scripts/wizard/install.sh" | grep -c 'die "stopped')"
+VOLUME_BRANCH="$(sed -n '/mongo_volume_exists; then/,/^fi$/p' "${ROOT}/scripts/wizard/install.sh")"
+check "the volume question is still there to look at" "1" "$([ -n "${VOLUME_BRANCH}" ] && echo 1 || echo 0)"
+check "no branch of the volume question calls die" "0" "$(printf '%s' "${VOLUME_BRANCH}" | grep -c 'die "stopped' || true)"
+check "and it asks about the candidate, not a compose/.env that may not exist" "1" \
+  "$(grep -c 'ENV_FILE="${CANDIDATE}" mongo_volume_exists' "${ROOT}/scripts/wizard/install.sh")"
 
 check "a mistyped confirmation deletes nothing" "1" \
   "$(sed -n '/Type %sDELETE%s to confirm/,/esac/p' "${ROOT}/scripts/wizard/install.sh" \
@@ -72,63 +65,37 @@ check "resume is offered when a draft exists" "1" \
 
 # ── 4. the editor route, exercised ──────────────────────────────────────────
 #
-# EDITOR is a script here, so the "operator" is a program: it writes the values
-# a person would type. What is under test is what the wizard does with the file
-# afterwards — that it starts from the example, keeps mode 600, and refuses to
-# move on while the required values are empty.
+# What edit_candidate does to a fresh draft — copy the example, keep it 600 —
+# and the check it then makes, which is lib.sh's unfinished_keys and
+# placeholder_keys: the same ones preflight uses, so the editor route cannot
+# hand the installer a file preflight would refuse. Run on the host: lib.sh is
+# bash 3.2 compatible.
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
+CANDIDATE="${WORK}/.env.draft"
+cp "${ROOT}/compose/.env.example" "${CANDIDATE}"
+chmod 600 "${CANDIDATE}"
 
-out="$(docker run --rm -v "${ROOT}:/w" -v "${WORK}:/out" -w /w \
-  --user "$(id -u):$(id -g)" -e HOME=/tmp bash:5 bash -c '
-    . scripts/lib.sh
+unfinished() { TASKSENSE_ENV_FILE="${CANDIDATE}" bash -c '. "$1/scripts/lib.sh"; unfinished_keys "$ENV_FILE" | tr "\n" " "' _ "${ROOT}"; }
+placeholders() { TASKSENSE_ENV_FILE="${CANDIDATE}" bash -c '. "$1/scripts/lib.sh"; placeholder_keys "$ENV_FILE" | tr "\n" " "' _ "${ROOT}"; }
 
-    # What edit_candidate does to a fresh draft, in isolation.
-    CANDIDATE=/out/.env.draft
-    cp compose/.env.example "$CANDIDATE"
-    chmod 600 "$CANDIDATE"
+check "an untouched example does not pass as configured" "APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_PASSWORD " "$(unfinished)"
+check "and its placeholders are recognised" "APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_PASSWORD " "$(placeholders)"
 
-    # An untouched example must not pass: two required values ship empty and two
-    # more ship as placeholders.
-    blank=""
-    for key in TASKSENSE_VERSION APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_USER MONGO_PASSWORD; do
-      v="$(sed -n "s/^${key}=//p" "$CANDIDATE" | tail -n1)"
-      [ -n "$v" ] || blank="${blank} ${key}"
-    done
-    echo "BLANK_ON_UNTOUCHED_EXAMPLE:${blank}"
-    grep -q "^APP_URL=https://tasksense.bank.internal$" "$CANDIDATE" && echo "PLACEHOLDER_DETECTED"
+# Now fill it the way an operator would.
+fixture_env "${CANDIDATE}"
+check "an edited one does" "" "$(unfinished)"
+check "with no placeholder left" "" "$(placeholders)"
 
-    # Now fill it the way an operator would, and check it comes out valid.
-    sed -i "s|^APP_URL=.*|APP_URL=https://tasksense.abb.internal|" "$CANDIDATE"
-    sed -i "s|^FIRST_ADMIN_EMAIL=.*|FIRST_ADMIN_EMAIL=infra@abb.internal|" "$CANDIDATE"
-    # Fixed values, not generated: the container runs as the calling user and
-    # cannot apk-add openssl, and what is under test is the check that reads the
-    # file rather than the entropy of what was written into it.
-    sed -i "s|^STORAGE_SECRET=.*|STORAGE_SECRET=0123456789012345678901234567890123456789|" "$CANDIDATE"
-    sed -i "s|^MONGO_PASSWORD=.*|MONGO_PASSWORD=0123456789abcdef0123456789abcdef|" "$CANDIDATE"
+# Your own MongoDB through the editor: the URI is what is required then.
+fixture_env "${CANDIDATE}" "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD="
+check "your own MongoDB without a URI is unfinished" "MONGODB_URI " "$(unfinished)"
 
-    blank=""
-    for key in TASKSENSE_VERSION APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_USER MONGO_PASSWORD; do
-      v="$(sed -n "s/^${key}=//p" "$CANDIDATE" | tail -n1)"
-      [ -n "$v" ] || blank="${blank} ${key}"
-    done
-    echo "BLANK_AFTER_EDIT:${blank}"
-' 2>&1)"
-
-check "an untouched example does not pass as configured" "1" \
-  "$(printf '%s' "${out}" | grep -c 'BLANK_ON_UNTOUCHED_EXAMPLE: STORAGE_SECRET MONGO_PASSWORD')"
-check "and its placeholders are recognised" "1" \
-  "$(printf '%s' "${out}" | grep -c '^PLACEHOLDER_DETECTED$')"
-check "an edited one does" "1" \
-  "$(printf '%s' "${out}" | grep -c '^BLANK_AFTER_EDIT:$')"
-
-mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1"; }
-check "the draft carries the same mode as the file it becomes" "600" "$(mode_of "${WORK}/.env.draft")"
+check "the draft carries the same mode as the file it becomes" "600" "$(mode_of "${CANDIDATE}")"
 
 # The whole point of starting from the example rather than an empty file.
 check "and the explanations came with it" "1" \
-  "$(grep -c 'Encrypts stored credentials at rest' "${WORK}/.env.draft")"
+  "$(grep -c 'Encrypts stored credentials' "${CANDIDATE}")"
 
-printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
-[ "${FAIL}" -eq 0 ]
+finish

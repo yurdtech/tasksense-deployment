@@ -14,57 +14,56 @@
 #
 # Needs docker and python3. Skips itself, loudly, without them.
 
-set -euo pipefail
+set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE=tasksense-wizard-test
+# shellcheck source=helpers/common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers/common.sh"
 
-for tool in docker python3; do
-  command -v "${tool}" >/dev/null 2>&1 || {
-    printf '\n  SKIPPED: %s is not installed\n\n' "${tool}"
-    exit 0
-  }
-done
+command -v python3 >/dev/null 2>&1 || skip "python3 is not installed"
+docker_usable || skip "no container daemon"
 
 printf '\nwizard flow (through a pty, on bash 5)\n\n'
 
 # bash:5 has no openssl, and generating a secret is one of the things under
 # test here.
-docker build -q -t "${IMAGE}" - >/dev/null <<'DOCKERFILE'
-FROM bash:5
-RUN apk add --no-cache openssl coreutils ncurses
-DOCKERFILE
+wizard_test_image || skip "could not build ${WIZARD_TEST_IMAGE}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
 # The answers, in the order the nine sections ask for them. A menu takes a bare
 # digit; everything else takes a line.
-python3 - "${ROOT}" "${WORK}" <<'PY'
+VERSION="$(example_version)"
+python3 - "${ROOT}" "${WORK}" "${VERSION}" <<'PY'
 import os, pty, subprocess, sys, time
 
-root, work = sys.argv[1], sys.argv[2]
+root, work, version = sys.argv[1], sys.argv[2], sys.argv[3]
 
 answers = [
-    "1.0.0\n",                              # TASKSENSE_VERSION
-    "127.0.0.1\n",                          # BIND_ADDRESS
-    "3000\n",                               # HTTP_PORT
-    "https://tasksense.abb.internal\n",     # APP_URL
-    "infra@abb.internal\n",                 # FIRST_ADMIN_EMAIL
-    "g\n",                                  # STORAGE_SECRET: generate
-    "1",                                    # database: bring one with it
-    "  tasksense  \n",                      # MONGO_USER — pasted, with spaces
-    "g\n",                                  # MONGO_PASSWORD: generate
-    "n\n",                                  # licence key?
-    "1",                                    # sign-in: LDAP (informational — configured in the app, no prompts)
-    "n\n",                                  # mail?
-    "25\n",                                 # STORAGE_MAX_FILE_MB
-    "n\n",                                  # AI features?
-    "1",                                    # log format: json
-    "1",                                    # log level: log
-    "n\n",                                  # metrics?
-    "n\n",                                  # egress allowlist?
-    "2",                                    # sizing: up to 200
+    version + "\n",                         # 1 TASKSENSE_VERSION
+    "127.0.0.1\n",                          #   BIND_ADDRESS
+    "3000\n",                               #   HTTP_PORT
+    "https://tasksense.abb.internal\n",     # 2 APP_URL
+    "infra@abb.internal\n",                 #   FIRST_ADMIN_EMAIL
+    "n\n",                                  #   own certificate authority?
+    "g\n",                                  # 3 STORAGE_SECRET: generate
+    "1",                                    #   database: bring one with it
+    "  tasksense  \n",                      #   MONGO_USER — pasted, with spaces
+    "g\n",                                  #   MONGO_PASSWORD: generate
+    "n\n",                                  #   licence key?
+    "\n",                                   # 4 SESSION_TTL_HOURS: the offered default
+    "1",                                    #   sign-in: LDAP (configured in the app, no prompts)
+    "n\n",                                  # 5 mail?
+    "25\n",                                 # 6 STORAGE_MAX_FILE_MB
+    "y\n",                                  #   a Jira site backup to import?
+    "\n",                                   #   JIRA_BACKUP_MAX_GB: the offered default
+    "n\n",                                  # 7 AI features?
+    "1",                                    # 8 log format: json
+    "1",                                    #   log level: log
+    "n\n",                                  #   metrics?
+    "n\n",                                  #   API browser?
+    "n\n",                                  #   egress allowlist?
+    "2",                                    # 9 sizing: up to 200
 ]
 
 # --user matters, and not only for tidiness. The wizard writes the candidate
@@ -125,23 +124,13 @@ sys.exit(0 if proc.returncode == 0 else 1)
 PY
 
 OUT="${WORK}/candidate.env"
-PASS=0
-FAIL=0
-check() {
-  if [ "$2" = "$3" ]; then
-    printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1))
-  else
-    printf '  \033[31m✗\033[0m %s\n      expected: %s\n      actual:   %s\n' "$1" "$2" "$3"
-    FAIL=$((FAIL + 1))
-  fi
-}
 value_of() { sed -n "s/^$2=//p" "$1" | tail -n1; }
 
 [ -f "${OUT}" ] || { printf '  \033[31m✗\033[0m the wizard wrote nothing\n'; sed 's/^/      /' "${WORK}/transcript.txt" | tail -30; exit 1; }
 
 # Every typed answer, in order — so a question inserted or removed above shows
 # up here as a mismatch rather than as a silent one-place shift.
-check "TASKSENSE_VERSION as typed" "1.0.0" "$(value_of "${OUT}" TASKSENSE_VERSION)"
+check "TASKSENSE_VERSION as typed" "${VERSION}" "$(value_of "${OUT}" TASKSENSE_VERSION)"
 check "BIND_ADDRESS as typed" "127.0.0.1" "$(value_of "${OUT}" BIND_ADDRESS)"
 check "HTTP_PORT as typed" "3000" "$(value_of "${OUT}" HTTP_PORT)"
 check "APP_URL as typed" "https://tasksense.abb.internal" "$(value_of "${OUT}" APP_URL)"
@@ -162,11 +151,13 @@ check "STORAGE_SECRET is at least 32 characters" "ok" \
 check "STORAGE_SECRET is not the example's empty value" "ok" \
   "$([ -n "${SECRET}" ] && echo ok || echo empty)"
 MONGO_PW="$(value_of "${OUT}" MONGO_PASSWORD)"
+# A function, not a `case` inside $(…): bash 3.2 misparses the pattern's `)`.
+uri_safe() { case "$1" in *[/:@?\#%+=]*) echo "contains a URI-reserved character" ;; *) echo ok ;; esac; }
 check "MONGO_PASSWORD generated" "ok" "$([ "${#MONGO_PW}" -ge 24 ] && echo ok || echo "only ${#MONGO_PW}")"
 # It is substituted into a MongoDB URI by the compose file. base64 emits / + and
 # =, and the driver rejects all three there — two in three installs died on it.
 check "and is safe to put inside a connection string" "ok" \
-  "$(case "${MONGO_PW}" in *[/:@?\#%+=]*) echo "contains a URI-reserved character" ;; *) echo ok ;; esac)"
+  "$(uri_safe "${MONGO_PW}")"
 
 # Choosing LDAP writes NOTHING: there are no LDAP_* variables any more —
 # directory sign-in is configured inside the application. The wizard's whole
@@ -182,7 +173,24 @@ check "points the operator at Admin → Authentication" "1" \
 # Declined sections leave nothing set.
 check "no mail configured" "" "$(value_of "${OUT}" SMTP_HOST)"
 check "no OIDC configured" "" "$(value_of "${OUT}" OIDC_ISSUER)"
+check "no CA bundle configured" "" "$(value_of "${OUT}" NODE_EXTRA_CA_CERTS)"
 check "AI off" "off" "$(value_of "${OUT}" AGENT_DISPATCHER)"
+
+# Asked, with the bank defaults offered.
+check "session lifetime: the 12-hour default" "12" "$(value_of "${OUT}" SESSION_TTL_HOURS)"
+check "API browser off" "false" "$(value_of "${OUT}" SWAGGER_ENABLED)"
+check "the bundled database is the bundled-mongo profile" "none" "$(value_of "${OUT}" MONGODB_COMPRESSORS)"
+
+# A Jira migration: the worker profile, and the API role that must go with it.
+check "Jira import: the import-worker profile" "bundled-mongo,import-worker" "$(value_of "${OUT}" COMPOSE_PROFILES)"
+check "and WORKER_ROLE=api with it" "api" "$(value_of "${OUT}" WORKER_ROLE)"
+check "the backup ceiling's default" "20" "$(value_of "${OUT}" JIRA_BACKUP_MAX_GB)"
+
+# Never asked, never on: no execution sandbox ships on-premise.
+check "AGENT_EXECUTOR is off" "off" "$(value_of "${OUT}" AGENT_EXECUTOR)"
+check "and the wizard never offers it" "0" "$(printf '%s' "$(tr -d '\r' < "${WORK}/transcript.txt")" | grep -c 'Enable the agent executor' || true)"
+
+check "no <CHANGE_ME_…> placeholder is left" "0" "$(grep -c '^[A-Z_]*=.*<CHANGE_ME' "${OUT}" || true)"
 check "log format" "json" "$(value_of "${OUT}" LOG_FORMAT)"
 # Asked for, not copied from .env.example. It was copied, and the example held
 # a value the application rejects — see tests/env-example.sh.
@@ -194,11 +202,12 @@ check "log level is one the application accepts" "log" "$(value_of "${OUT}" LOG_
 check "sizing chose the 200-user row" "2" "$(value_of "${OUT}" APP_CPU_LIMIT)"
 check "app memory is half the host's 8 GB" "4g" "$(value_of "${OUT}" APP_MEMORY_LIMIT)"
 check "mongo gets the other half" "4g" "$(value_of "${OUT}" MONGO_MEMORY_LIMIT)"
+check "the heap is about 75% of the app's limit" "3072" "$(value_of "${OUT}" APP_HEAP_MB)"
+check "MongoDB's cache about half of its own" "2" "$(value_of "${OUT}" MONGO_CACHE_GB)"
 
 # What install.sh will refuse to start without.
 for key in TASKSENSE_VERSION APP_URL STORAGE_SECRET MONGO_USER MONGO_PASSWORD; do
   check "required present: ${key}" "1" "$(grep -c "^${key}=." "${OUT}")"
 done
 
-printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
-[ "${FAIL}" -eq 0 ]
+finish

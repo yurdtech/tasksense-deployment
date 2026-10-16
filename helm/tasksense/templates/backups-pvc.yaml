@@ -1,0 +1,23 @@
+{{- include "tasksense.validate" . -}}
+{{- if and .Values.backup.enabled (not .Values.backup.persistence.existingClaim) }}
+# mongodump archives — nightly (mongodump-*.archive.gz) and before each
+# migrating upgrade (pre-upgrade-*.archive.gz), each with a .json manifest.
+# Its own claim, mounted only by the backup Jobs: a dump on the same volume as
+# the data it protects goes down with it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tasksense.backupClaimName" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "backup") | nindent 4 }}
+  annotations:
+    # Backups outlive the release on purpose.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.backup.persistence.accessMode }}]
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+  {{- with .Values.backup.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

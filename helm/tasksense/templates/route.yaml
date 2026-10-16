@@ -1,21 +1,36 @@
+{{- include "tasksense.validate" . -}}
 {{- if .Values.route.enabled }}
+{{- /*
+One Route for all traffic. The OpenShift HAProxy router has no request-body
+limit, so the large uploads need no rule of their own here (unlike nginx);
+what they and the live-update streams need is a long timeout. 24h covers both:
+the router's default 30s closes the event stream repeatedly (an interface that
+keeps reconnecting) and cuts off a multi-gigabyte Jira backup upload.
+*/ -}}
+{{- $host := .Values.route.host | default (include "tasksense.appHost" .) }}
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: {{ include "tasksense.fullname" . }}
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
   annotations:
-    # Server-sent events: without a long timeout the router closes the live
-    # update stream every 30 seconds and the interface reconnects in a loop.
-    haproxy.router.openshift.io/timeout: 24h
+    {{- $annotations := merge (deepCopy (.Values.route.annotations | default dict)) (dict "haproxy.router.openshift.io/timeout" "24h") }}
+    {{- range $k, $val := $annotations }}
+    {{ $k }}: {{ toString $val | quote }}
+    {{- end }}
 spec:
-  {{- with .Values.route.host }}
+  {{- with $host }}
+  # APP_URL and the Route must agree, or sign-in redirects and CORS break.
   host: {{ . | quote }}
   {{- end }}
   to:
     kind: Service
     name: {{ include "tasksense.fullname" . }}
+    weight: 100
   port:
     targetPort: http
-  tls: {{- toYaml .Values.route.tls | nindent 4 }}
+  {{- with .Values.route.tls }}
+  tls: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  wildcardPolicy: None
 {{- end }}

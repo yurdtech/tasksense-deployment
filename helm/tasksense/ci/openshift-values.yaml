@@ -1,0 +1,26 @@
+# CI: the OpenShift posture — the overlay's settings (forced, as an offline
+# render cannot detect the cluster), a Route on appUrl's host, NetworkPolicy
+# against the router / openshift-dns, user-workload monitoring.
+openshift:
+  enabled: true
+ingress:
+  enabled: false
+route:
+  enabled: true
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+appUrl: https://tasksense.apps.ocp.bank.internal
+mongodbUri: mongodb://tasksense:0123456789abcdef@mongo.mongodb.svc:27017/?replicaSet=rs0&authSource=admin
+storageSecret: ci-storage-secret-0123456789abcdef0123456789
+firstAdminEmail: admin@bank.internal
+networkPolicy:
+  enabled: true
+  egressCIDRs: [10.20.0.0/16]
+metrics:
+  enabled: true
+  token: ci-metrics-token-0123456789abcdef
+  serviceMonitor:
+    enabled: true
+backup:
+  enabled: true

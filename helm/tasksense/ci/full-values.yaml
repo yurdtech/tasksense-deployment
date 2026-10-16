@@ -1,0 +1,120 @@
+# CI: every optional feature at once — operator-managed Secret, air-gap
+# registry + digest-pinned mongo, worker on RWX, backups with pre-upgrade dump,
+# Ingress (two hosts, the chart 1.0 host form, cert-manager), NetworkPolicy,
+# metrics + ServiceMonitor, CA from an existing ConfigMap + client cert Secret,
+# extra volumes/env, OIDC + SMTP, pull credentials rendered by the chart.
+global:
+  imageRegistry: harbor.bank.internal
+image:
+  tag: 1.1.0
+imagePullSecrets:
+  - harbor-pull
+imageCredentials:
+  create: true
+  registry: harbor.bank.internal
+  username: robot$tasksense
+  password: ci-registry-password
+existingSecret: tasksense-bank-secrets
+appUrl: https://tasksense.bank.internal/
+firstAdminEmail: admin@bank.internal
+heapMb: 3072
+resources:
+  requests:
+    cpu: "1"
+    memory: 2Gi
+  limits:
+    memory: 4Gi
+worker:
+  enabled: true
+  heapMb: 6144
+  resources:
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  nodeSelector:
+    node-role.bank.internal/batch: "true"
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: ocs-storagecluster-cephfs
+  size: 500Gi
+config:
+  mongodbDatabase: tasksense
+  sessionTtlHours: 8
+  swaggerEnabled: false
+  agentDispatcher: off
+  egressAllowlist: [gitlab.bank.internal, llm-gateway.bank.internal]
+  corsAllowedOrigins: https://tasksense-legacy.bank.internal
+  rateLimitStore: mongo
+  reportsMaxTasks: 1000000
+  oidc:
+    issuer: https://adfs.bank.internal/adfs
+    clientId: tasksense
+    label: Continue with ABB SSO
+  smtp:
+    host: smtp.bank.internal
+    port: 25
+    secure: false
+  emailFrom: TaskSense <tasksense@bank.internal>
+extraEnv:
+  MONGODB_COMMAND_MONITORING: "true"
+extraEnvFrom:
+  - secretRef:
+      name: tasksense-llm
+certs:
+  existingConfigMap: bank-ca-bundle
+  existingSecret: tasksense-mongo-client
+  caBundle: ca-bundle.pem
+extraVolumes:
+  - name: audit
+    emptyDir: {}
+extraVolumeMounts:
+  - name: audit
+    mountPath: /app/api/audit
+serviceAccount:
+  annotations:
+    bank.internal/owner: platform-team
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: kube-prometheus-stack
+backup:
+  enabled: true
+  schedule: "30 1 * * *"
+  timeZone: Asia/Baku
+  retentionDays: 14
+  image:
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  persistence:
+    storageClass: thin-csi
+    size: 200Gi
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - tasksense.bank.internal
+    - host: tasksense-legacy.bank.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  annotations:
+    cert-manager.io/cluster-issuer: bank-internal-ca
+    nginx.ingress.kubernetes.io/whitelist-source-range: 10.0.0.0/8
+  tls:
+    - secretName: tasksense-tls
+      hosts: [tasksense.bank.internal, tasksense-legacy.bank.internal]
+networkPolicy:
+  enabled: true
+  egressCIDRs: [10.20.0.0/16, 10.30.5.0/24]
+  extraEgress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mongodb
+      ports:
+        - port: 27017
+  ingressNamespaceSelectors:
+    - kubernetes.io/metadata.name: bank-monitoring
+commonLabels:
+  bank.internal/cost-center: "4711"

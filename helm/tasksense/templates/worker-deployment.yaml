@@ -1,0 +1,80 @@
+{{- include "tasksense.validate" . -}}
+{{- if .Values.worker.enabled }}
+# The import worker: the same image, `node dist/worker.js`, WORKER_ROLE=worker.
+# It runs the Jira backup landings and nothing user-facing — no HTTP listener,
+# no Service, no probes (a crash exits the process and Kubernetes restarts it;
+# the landing lease expires and the next process resumes at its checkpoint).
+# The API runs with WORKER_ROLE=api while this exists.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "worker") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "worker") | nindent 4 }}
+spec:
+  # Exactly one: landings are lease-based, a second worker would only wait.
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "worker") | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "worker") | nindent 8 }}
+        {{- with .Values.worker.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include "tasksense.configChecksum" . }}
+        {{- with .Values.worker.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "tasksense.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ int .Values.worker.terminationGracePeriodSeconds }}
+      {{- with .Values.worker.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" false) | nindent 6 }}
+      {{- include "tasksense.appPodSecurityContext" . | nindent 6 }}
+      initContainers:
+        {{- include "tasksense.prepareDataInitContainer" . | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "tasksense.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # `args`, not `command`: keeps the image's tini as PID 1.
+          args: ["node", "dist/worker.js"]
+          {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
+          env: {{- include "tasksense.processEnv" (dict "root" $ "role" "worker" "heapMb" .Values.worker.heapMb) | nindent 12 }}
+          {{- include "tasksense.envFrom" (dict "root" $ "hook" false) | nindent 10 }}
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            # The SAME claim as the API (ReadWriteMany): the worker lands the
+            # uploads the API staged in TMPDIR.
+            - name: data
+              mountPath: /app/api/data
+            - name: tmp
+              mountPath: /tmp
+            {{- include "tasksense.certsMount" . | nindent 12 }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "tasksense.dataVolume" . | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- include "tasksense.certsVolume" (dict "root" $ "hook" false) | nindent 8 }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

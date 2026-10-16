@@ -1,19 +1,47 @@
+{{- include "tasksense.validate" . -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+{{- /*
+An existing claim keeps its size: a PVC can only grow where its storage class
+allows expansion, and a `helm upgrade` that asks for more on one that does not
+fails outright (chart 1.0 created 20Gi, 1.1 defaults to 50Gi). Resize it
+yourself when the class supports it — NOTES says when the values differ. Access
+modes and the storage class cannot change on a bound claim at all; the render
+stops with the way out instead of letting the API server reject the upgrade.
+*/ -}}
+{{- $name := include "tasksense.dataClaimName" . -}}
+{{- $size := .Values.persistence.size -}}
+{{- $renderClass := .Values.persistence.storageClass -}}
+{{- $existing := lookup "v1" "PersistentVolumeClaim" .Release.Namespace $name -}}
+{{- if $existing -}}
+{{- $size = dig "spec" "resources" "requests" "storage" $size $existing -}}
+{{- $modes := dig "spec" "accessModes" (list) $existing -}}
+{{- if and $modes (not (has (toString .Values.persistence.accessMode) $modes)) -}}
+{{- fail (printf "persistence.accessMode=%s, but the existing claim %s is %s — access modes cannot change on a bound claim. For the worker (ReadWriteMany): create a new RWX claim, copy /app/api/data into it with the API scaled to 0, and set persistence.existingClaim to it. docs/02-INSTALL-KUBERNETES.md, \"The import worker\"." (toString .Values.persistence.accessMode) $name (join "," $modes)) -}}
+{{- end -}}
+{{- $class := dig "spec" "storageClassName" "" $existing -}}
+{{- if and .Values.persistence.storageClass $class (ne (toString .Values.persistence.storageClass) (toString $class)) -}}
+{{- fail (printf "persistence.storageClass=%s, but the existing claim %s uses %s — the class of a bound claim cannot change. Leave persistence.storageClass as %s, or move the data to a new claim and set persistence.existingClaim." (toString .Values.persistence.storageClass) $name $class $class) -}}
+{{- end -}}
+{{- $renderClass = .Values.persistence.storageClass | default $class -}}
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "tasksense.fullname" . }}-data
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  name: {{ $name }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "data") | nindent 4 }}
   annotations:
     # Uploaded files live here. Deleting the release must not delete them —
     # `helm uninstall` is not a decision to discard a customer's attachments.
     helm.sh/resource-policy: keep
+    {{- with .Values.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   accessModes: [{{ .Values.persistence.accessMode }}]
   resources:
     requests:
-      storage: {{ .Values.persistence.size }}
-  {{- if .Values.persistence.storageClass }}
-  storageClassName: {{ .Values.persistence.storageClass }}
+      storage: {{ $size }}
+  {{- with $renderClass }}
+  storageClassName: {{ . | quote }}
   {{- end }}
 {{- end }}

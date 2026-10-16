@@ -1,60 +1,85 @@
-{{- if and .Values.migrations.hook.enabled (eq .Values.migrations.onBoot "manual") }}
+{{- include "tasksense.validate" . -}}
+{{- if .Values.migrations.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "tasksense.fullname" . }}-migrate
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "migrate") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "migrate") | nindent 4 }}
   annotations:
-    # Before the pods, on install and on upgrade. With MIGRATE_ON_BOOT=manual
-    # the application refuses to start while anything is pending, so this Job is
-    # what makes the schema ready — once, from one place, rather than from
-    # whichever replica happens to boot first.
+    # Before the new pod, on install and on upgrade. With MIGRATE_ON_BOOT=manual
+    # the application refuses to start while anything is pending, so this Job
+    # is what makes the schema ready — once, from one place.
     #
     # The runner is safe under concurrency on its own (the ledger's unique _id
-    # is the lock), so this is not the thing that prevents a double-apply. What
-    # it buys is that a failed migration fails the *upgrade*, visibly, instead
-    # of leaving pods crash-looping while the release reports success.
+    # is the lock), so this is not what prevents a double-apply. What it buys
+    # is that a failed migration fails the *upgrade*, visibly, instead of
+    # leaving the pod crash-looping while the release reports success.
+    #
+    # Weight -5: after the hook config copies (-10) and the pre-upgrade dump
+    # (-8). Keep `helm --timeout` above activeDeadlineSeconds.
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
+    # Kept after success so its log can be read; ttlSecondsAfterFinished
+    # removes it, and the next upgrade replaces it.
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  backoffLimit: {{ .Values.migrations.hook.backoffLimit }}
-  # Kept for a day so a failed migration can still be read after the fact.
-  ttlSecondsAfterFinished: 86400
+  backoffLimit: {{ int .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ int .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ int .Values.migrations.ttlSecondsAfterFinished }}
   template:
     metadata:
-      labels: {{- include "tasksense.selectorLabels" . | nindent 8 }}
+      # NOT the API's labels: a pod carrying them would be selected by the
+      # Service and receive user traffic.
+      labels: {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "migrate") | nindent 8 }}
+      {{- with .Values.migrations.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       restartPolicy: Never
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets: {{- toYaml . | nindent 8 }}
-      {{- end }}
-      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      serviceAccountName: {{ include "tasksense.hookServiceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" true) | nindent 6 }}
+      {{- include "tasksense.appPodSecurityContext" . | nindent 6 }}
       containers:
         - name: migrate
           image: {{ include "tasksense.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          command: ["node", "dist/database/migrations/cli.js", "up"]
-          env: {{- include "tasksense.env" . | nindent 12 }}
-          envFrom:
-            # The hook copy, not the release's Secret — that one does not exist
-            # yet when hooks run. See job-migrate-secret.yaml. An operator-
-            # supplied `existingSecret` is already there, so it is used directly.
-            - secretRef:
-                name: {{ if .Values.existingSecret }}{{ .Values.existingSecret }}{{ else }}{{ include "tasksense.fullname" . }}-migrate{{ end }}
-            {{- with .Values.extraEnvFrom }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
+          # `args`: keeps the image's tini as PID 1.
+          args: ["node", "dist/database/migrations/cli.js", "up"]
+          {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
+          env: {{- include "tasksense.processEnv" (dict "root" $ "role" "migrate" "heapMb" .Values.migrations.heapMb) | nindent 12 }}
+          # The hook copies, not the release's ConfigMap/Secret — those do not
+          # exist yet when hooks run on a first install (hook-resources.yaml).
+          {{- include "tasksense.envFrom" (dict "root" $ "hook" true) | nindent 10 }}
+          resources: {{- toYaml .Values.migrations.resources | nindent 12 }}
           volumeMounts:
+            # TMPDIR=/app/api/data/tmp, like the API — but the data claim may
+            # not exist yet on a first install, and migrations stage nothing
+            # large, so it is scratch space here.
+            - name: scratch
+              mountPath: /app/api/data/tmp
             - name: tmp
               mountPath: /tmp
+            {{- include "tasksense.certsMount" . | nindent 12 }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 1Gi
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+        {{- include "tasksense.certsVolume" (dict "root" $ "hook" true) | nindent 8 }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}

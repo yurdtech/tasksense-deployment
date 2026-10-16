@@ -88,12 +88,13 @@ edit_candidate() {
 
   Opening ${C_BOLD}${editor}${C_OFF}.
 
-  The file is ${C_BOLD}.env.example${C_OFF} with its explanations intact. Either fill in the
-  values marked REQUIRED, or select everything and paste a configuration you
-  already have.
+  The file is ${C_BOLD}.env.example${C_OFF} with its explanations intact. Either replace
+  every <CHANGE_ME_…> value, or select everything and paste a configuration
+  you already have.
 
-  ${C_DIM}Six values have no default: TASKSENSE_VERSION, APP_URL, FIRST_ADMIN_EMAIL,
-  STORAGE_SECRET, MONGO_USER, MONGO_PASSWORD.${C_OFF}
+  ${C_DIM}Four values have no default: APP_URL, FIRST_ADMIN_EMAIL, STORAGE_SECRET and
+  MONGO_PASSWORD. With your own MongoDB, set MONGODB_URI instead of the last
+  one, remove bundled-mongo from COMPOSE_PROFILES and empty MONGO_USER.${C_OFF}
 
   ${C_DIM}Generate the two secrets with:
     openssl rand -base64 32     # STORAGE_SECRET
@@ -106,28 +107,21 @@ EOF
     "${editor}" "${CANDIDATE}" || warn "the editor exited with an error"
     chmod 600 "${CANDIDATE}"
 
-    local blank=""
-    local key value
-    for key in TASKSENSE_VERSION APP_URL FIRST_ADMIN_EMAIL STORAGE_SECRET MONGO_USER MONGO_PASSWORD; do
-      value="$(sed -n "s/^${key}=//p" "${CANDIDATE}" | tail -n1)"
-      [ -n "${value}" ] || blank="${blank} ${key}"
-    done
+    # The required values for the database the file describes, and any active
+    # line still holding the example's <CHANGE_ME_…> marker — the same checks
+    # preflight makes, so the editor route cannot hand it a file it refuses.
+    local unfinished placeholder
+    unfinished="$(unfinished_keys "${CANDIDATE}" | tr '\n' ' ')"
+    placeholder="$(placeholder_keys "${CANDIDATE}" | tr '\n' ' ')"
 
-    # The example ships STORAGE_SECRET and MONGO_PASSWORD empty, so an untouched
-    # file fails the check above. This catches the other half: a file where the
-    # placeholders were left as they came.
-    local placeholder=""
-    grep -q '^APP_URL=https://tasksense.bank.internal$' "${CANDIDATE}" && placeholder="APP_URL"
-    grep -q '^FIRST_ADMIN_EMAIL=admin@bank.internal$' "${CANDIDATE}" && placeholder="${placeholder} FIRST_ADMIN_EMAIL"
-
-    if [ -z "${blank}" ] && [ -z "${placeholder}" ]; then
+    if [ -z "${unfinished}" ] && [ -z "${placeholder}" ]; then
       ok "the required values are set"
       return 0
     fi
 
     printf '\n'
-    [ -n "${blank}" ] && warn "still empty:${blank}"
-    [ -n "${placeholder}" ] && warn "still the example's placeholder:${placeholder}"
+    [ -n "${unfinished}" ] && warn "still empty or a placeholder: ${unfinished}"
+    [ -n "${placeholder}" ] && warn "still the example's <CHANGE_ME_…> marker: ${placeholder}"
     ui_text "The application refuses to start without these, and it reports them all at once — which is a worse place to read them than here."
     printf '\n'
     ui_menu "Now?"       "Back to the editor|fix them"       "Carry on anyway|I know what I am doing"       "Stop|the draft is kept"
@@ -154,8 +148,9 @@ cat <<EOF
     ${C_DIM}5${C_OFF}  test the answers against your real directory and mail relay
     ${C_DIM}6${C_OFF}  review, then install
 
-  Nothing is written to this machine until step 6, and nothing is sent
-  anywhere at any point.
+  Nothing is written to this machine until step 6 — apart from a CA
+  certificate, if you point at one, copied into compose/certs/ — and nothing
+  is sent anywhere at any point.
 
 EOF
 ui_yesno "Ready?" y || { note "nothing was changed"; exit 0; }
@@ -198,7 +193,9 @@ ui_step 1 9 "Requirements"
 ui_text "Checking this host before anything else, so a missing dependency surfaces now rather than halfway through."
 printf '\n'
 
-if ! "${SCRIPT_DIR}/preflight.sh"; then
+# The host only: there is no configuration yet. The configuration gets the full
+# check at the review step, before it is written.
+if ! "${SCRIPT_DIR}/preflight.sh" --host-only; then
   printf '\n'
   ui_text "Some checks failed. They are worth fixing first — an install on a host that fails preflight usually fails later, somewhere less obvious."
   ui_yesno "Continue anyway?" n || exit 1
@@ -252,12 +249,14 @@ case "${UI_CHOICE}" in
     ok "found $(find "${ROOT_DIR}/images" -name '*.tar' | wc -l | tr -d ' ') image archive(s)"
     ;;
   3)
-    ui_text "Point the configuration at your mirror. If you have not copied the images across yet, the script that does it runs from a machine that can reach both:"
+    ui_text "Point the configuration at your mirror — both images come from it, TaskSense and MongoDB. If you have not copied them across yet, the script that does it runs from a machine that can reach both (or from the offline bundle, inside):"
     ui_hint "./scripts/load-images.sh --registry harbor.bank.internal/tasksense"
     printf '\n'
-    ui_ask "Your image path" "harbor.bank.internal/tasksense/tasksense" \
-      "Registry, project and repository — without the tag. The version is set separately in the next step."
-    MIRROR_IMAGE="${UI_VALUE}"
+    ui_ask "Your registry path" "harbor.bank.internal/tasksense" \
+      "Registry and project, without an image name or tag: <path>/tasksense and <path>/mongo are used. The version is set separately in the next step."
+    MIRROR_PREFIX="${UI_VALUE%/}"
+    # Somebody pasting the full image path means the same thing.
+    MIRROR_PREFIX="${MIRROR_PREFIX%/tasksense}"
     ;;
 esac
 
@@ -278,10 +277,13 @@ else
     || { note "your answers are kept — re-run and choose Resume"; exit 1; }
 fi
 
-if [ -n "${MIRROR_IMAGE:-}" ]; then
-  # Written after the questions so it survives the render.
-  printf 'TASKSENSE_IMAGE=%s\n' "${MIRROR_IMAGE}" >> "${CANDIDATE}"
-  ok "image source: ${MIRROR_IMAGE}"
+if [ -n "${MIRROR_PREFIX:-}" ]; then
+  # Both, or the database image would still be fetched from Docker Hub — which
+  # a host that needs a mirror cannot reach. Set in place, after the questions,
+  # so the render keeps them where the example documents them.
+  env_set "${CANDIDATE}" TASKSENSE_IMAGE "${MIRROR_PREFIX}/tasksense"
+  env_set "${CANDIDATE}" MONGO_IMAGE "${MIRROR_PREFIX}/mongo"
+  ok "images from your registry: ${MIRROR_PREFIX}/tasksense, ${MIRROR_PREFIX}/mongo"
 fi
 
 # ── 6. Pull ──────────────────────────────────────────────────────────────────
@@ -376,10 +378,11 @@ done
 
 ui_step 7 9 "Review"
 
-ADMIN="$(sed -n 's/^FIRST_ADMIN_EMAIL=//p' "${CANDIDATE}" | tail -n1)"
-URL="$(sed -n 's/^APP_URL=//p' "${CANDIDATE}" | tail -n1)"
-BIND="$(sed -n 's/^BIND_ADDRESS=//p' "${CANDIDATE}" | tail -n1)"
-PORT="$(sed -n 's/^HTTP_PORT=//p' "${CANDIDATE}" | tail -n1)"
+ADMIN="$(env_value FIRST_ADMIN_EMAIL "${CANDIDATE}")"
+URL="$(env_value APP_URL "${CANDIDATE}")"
+BIND="$(env_value BIND_ADDRESS "${CANDIDATE}")"
+PORT="$(env_value HTTP_PORT "${CANDIDATE}")"
+PROFILES="$(env_value COMPOSE_PROFILES "${CANDIDATE}")"
 
 cat <<EOF
 
@@ -390,6 +393,7 @@ cat <<EOF
     Address        ${URL}
     Listening on   ${BIND}:${PORT}
     Administrator  ${ADMIN}
+    Profiles       ${PROFILES:-(none — your own MongoDB)}
 
   ${C_DIM}The file holds your database password and storage key. It is written
   with mode 600 — readable only by you.${C_OFF}
@@ -403,7 +407,9 @@ fi
 
 # Before anything is written, because the failure it prevents is a fifteen-minute
 # detour through a stack trace that names neither the volume nor the password.
-if mongo_volume_exists; then
+# Asked of the candidate: whether a bundled database is part of what is about
+# to be installed is one of its answers.
+if ENV_FILE="${CANDIDATE}" mongo_volume_exists; then
   printf '\n'
   warn "${MONGO_VOLUME} already exists on this host"
   ui_text "MongoDB sets its username and password only when it first creates its data directory. That volume kept the credentials it was made with, so the password just generated will be refused — the application will start, fail to authenticate, and say so without mentioning the volume."
@@ -422,14 +428,13 @@ if mongo_volume_exists; then
       printf '\n  Type %sDELETE%s to confirm: ' "$C_BOLD" "$C_OFF"
       IFS= read -r typed
       if [ "${typed}" = "DELETE" ]; then
-        # Not `compose down -v`: the compose file's `env_file: .env` makes any
-        # compose command fail before compose/.env exists — which on a first
-        # install is exactly now — and a swallowed failure here reports
-        # "removed" over a volume that survives to break the install.
-        compose --env-file "${CANDIDATE}" down >/dev/null 2>&1 || true
-        # The compose down above fails whenever compose/.env does not exist yet,
-        # so take the containers holding the volumes down by their fixed names.
-        "${RUNTIME}" rm -f tasksense-app tasksense-mongo >/dev/null 2>&1 || true
+        # Not `compose down -v`: a swallowed failure there reports "removed"
+        # over a volume that survives to break the install. compose is pointed
+        # at the candidate (compose/.env may not exist yet), and the containers
+        # holding the volumes are then removed by their fixed names regardless —
+        # a service whose profile is off is not in the project `down` sees.
+        ENV_FILE="${CANDIDATE}" compose down >/dev/null 2>&1 || true
+        "${RUNTIME}" rm -f tasksense-app tasksense-worker tasksense-migrate tasksense-mongo >/dev/null 2>&1 || true
         "${RUNTIME}" volume rm tasksense-app-data >/dev/null 2>&1 || true
         if "${RUNTIME}" volume rm "${MONGO_VOLUME}" >/dev/null 2>&1; then
           ok "removed"
@@ -458,6 +463,22 @@ if mongo_volume_exists; then
       ;;
   esac
 fi
+
+# The configuration checks preflight makes on compose/.env — placeholders,
+# profiles against the database settings, the CA files, the worker's role —
+# made on the candidate now, while fixing one is still a menu choice.
+printf '\n'
+while ! TASKSENSE_ENV_FILE="${CANDIDATE}" "${SCRIPT_DIR}/preflight.sh" --offline; do
+  ui_menu "The configuration has problems (marked ${MARK_BAD} above)" \
+    "Fix it|change the settings, then check again" \
+    "Install anyway|you know why and it is not a problem" \
+    "Stop|your answers are kept"
+  case "${UI_CHOICE}" in
+    1) "${WIZARD_DIR}/configure.sh" --edit-candidate "${CANDIDATE}" || true ;;
+    2) warn "installing with failing checks"; break ;;
+    3) note "your answers are kept — re-run and choose Resume"; exit 0 ;;
+  esac
+done
 
 ui_yesno "Install now?" y || { note "nothing was written"; exit 0; }
 
@@ -513,3 +534,9 @@ cat <<EOF
   lives behind ./tasksense${C_OFF}
 
 EOF
+case ",${PROFILES}," in
+  *,import-worker,*)
+    note "the import worker is running beside the API — Jira site backups land in their own process"
+    note "set the reverse proxy's body limit for the import paths to JIRA_BACKUP_MAX_GB — examples/nginx.conf"
+    ;;
+esac

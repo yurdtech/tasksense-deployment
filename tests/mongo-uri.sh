@@ -22,20 +22,13 @@
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${TASKSENSE_TEST_IMAGE:-ghcr.io/yurdtech/tasksense:1.0.0}"
+# shellcheck source=helpers/common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers/common.sh"
 DRAWS="${DRAWS:-100}"
 
-command -v docker >/dev/null 2>&1 || { printf '\n  SKIPPED: docker is not installed\n\n'; exit 0; }
+docker_usable || skip "no container daemon"
 
 printf '\nMongoDB connection string\n\n'
-
-PASS=0
-FAIL=0
-check() {
-  if [ "$2" = "$3" ]; then printf '  \033[32m✓\033[0m %s\n' "$1"; PASS=$((PASS + 1))
-  else printf '  \033[31m✗\033[0m %s\n      expected: %s\n      actual:   %s\n' "$1" "$2" "$3"; FAIL=$((FAIL + 1)); fi
-}
 
 # ── 1. what the generator produces ───────────────────────────────────────────
 # Through ui_secret itself, not a copy of it: the point is what the wizard
@@ -45,9 +38,10 @@ check() {
 # openssl is not in bash:5, and without it ui_generate_secret used to return an
 # empty string — which every assertion below then passed, because an empty
 # password makes a URI that parses. It refuses now, and the length check is here
-# to catch the same shape of silence if it ever returns.
-PASSWORDS="$(docker run --rm -v "${ROOT}:/w:ro" -w /w -e DRAWS="${DRAWS}" bash:5 bash -c '
-  apk add --no-cache openssl >/dev/null 2>&1
+# to catch the same shape of silence if it ever returns. The wizard's test
+# image has openssl, so nothing is installed at run time.
+wizard_test_image || skip "could not build ${WIZARD_TEST_IMAGE}"
+PASSWORDS="$(docker run --rm -v "${ROOT}:/w:ro" -w /w -e DRAWS="${DRAWS}" "${WIZARD_TEST_IMAGE}" bash -c '
   . scripts/lib.sh
   . scripts/ui.sh
   # ui_generate_secret is the function ui_secret calls. Reimplementing it here
@@ -76,11 +70,9 @@ fi
 
 # ── 2. the driver's own verdict ──────────────────────────────────────────────
 
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1 && ! docker pull -q "${IMAGE}" >/dev/null 2>&1; then
-  printf '\n  \033[33mSKIPPED\033[0m the driver check — %s is not available here.\n' "${IMAGE}"
-  printf '  Sign in first:  docker login ghcr.io -u yurdtech\n\n'
-  printf '  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
-  [ "${FAIL}" -eq 0 ]
+if ! IMAGE="$(app_test_image)"; then
+  printf '\n  \033[33mSKIPPED\033[0m the driver check — ghcr.io/yurdtech/tasksense:%s is not here and GHCR_TOKEN is not set.\n' "$(example_version)"
+  finish
   exit $?
 fi
 
@@ -114,5 +106,4 @@ VERDICT="$(printf 'aB3+xY/9zQ==\n' | docker run --rm -i --entrypoint node "${IMA
 ')"
 check "and still rejects the base64 password that caused this" "1" "${VERDICT}"
 
-printf '\n  %s passed, %s failed\n\n' "${PASS}" "${FAIL}"
-[ "${FAIL}" -eq 0 ]
+finish

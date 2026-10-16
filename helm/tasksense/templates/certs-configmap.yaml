@@ -1,0 +1,16 @@
+{{- include "tasksense.validate" . -}}
+{{- if .Values.certs.files }}
+# Inline PEMs from certs.files, mounted read-only at /certs (with any
+# certs.existingConfigMap / certs.existingSecret) in every TaskSense pod.
+# Certificates are public; private keys belong in certs.existingSecret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "certs") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "config") | nindent 4 }}
+data:
+  {{- range $name, $pem := .Values.certs.files }}
+  {{ $name }}: |
+    {{- $pem | trim | nindent 4 }}
+  {{- end }}
+{{- end }}

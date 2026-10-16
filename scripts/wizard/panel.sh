@@ -39,8 +39,15 @@ panel_status() {
   running_version | sed 's/^/    /' || true
   printf '    %sconfigured: %s%s\n' "$C_DIM" "$(env_value TASKSENSE_VERSION)" "$C_OFF"
 
+  local profiles; profiles="$(env_profiles)"
+  printf '    %sprofiles: %s%s\n' "$C_DIM" "${profiles:-(none — your own MongoDB)}" "$C_OFF"
+  case "$(schema_state)" in
+    ahead) warn "the database schema is AHEAD of the running version — an application-only rollback; see docs/08-UPGRADE.md" ;;
+  esac
+
   printf '\n  %sContainers%s\n' "$C_BOLD" "$C_OFF"
-  compose ps | sed 's/^/    /'
+  # -a: the one-shot migrate container is meant to have exited (0).
+  compose ps -a | sed 's/^/    /'
 
   printf '\n  %sDisk%s\n' "$C_BOLD" "$C_OFF"
   local data="${COMPOSE_DIR}/data"
@@ -89,14 +96,19 @@ panel_upgrade() {
 
   Currently on ${C_BOLD}${current}${C_OFF}.
 
-  An upgrade backs up first, pulls the new image, restarts, and waits for
-  health. If the new version does not come up, it puts ${current} back
-  automatically and stops — your data is not touched by a failed upgrade.
+  An upgrade checks the configuration, fetches the new images while
+  ${current} keeps serving, stops the application, takes a backup, runs the
+  new version's migrations, starts it and waits for health.
+
+  If it fails before the migrations, ${current} is started again and nothing
+  has changed. If it fails after them, it offers to restore that backup
+  together with ${current} — the application was stopped before the backup,
+  so no change made by users is lost.
 
   Releases: https://github.com/yurdtech/tasksense-deployment/releases
 
 EOF
-  ui_ask "Version to upgrade to" "" "The tag from the release page, for example 1.1.0 — without a leading v."
+  ui_ask "Version to upgrade to" "" "The tag from the release page, for example 1.2.0 — without a leading v. Skipping releases is fine; going back is Roll back."
   local target="${UI_VALUE}"
 
   local offline=()
@@ -109,20 +121,36 @@ EOF
 
 panel_rollback() {
   ui_step 1 1 "Roll back"
-  ui_text "Puts the previous version's image back. It does NOT restore data: if the newer version ran a migration, the older code may not understand the database it finds. When in doubt, restore the backup the upgrade took instead."
-  ui_yesno "Roll back anyway?" n || return 0
-  "${SCRIPT_DIR}/rollback.sh"
+  local previous; previous="$(recorded_previous_version)"
+  if [ -z "${previous}" ]; then
+    warn "no previous version is recorded — rollback.sh <version> names one by hand"
+    return 0
+  fi
+  ui_text "Back to ${previous}. The newer version's migrations may have changed the database into a shape ${previous} cannot read, so the usual way back restores the backup the upgrade took just before — everything users changed since then is lost (a safety copy of today's state is taken first)."
+  ui_menu "How?" \
+    "With the data|restore the pre-upgrade backup — the safe way" \
+    "Application only|keep today's data — only if no migration ran" \
+    "Cancel|"
+  case "${UI_CHOICE}" in
+    1) "${SCRIPT_DIR}/rollback.sh" ;;
+    2) "${SCRIPT_DIR}/rollback.sh" --app-only ;;
+    *) return 0 ;;
+  esac
 }
 
 # ── data ─────────────────────────────────────────────────────────────────────
 
 panel_backup() {
   ui_step 1 1 "Backup"
-  ui_text "Takes a full, restorable copy: database, uploaded files and configuration. The archive contains your database password and the storage encryption key — store it where you store those."
+  ui_text "Takes a full, restorable copy: database (bundled or your own), uploaded files and configuration. The archive contains database credentials and the storage encryption key — store it where you store those."
   printf '\n'
   ui_ask "Where to write it" "${ROOT_DIR}/backups" \
     "A directory. On a production host this should be a mount you back up off the machine — a copy on the same disk does not survive the disk."
-  "${SCRIPT_DIR}/backup.sh" --output "${UI_VALUE}"
+  local out="${UI_VALUE}"
+  local -a args=(--output "${out}")
+  ui_text "Taken live, the copy is good for a nightly backup; with the application stopped for the minute it takes, it is exact."
+  ui_yesno "Stop the application during the dump?" n && args+=(--stop-app)
+  "${SCRIPT_DIR}/backup.sh" "${args[@]}"
 }
 
 panel_restore() {
@@ -201,7 +229,10 @@ panel_uninstall() {
 
 EOF
   ui_yesno "Remove the containers?" n || return 0
-  compose down
+  compose down --remove-orphans
+  # A service whose profile was switched off since it was created is not part
+  # of the project any more as far as `down` is concerned.
+  "${RUNTIME}" rm -f "${APP_CONTAINER}" "${WORKER_CONTAINER}" tasksense-migrate "${MONGO_CONTAINER}" >/dev/null 2>&1 || true
   ok "containers removed"
 
   printf '\n'
@@ -216,7 +247,8 @@ EOF
   local typed; IFS= read -r typed
   [ "${typed}" = "DELETE" ] || { ok "cancelled — data kept"; return 0; }
 
-  compose down -v
+  compose down -v --remove-orphans
+  "${RUNTIME}" volume rm "${APP_VOLUME}" "${MONGO_VOLUME}" >/dev/null 2>&1 || true
   rm -rf "${COMPOSE_DIR}/data"
   ok "data deleted"
   note "${ENV_FILE} was left in place — it holds your secrets; remove it yourself"
@@ -250,7 +282,7 @@ panel_menu() {
       items+=("Status|health, version, containers, disk")
       items+=("Logs|follow the application log")
       items+=("Configure|change settings and restart")
-      items+=("Upgrade|backup, pull, restart, verify — rolls back on failure")
+      items+=("Upgrade|preflight, backup, migrate, verify — with a way back")
       items+=("Backup|database, files and configuration")
       items+=("Restore|from a backup archive")
       items+=("Diagnostics|a bundle for support, secrets removed")

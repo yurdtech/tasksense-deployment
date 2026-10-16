@@ -1,13 +1,20 @@
+{{- include "tasksense.validate" . -}}
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "tasksense.fullname" . }}
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
   ports:
     - name: http
-      port: {{ .Values.service.port }}
+      port: {{ int .Values.service.port }}
       targetPort: http
       protocol: TCP
-  selector: {{- include "tasksense.selectorLabels" . | nindent 4 }}
+  # component=api: only the API pod serves HTTP — never the worker or a Job.
+  selector:
+    {{- include "tasksense.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api

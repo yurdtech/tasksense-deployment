@@ -1,46 +1,28 @@
-# OpenShift overrides.
+# OpenShift overlay. Put it BEFORE your own values file, so yours wins:
 #
-#   helm install tasksense ./helm/tasksense \
-#     -f helm/tasksense/values-openshift.yaml -f my-values.yaml
+#   helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+#     -n tasksense -f values-openshift.yaml -f my-values.yaml --wait --timeout 30m
 #
-# The image already runs under the `restricted-v2` SCC unmodified — it is built
-# with its files owned by group 0 and group-writable where it needs to write, so
-# an arbitrary uid can use it. No custom SCC, no ServiceAccount privileges.
+# The image already runs under the `restricted-v2` SCC unmodified — its files
+# are owned by group 0 and group-writable where it writes, so the arbitrary uid
+# OpenShift assigns can use them. No custom SCC, no ServiceAccount privileges.
 
-podSecurityContext:
-  # Cleared, not set. OpenShift assigns a uid from the namespace's range and
-  # rejects a pod that asks for a specific one under restricted-v2. `fsGroup`
-  # is likewise assigned; naming either is how a chart that "supports
-  # OpenShift" fails to admit.
-  runAsNonRoot: true
-  runAsUser: null
-  fsGroup: null
-  seccompProfile:
-    type: RuntimeDefault
+# Forces the OpenShift posture even where the chart cannot detect it (helm
+# template, a GitOps renderer without cluster access): no runAsUser, runAsGroup
+# or fsGroup is pinned — the SCC assigns them from the namespace's range, and
+# under restricted-v2 a pod asking for a specific uid is rejected at admission.
+# The NetworkPolicy also switches to the router / openshift-dns / user-workload
+# monitoring namespaces.
+openshift:
+  enabled: true
 
-containerSecurityContext:
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: [ALL]
-
-# Routes rather than Ingress. OpenShift supports both; Route is what the
-# cluster's own router serves and what `oc get route` will show you.
+# Routes rather than Ingress: what the cluster's own router serves and what
+# `oc get route` shows. route.host defaults to appUrl's host.
 ingress:
   enabled: false
 
 route:
   enabled: true
-  host: ""            # empty lets OpenShift generate one from the app name
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
-
-# The upstream defaults name namespaces that do not exist on OpenShift, and a
-# NetworkPolicy pointing at the wrong ones blocks the router and DNS outright.
-networkPolicy:
-  ingressControllerNamespace: openshift-ingress
-  monitoringNamespace: openshift-monitoring
-  dns:
-    namespace: openshift-dns
-    port: 5353

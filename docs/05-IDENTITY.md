@@ -5,6 +5,16 @@ How to connect TaskSense to your identity provider.
 Whatever you configure, **keep at least one local administrator account**. An
 identity-provider outage should not lock you out of your own installation.
 
+| Method | Configured in | Restart needed |
+| --- | --- | --- |
+| Active Directory / LDAP | the application — Admin → Authentication | no |
+| OIDC (Keycloak, AD FS, Entra ID, Okta) | `compose/.env` / Helm values and Secret | yes |
+| Local passwords | always on unless an admin turns them off | — |
+| Session lifetime, password minimum | `SESSION_TTL_HOURS`; Admin → Security | no (Admin), yes (`.env`) |
+
+What to ask your directory and IdP teams for, before the install window:
+[18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md#5-identity-ldaps-and-oidc).
+
 ---
 
 ## Active Directory / LDAP
@@ -131,11 +141,24 @@ docker compose -f compose/docker-compose.yml logs app | grep -i ldap
 
 ---
 
-## OIDC — Keycloak, AD FS, Azure AD, Okta
+## OIDC — Keycloak, AD FS, Entra ID, Okta
 
-One configuration covers all of them; only the issuer URL differs.
+One configuration covers all of them; only the issuer URL differs. OIDC is the
+way to get **multi-factor authentication** — it is enforced by your IdP, not by
+TaskSense.
 
-```bash
+### 1. Register the client at your IdP
+
+| | Value |
+| --- | --- |
+| Client type | Confidential, authorization-code flow |
+| Redirect URI | `https://tasksense.bank.internal/api/v1/auth/oidc/callback` — exactly `<APP_URL>/api/v1/auth/oidc/callback` |
+| Scopes | `openid`, `profile`, `email` |
+| Claims | `email` is **required** — it is how the identity is joined to a TaskSense account. Issue only verified addresses: TaskSense does not check `email_verified` |
+
+### 2. Configure TaskSense
+
+```dotenv
 OIDC_ISSUER=https://sso.bank.internal/realms/corporate
 OIDC_CLIENT_ID=tasksense
 OIDC_CLIENT_SECRET=<from your IdP>
@@ -143,9 +166,30 @@ OIDC_REDIRECT_URI=https://tasksense.bank.internal/api/v1/auth/oidc/callback
 OIDC_LABEL=Sign in with corporate account
 ```
 
+On Helm, `OIDC_CLIENT_SECRET` goes in the Secret, the rest in values.
+
+If the IdP's certificate is issued by your own CA, the application must trust
+it — discovery and the token exchange are server-to-server HTTPS calls:
+
+```dotenv
+NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem      # the file in compose/certs/
+```
+
+Apply with `docker compose -f compose/docker-compose.yml up -d`.
+
+### 3. Verify
+
+```bash
+curl -s https://sso.bank.internal/realms/corporate/.well-known/openid-configuration | head -c 200
+```
+
+Expected, from the TaskSense host: JSON starting with `{"issuer":"https://sso.bank.internal/realms/corporate"`.
+Then open TaskSense: the sign-in page shows the `OIDC_LABEL` button; sign in
+with it and you land on the board.
+
 Register `OIDC_REDIRECT_URI` at the provider **exactly** as written, including
-scheme and trailing path. A mismatch is the single most common failure and the
-error message comes from the IdP, not from us.
+scheme and trailing path. A mismatch is the single most common failure, and the
+error page comes from the IdP, not from us.
 
 Issuer URLs:
 
@@ -153,14 +197,16 @@ Issuer URLs:
 | --- | --- |
 | Keycloak | `https://<host>/realms/<realm>` |
 | AD FS | `https://<host>/adfs` |
-| Azure AD | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
+| Entra ID (Azure AD) | `https://login.microsoftonline.com/<tenant-id>/v2.0` |
 | Okta | `https://<org>.okta.com` |
 
-Scopes: `openid`, `profile`, `email`. The email claim is required — it is how
-the identity is joined to a TaskSense account.
+> Entra ID is a cloud service. An installation with no route to the internet
+> cannot use it; use AD FS, Keycloak or LDAP against your on-premise directory
+> instead.
 
-> Azure AD is a cloud service. An installation with no route to the internet
-> cannot use it; use AD FS or LDAP against your on-premise directory instead.
+Known simplifications of the OIDC implementation — no PKCE, identity read from
+the userinfo endpoint — are listed in
+[06-SECURITY](06-SECURITY.md#known-limitations).
 
 ---
 
@@ -172,13 +218,32 @@ closed by default on-premise**: accounts come from the directory, from an
 admin invite, or from the one bootstrap exception — `FIRST_ADMIN_EMAIL`, whose
 unclaimed account keeps the register form reachable until its password is set.
 An admin can reopen self-registration on the same screen. Password
-requirements are set in Admin → Access control (minimum length, 6–32
-characters); the policy applies to new accounts as well as to password
-changes.
+requirements are set in Admin → Security (minimum length, 6–32 characters);
+the policy applies to new accounts as well as to password changes. There is no
+complexity or history rule — directory accounts follow your AD policy instead.
 
-There is no self-service password reset — no assumption is made that the
-installation can send email. An administrator sets a password in
-Admin → Members, which ends every session on that account.
+"Forgot password?" works for local accounts only when SMTP is configured: a
+single-use link valid for one hour, which ends every session on the account.
+Without mail, an administrator sets a password in Admin → Users, which also
+ends every session on that account.
+
+Ten failed sign-ins for one identifier within 15 minutes lock that identifier
+until the window has passed; sign-in routes are also limited to ten requests a
+minute per client address.
+
+---
+
+## Sessions
+
+| | |
+| --- | --- |
+| `SESSION_TTL_HOURS` | How long a sign-in lasts. Default **720** (30 days) in 1.1.0 — earlier versions defaulted to never. **Banks: 12.** |
+| Admin → Security → Session lifetime | Overrides the environment value for the workspace, without a restart. Empty follows the server default; `0` means never. |
+| Admin → Security → sign everyone out | Ends every session except yours — use it after shortening the lifetime, because sessions issued before a lifetime applied carry no expiry. |
+
+A disabled directory account cannot sign in again, but a session it already
+has lives until it expires. The session lifetime is therefore your
+deprovisioning delay; set it to what your access-control policy allows.
 
 ---
 
@@ -197,10 +262,10 @@ curl -H "Authorization: Bearer tsk_..." https://tasksense.bank.internal/api/v1/t
 ## Not supported
 
 - **SAML 2.0** — if your IdP only speaks SAML, raise it before signing. OIDC
-  covers Keycloak, AD FS 2016+, Azure AD and Okta.
+  covers Keycloak, AD FS 2016+, Entra ID and Okta.
 - **SCIM provisioning** — accounts are created on first sign-in and their role
   follows directory group membership. There is no push from your IdP, so a
   disabled directory account cannot sign in, but an existing session survives
-  until it expires. Set `SESSION_TTL_HOURS` accordingly.
+  until it expires. Set `SESSION_TTL_HOURS` accordingly (banks: 12).
 - **Multi-factor authentication inside TaskSense** — get it from your identity
-  provider by using OIDC or LDAP for sign-in.
+  provider by signing in through OIDC. LDAP sign-in is password-only.

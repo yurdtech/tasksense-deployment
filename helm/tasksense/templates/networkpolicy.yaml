@@ -1,35 +1,83 @@
+{{- include "tasksense.validate" . -}}
 {{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+{{- $os := include "tasksense.isOpenShift" . -}}
+{{- /* Defaults per platform. A policy naming the wrong namespaces blocks the
+       router and all name resolution the moment it is enabled. */ -}}
+{{- $dnsNs := $np.dns.namespace | default (ternary "openshift-dns" "kube-system" (eq $os "true")) -}}
+{{- $dnsPorts := ternary (list 53 5353) (list 53) (eq $os "true") -}}
+{{- with $np.dns.port }}{{ $dnsPorts = list (int .) }}{{ end -}}
+# Default-deny for every pod of the release (API, worker, migration and backup
+# Jobs), then only what TaskSense needs. The helm test pod is outside it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "tasksense.fullname" . }}
-  labels: {{- include "tasksense.labels" . | nindent 4 }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
 spec:
   podSelector:
-    matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/part-of: tasksense
   policyTypes: [Ingress, Egress]
 
   ingress:
-    # The ingress controller, and anything else you name. The controller's
-    # namespace differs per distribution — values-openshift.yaml points it at
-    # openshift-ingress.
+    # The ingress controller / router, and any namespaces you name.
     - from:
+        {{- if $np.ingressControllerNamespace }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
-        {{- range .Values.networkPolicy.ingressNamespaceSelectors }}
+              kubernetes.io/metadata.name: {{ $np.ingressControllerNamespace }}
+        {{- else if eq $os "true" }}
+        # The router, by name and by policy group — the latter also matches a
+        # router on the host network (the on-premise default), whose traffic
+        # does not come from a pod in openshift-ingress.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+        - namespaceSelector:
+            matchLabels:
+              policy-group.network.openshift.io/ingress: ""
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        {{- end }}
+        {{- range $np.ingressNamespaceSelectors }}
         - namespaceSelector:
             matchLabels: {{- toYaml . | nindent 14 }}
         {{- end }}
+        # helm test
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: test
       ports:
         - port: 3000
           protocol: TCP
-    # Prometheus scraping, when it is not in one of the namespaces above.
     {{- if .Values.metrics.enabled }}
+    # Prometheus scraping /api/v1/metrics.
     - from:
+        {{- if $np.monitoringNamespace }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
+              kubernetes.io/metadata.name: {{ $np.monitoringNamespace }}
+        {{- else if eq $os "true" }}
+        # User-workload monitoring scrapes ServiceMonitors in user namespaces.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-user-workload-monitoring
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: monitoring
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+        {{- end }}
       ports:
         - port: 3000
           protocol: TCP
@@ -37,27 +85,30 @@ spec:
 
   egress:
     # DNS. Everything below resolves a name first, so without this the policy
-    # blocks the database as effectively as it blocks the internet. OpenShift
-    # resolves in openshift-dns on 5353 — values-openshift.yaml sets both.
+    # blocks the database as effectively as it blocks the internet.
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.dns.namespace }}
+              kubernetes.io/metadata.name: {{ $dnsNs }}
       ports:
-        - port: {{ .Values.networkPolicy.dns.port }}
+        {{- range $dnsPorts }}
+        - port: {{ . }}
           protocol: UDP
-        - port: {{ .Values.networkPolicy.dns.port }}
+        - port: {{ . }}
           protocol: TCP
-
-    # The hosts you named: MongoDB, the directory, the mail relay, a model
-    # endpoint. Nothing else — which is the point. The application makes
+        {{- end }}
+    # The hosts you named: MongoDB, the directory, the mail relay, the IdP, a
+    # model endpoint. Nothing else — which is the point: the application makes
     # outbound requests to URLs an administrator configures, and this is the
     # layer that bounds them regardless of what is typed into the admin console.
-    {{- with .Values.networkPolicy.egressCIDRs }}
+    {{- with $np.egressCIDRs }}
     - to:
         {{- range . }}
         - ipBlock:
             cidr: {{ . }}
         {{- end }}
+    {{- end }}
+    {{- with $np.extraEgress }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- end }}

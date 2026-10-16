@@ -1,8 +1,52 @@
-# Getting the container image
+# Getting the software: registry access, mirrors and air-gap
 
-The image lives in GitHub Container Registry and is **private**. You will have
-received a registry token from us; it grants read access to this one package and
-nothing else.
+Everything TaskSense ships that is not public lives in GitHub Container
+Registry (`ghcr.io`) and is **private**:
+
+| Package | What it is | Pulled with |
+| --- | --- | --- |
+| `ghcr.io/yurdtech/tasksense:<version>` | The application image (amd64 + arm64) | `docker pull`, or Kubernetes |
+| `ghcr.io/yurdtech/charts/tasksense:<version>` | The Helm chart, as an OCI artifact | `helm install oci://…` |
+| `ghcr.io/yurdtech/tasksense-offline:<version>` | The **offline bundle**: deployment files, the TaskSense and `mongo:7` images (linux/amd64), checksums, signature, SBOM and vulnerability report | `oras pull` |
+
+One read-only token from us opens all three. What is public — on
+<https://github.com/yurdtech/tasksense-deployment/releases> — is the deployment
+repository itself: `tasksense-deployment-<version>.tar.gz` (the files, no
+images), the chart `tasksense-<version>.tgz`, `SHA256SUMS`, `SHA256SUMS.sig`
+and `cosign.pub`.
+
+Which path is yours:
+
+| Your server can… | Use |
+| --- | --- |
+| reach `ghcr.io` (directly or through a proxy) | [Pull directly](#pulling-directly) |
+| reach only your own registry (Harbor, Nexus, Artifactory) | [Mirror into it](#mirroring-into-your-own-registry) |
+| reach nothing at all | [The offline bundle](#no-route-out-air-gapped) |
+
+---
+
+## The token
+
+**How you get it.** We issue one per customer: a read-only GitHub token — a
+classic personal access token with only the `read:packages` scope, or a
+fine-grained token / package grant limited to the three packages above. It
+reaches you through the channel agreed in the contract, never by plain e-mail
+together with the server address.
+
+**What it can do.** Read those three packages. It cannot push, cannot read our
+source, and cannot reach any other repository or package.
+
+**The username is always `yurdtech`** — the account the token belongs to, not
+yours. You do not need a GitHub account. (The registry authenticates the token
+and does not check the username, so an old runbook with another name still
+works; use `yurdtech`.)
+
+**Expiry.** Tokens are issued with one. We contact you before it lapses. An
+expired token stops new pulls and affects nothing that is already running.
+
+**It is not your licence.** The token controls *downloading*; the licensed tier
+is `LICENSE_KEY`, verified offline. They are independent, and neither reports
+anything back to us.
 
 ---
 
@@ -12,42 +56,122 @@ nothing else.
 ./tasksense
 ```
 
-At the point the image is needed it asks for the username and token, hides the
-token as you type it, signs in, and tells you where to ask if you do not have
-one yet. Nothing else to read; the rest of this page is for the cases it does
-not cover.
+At the point the image is needed it asks for the token, hides it as you type,
+signs in, and tells you where to ask if you do not have one yet. The rest of
+this page is for the cases it does not cover.
+
+---
 
 ## Pulling directly
 
+### 1. Log in
+
 ```bash
-echo "$TASKSENSE_REGISTRY_TOKEN" | docker login ghcr.io -u yurdtech --password-stdin
-docker pull ghcr.io/yurdtech/tasksense:1.0.0
+echo '<TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
 ```
 
-The username is `yurdtech`. It is the account the token belongs to, not yours —
-**you do not need a GitHub account to pull.** The registry authenticates the
-token and does not check the username at all, so if a colleague's notes say
-something else, either works.
+Expected:
 
-The token is the whole credential. Guard it accordingly, and if it is ever
-exposed tell us and we will revoke that one; it is issued per customer, so
-revoking yours affects nobody else.
+```
+Login Succeeded
+```
 
-Signing in is per host, not per pull — Docker stores the credential in
-`~/.docker/config.json`, and `install.sh` uses it from there.
+Docker stores the credential in `~/.docker/config.json`. Signing in is per
+host, not per pull; `install.sh` and `upgrade.sh` use it from there and never
+write the token anywhere themselves.
+
+### 2. Pull
+
+```bash
+docker pull ghcr.io/yurdtech/tasksense:1.1.0
+```
+
+Expected: ends with `Status: Downloaded newer image for ghcr.io/yurdtech/tasksense:1.1.0`.
+`install.sh` does this for you; doing it by hand is a quick way to prove the
+token and the network path work before the maintenance window.
 
 ### Verify what you pulled
 
+Every image and every chart is signed with our cosign key. Get `cosign.pub`
+from the public releases page, then:
+
 ```bash
-cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.0.0
+cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.0
 ```
 
-`cosign.pub` is attached to every release. The signature proves the image is the
-one we built and that nothing has altered it since.
+Expected: `Verification for ghcr.io/yurdtech/tasksense:1.1.0 -- The following checks were performed on each of these signatures: … The signatures were verified against the specified public key`,
+followed by a JSON line naming the image digest.
+
+cosign also looks the signature up in the public Sigstore transparency log. On
+a machine that cannot reach it, add `--insecure-ignore-tlog=true`: the
+signature is still checked against the key — only the public log lookup is
+skipped. (`verify-signature.sh` does the same on its own when the log is out
+of reach.)
+
+> **Check the key itself out-of-band.** A signature only proves the image was
+> signed by *whoever holds the key in `cosign.pub`*. Compare its fingerprint
+> with the one we give you by another channel (on the phone, or in the
+> delivery letter) once, before the first install:
+>
+> ```bash
+> openssl pkey -pubin -in cosign.pub -outform DER | sha256sum
+> ```
+>
+> That is the same fingerprint `scripts/verify-signature.sh` prints.
+
+---
+
+## Kubernetes and OpenShift
+
+The cluster needs the same token, as an image pull secret, and Helm needs it to
+fetch the chart.
+
+### 1. Pull secret
+
+```bash
+kubectl create namespace tasksense
+kubectl -n tasksense create secret docker-registry ghcr \
+  --docker-server=ghcr.io \
+  --docker-username=yurdtech \
+  --docker-password='<TOKEN>'
+```
+
+Expected: `secret/ghcr created`. Reference it in your values:
+
+```yaml
+imagePullSecrets:
+  - name: ghcr
+```
+
+Or let the chart create it from values (`imageCredentials.create: true` with
+`registry`, `username`, `password`) — convenient, but the token is then part
+of the Helm release, readable by anyone who can read the release. A secret you
+create, or one from Vault / External Secrets, is the better choice for a bank.
+
+### 2. The chart
+
+```bash
+echo '<TOKEN>' | helm registry login ghcr.io -u yurdtech --password-stdin
+helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense \
+  --version 1.1.0 -n tasksense -f my-values.yaml
+```
+
+Expected: `Login Succeeded`, then `STATUS: deployed` and the chart's notes.
+The chart version always equals the application version. Verify the chart
+signature the same way as the image:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/yurdtech/charts/tasksense:1.1.0
+```
+
+The whole Helm installation: [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md),
+[03-INSTALL-OPENSHIFT](03-INSTALL-OPENSHIFT.md).
 
 ---
 
 ## Through a corporate proxy
+
+The Docker daemon does not read your shell's `HTTPS_PROXY`. Give it its own:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -59,106 +183,220 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl restart docker
 ```
 
-Hosts to allow: `ghcr.io`, `pkg-containers.githubusercontent.com` (where the
-layers are actually served), and `registry-1.docker.io` for the MongoDB image.
+Hosts the proxy must allow, during installation and upgrades only:
+
+| Host | For |
+| --- | --- |
+| `ghcr.io` | Registry API, authentication |
+| `pkg-containers.githubusercontent.com` | Where the image layers are actually served |
+| `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | The bundled `mongo:7` image (Docker Hub) |
+
+A running installation needs none of them.
 
 ---
 
 ## Mirroring into your own registry
 
 If you run Harbor, Nexus or Artifactory, pull once at the boundary and serve
-internally from there. Run this where you can reach both:
+everything internally from there. Run this on a machine that can reach both
+`ghcr.io` and your registry — it needs no `compose/.env`:
 
 ```bash
-docker login ghcr.io -u yurdtech -p "$TASKSENSE_REGISTRY_TOKEN"
+echo '<TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
 docker login harbor.bank.internal
 
-./scripts/load-images.sh --registry harbor.bank.internal/tasksense
+./scripts/load-images.sh --registry harbor.bank.internal/tasksense --version 1.1.0
 ```
 
-It uses `skopeo` when available, which preserves the multi-architecture index —
-`docker pull` and `docker push` would flatten it to whatever architecture the
-machine running them happens to be.
+Expected: one line per image copied —
+`harbor.bank.internal/tasksense/tasksense:1.1.0` and
+`harbor.bank.internal/tasksense/mongo:7` — then the settings to put in `.env`
+(`--update-env` writes them for you). `--mongo-version` picks another MongoDB
+tag.
 
-Then in `compose/.env`:
+It uses `skopeo` when it is installed, which keeps the multi-architecture
+index; without it, it falls back to pull/tag/push, which keeps only the
+architecture of the machine running it.
 
-```bash
+The MongoDB image is mirrored too, even if you use your own database: the
+backup script runs `mongodump` in a throwaway container from that image.
+
+**Compose** — in `compose/.env`, both lines:
+
+```dotenv
 TASKSENSE_IMAGE=harbor.bank.internal/tasksense/tasksense
 MONGO_IMAGE=harbor.bank.internal/tasksense/mongo
 ```
 
-Repeat for each upgrade, before running `upgrade.sh`.
+**Helm** — point the chart at the mirror:
+
+```yaml
+global:
+  imageRegistry: harbor.bank.internal
+```
+
+`global.imageRegistry` replaces the registry **host** and keeps the
+repository path, so it expects the images at
+`harbor.bank.internal/yurdtech/tasksense:<version>` and
+`harbor.bank.internal/library/mongo:7` — the layout `helm-airgap-load.sh`
+(below) produces. That is **not** the layout `load-images.sh --registry`
+produces: for a cluster, mirror with `helm-airgap-load.sh`, or set the image
+repositories explicitly in your values.
+
+Repeat the mirror for every upgrade, before running `upgrade.sh` or
+`helm upgrade`.
 
 ---
 
-## No route out at all
+## No route out (air-gapped)
 
-Every release also ships as a signed archive containing the images, the
-manifests, the scripts and this documentation. The archive holds the private
-images, so it is not published openly — **ask your TaskSense contact for the
-download link**. The checksums and signature that prove it is ours *are*
-public, on <https://github.com/yurdtech/tasksense-deployment/releases>.
+### Docker Compose: the offline bundle
 
-On a machine that has internet:
+The bundle is one signed archive: the deployment files, the TaskSense and
+`mongo:7` images for linux/amd64, a `VERSION` file, and the proof that it is
+ours. It holds the private images, so it is **not** on the public releases
+page; it is published privately next to the image and pulled with the **same
+token**, on any machine that has internet:
+
+**1. Fetch it** (needs [ORAS](https://oras.land/docs/installation)):
 
 ```bash
-# Archive: from your TaskSense contact
-# SHA256SUMS, SHA256SUMS.sig, cosign.pub: from the public releases page
-./scripts/verify-signature.sh tasksense-onprem-1.0.0.tar.gz
+echo '<TOKEN>' | oras login ghcr.io -u yurdtech --password-stdin
+oras pull ghcr.io/yurdtech/tasksense-offline:1.1.0
 ```
 
-Verify **before** carrying it in, not after. Then transfer it by whatever your
-policy allows and:
+Expected: `Downloaded` lines and four files in the current directory:
+`tasksense-onprem-1.1.0.tar.gz`, `SHA256SUMS`, `SHA256SUMS.sig` and
+`cosign.pub`. The bill of materials (`sbom.cdx.json`) and the vulnerability
+scan (`trivy-report.json`) are inside the tarball, at its top level.
+
+**2. Verify it — before carrying it in, not after:**
 
 ```bash
-tar xzf tasksense-onprem-1.0.0.tar.gz
-cd tasksense-onprem-1.0.0
-cp compose/.env.example compose/.env && ${EDITOR:-vi} compose/.env
+./scripts/verify-signature.sh tasksense-onprem-1.1.0.tar.gz
+```
+
+(Use the script from a clone of this repository, or from
+`tasksense-deployment-1.1.0.tar.gz` on the public releases page.)
+
+Expected:
+
+```
+==> Signature on SHA256SUMS
+  key ./cosign.pub
+  fingerprint (SHA-256 of the DER public key): 3b0c…
+  compare it with the fingerprint YurdTech gave you out-of-band
+  ✓ SHA256SUMS is signed by that key
+==> Checksums
+  ✓ tasksense-onprem-1.1.0.tar.gz matches SHA256SUMS
+
+VERIFIED  tasksense-onprem-1.1.0.tar.gz : intact and signed by the release key
+```
+
+Compare the printed fingerprint with the one we gave you out-of-band. The
+script **fails closed**: if `cosign` is not installed it stops with an error
+rather than passing on the checksum alone. `--allow-unverified` overrides that,
+loudly (`UNVERIFIED` instead of `VERIFIED`), for a lab — never for production.
+`--key <file>` uses a public key you already hold instead of the `cosign.pub`
+beside the archive, which is the stronger check. The same script verifies
+`tasksense-deployment-<version>.tar.gz` and the chart `tasksense-<version>.tgz`
+from the public releases page — one `SHA256SUMS` lists them all.
+
+`sbom.cdx.json` (CycloneDX) and `trivy-report.json` are for your own
+vulnerability management; scan the images again in your registry if your
+policy requires it.
+
+**3. Carry it in** by whatever your policy allows, then on the server:
+
+```bash
+tar xzf tasksense-onprem-1.1.0.tar.gz
+cd tasksense-onprem-1.1.0
+cp compose/.env.example compose/.env && chmod 600 compose/.env
+${EDITOR:-vi} compose/.env              # docs/01-INSTALL-COMPOSE.md, step 4
+./scripts/preflight.sh --offline
 ./scripts/install.sh --offline
 ```
 
-No registry credentials are needed on that host — nothing there ever contacts a
-registry.
+Expected: `install.sh` loads both images from `images/` (`loading … done`),
+then continues exactly as in [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#6-install).
+No registry credentials are needed on that host — nothing there contacts a
+registry. `TASKSENSE_VERSION` in the bundle's `.env.example` is already the
+bundle's version.
 
-> **The archive carries `linux/amd64` images.** A `docker-archive` holds one
-> image, not a manifest list, so the offline bundle has to pick an architecture,
-> and it picks the one datacentre servers run. The registry serves both amd64
-> and arm64 — if you run something else, pull from it or mirror into your own,
-> as above. `install.sh --offline` checks the host architecture first and says
-> so, rather than loading images that then refuse to start.
+> **The bundle carries `linux/amd64` images.** An image archive holds one
+> architecture, and the bundle picks the one datacentre servers run.
+> `install.sh --offline` checks the host first and refuses an arm64 host with
+> a clear message rather than loading images that then fail to start. On
+> arm64, mirror from the registry instead (it serves both).
+
+### Kubernetes and OpenShift: the Helm air-gap bundle
+
+On a machine with internet, logged in to `ghcr.io`:
+
+```bash
+./scripts/helm-airgap-bundle.sh            # → dist/tasksense-helm-airgap-1.1.0.tar.gz
+```
+
+It packs the chart, every image the chart can use — the application and the
+`mongo` image the backup Jobs run — the OpenShift overlay, the loader and a
+manifest with image digests, all checksummed. `--version`, `--platform`
+(default `linux/amd64`) and `-o <dir>` change what and where; `--from-oci`
+packs the published chart instead of the local one.
+
+Expected: ends with the bundle path,
+`dist/tasksense-helm-airgap-1.1.0.tar.gz`.
+
+Inside your network, on a machine logged in to your registry:
+
+```bash
+mkdir bundle && tar xzf tasksense-helm-airgap-1.1.0.tar.gz -C bundle && cd bundle
+./helm-airgap-load.sh harbor.bank.internal
+```
+
+Expected: the checksums verify (`OK`), each image is pushed
+(`==> ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.bank.internal/yurdtech/tasksense:1.1.0`),
+and the script prints the `helm install` command with
+`--set global.imageRegistry=harbor.bank.internal`.
 
 ---
 
-## About the token
+## Rotating the token
 
-**What it is.** A read-only credential for one package. It cannot push, cannot
-read our source, and cannot reach any other repository or package.
+Rotation is a new token from us, not something you generate:
 
-**How to look after it.** Treat it as a password:
+1. Ask us (info@yurdtech.az) — routinely before expiry, **immediately** if the
+   token may have been exposed. Each customer has their own, so revoking yours
+   affects nobody else.
+2. Re-run the login wherever the old one was used:
+   ```bash
+   echo '<NEW TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
+   echo '<NEW TOKEN>' | helm registry login ghcr.io -u yurdtech --password-stdin
+   kubectl -n tasksense create secret docker-registry ghcr \
+     --docker-server=ghcr.io --docker-username=yurdtech \
+     --docker-password='<NEW TOKEN>' --dry-run=client -o yaml | kubectl apply -f -
+   ```
+   …and in the CI secret or vault entry your mirror job reads.
+3. Tell us when you have switched; we revoke the old one.
 
-- Do not commit it. `install.sh` never writes it anywhere.
-- Prefer a CI secret or a secrets manager over a shell profile.
-- Tell us if it may have been exposed and we will issue a replacement — each
-  customer has their own, so revoking one affects nobody else.
+Nothing running is affected at any point — a token is only used to pull.
 
-**Expiry.** Tokens are issued with one. We contact you before it lapses; an
-expired token stops new pulls and affects nothing that is already running.
-
-**It is not your licence.** The token controls *distribution*; the licensed tier
-is enabled by `LICENSE_KEY`, which is verified offline. They are independent, and
-neither one reports anything back to us.
+**Looking after it:** do not commit it; prefer a CI secret or a vault over a
+shell profile; `install.sh` never writes it to disk itself.
 
 ---
 
 ## Troubleshooting
 
-| Message | Cause |
-| --- | --- |
-| `denied: denied` | Not logged in, or the token has expired. Run `docker login ghcr.io` again. |
-| `unauthorized: authentication required` | The token is wrong, expired, or was pasted with a stray newline. Log in again with a fresh copy of it. |
-| `manifest unknown` | That version does not exist. Check the releases page. |
-| Times out, no error | Proxy not configured for Docker — see above. Note that the daemon does not read your shell's `HTTPS_PROXY`. |
-| `no matching manifest for linux/...` | Unsupported architecture. We publish `amd64` and `arm64`. |
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `denied: denied` | Not logged in, or the token has expired | `docker login ghcr.io` again; ask us for a new token if it still fails |
+| `unauthorized: authentication required` | Wrong token, expired, or pasted with a stray newline | Log in again from a fresh copy; use `--password-stdin` |
+| `manifest unknown` | That version does not exist | Check the releases page; `TASKSENSE_VERSION` must be a published version |
+| Times out, no error | The daemon has no proxy configured (see above) | It does not read your shell's `HTTPS_PROXY` |
+| `no matching manifest for linux/...` | Unsupported architecture | We publish `amd64` and `arm64` |
+| `ImagePullBackOff` on Kubernetes | Pull secret missing in that namespace, or `global.imageRegistry` pointing where the images are not | `kubectl -n tasksense describe pod <pod>` names the image it tried |
+| `verify-signature.sh`: `cosign is not installed` | Fails closed by design | Install cosign; `--allow-unverified` only for a lab |
+| `verify-signature.sh`: `signature verification failed` | The checksums were not signed by that key | **Do not install.** Contact us |
 
-Still stuck: `./scripts/collect-diagnostics.sh` and send the archive to your
-support contact.
+Still stuck: `./scripts/collect-diagnostics.sh` and send the archive to
+info@yurdtech.az.

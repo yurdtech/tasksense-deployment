@@ -1,226 +1,499 @@
-# TaskSense — Helm values.
+# TaskSense — Helm values (chart 1.1.0).
 #
-#   helm install tasksense ./helm/tasksense -f my-values.yaml
+#   helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+#     -n tasksense -f my-values.yaml --wait --timeout 30m
 #
-# Four values have no default and the chart refuses to render without them:
-# appUrl, mongodbUri, storageSecret, firstAdminEmail. Everything else has a
-# working default.
+# OpenShift: put the overlay FIRST so your own file wins over it:
+#     -f values-openshift.yaml -f my-values.yaml
+#
+# Without existingSecret, three values have no default and the chart refuses to
+# render without them: appUrl, mongodbUri, storageSecret. firstAdminEmail is
+# needed on the first install. Everything else has a working default, chosen
+# for a bank: short sessions, no Swagger UI, no task execution.
+#
+# Every value maps to one environment variable of the application;
+# docs/17-ENVIRONMENT.md describes each one, docs/02-INSTALL-KUBERNETES.md has
+# the reference table.
+#
+# Do not upgrade with --reuse-values from chart 1.0: it drops every default
+# this version adds. Use `-f my-values.yaml` (or --reset-then-reuse-values).
+
+global:
+  # Air-gap / internal mirror. Replaces the registry HOST of every image and
+  # keeps the repository path; Docker Hub official images gain `library/`:
+  #   harbor.bank.internal + ghcr.io/yurdtech/tasksense -> harbor.bank.internal/yurdtech/tasksense
+  #   harbor.bank.internal + mongo                      -> harbor.bank.internal/library/mongo
+  # scripts/helm-airgap-load.sh pushes the offline bundle with exactly this rule.
+  imageRegistry: ""
 
 image:
   repository: ghcr.io/yurdtech/tasksense
-  # Pin it. `latest` means a pod restart can land on a different version than
-  # its neighbours are running.
-  tag: ""            # defaults to .Chart.AppVersion
+  # Pin it. Empty means .Chart.AppVersion — a version that exists, never
+  # `latest`.
+  tag: ""
+  # Optional: pin by digest (sha256:…) instead of tag. Wins over `tag`.
+  digest: ""
   pullPolicy: IfNotPresent
 
-# The registry is private. Create the secret first:
-#   kubectl create secret docker-registry ghcr \
-#     --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+# Pull secrets for the private registry. Create it first (docs/13-REGISTRY-ACCESS.md):
+#   kubectl create secret docker-registry ghcr -n tasksense \
+#     --docker-server=ghcr.io --docker-username=yurdtech --docker-password=<token>
+# Entries may be names or {name: …}. Set [] for a registry that needs none.
 imagePullSecrets:
   - name: ghcr
 
+# Evaluation convenience: render a dockerconfigjson pull secret from inline
+# credentials (added to imagePullSecrets automatically). Production installs
+# create the secret themselves and keep the token out of the release.
+imageCredentials:
+  create: false
+  registry: ghcr.io
+  username: yurdtech
+  password: ""
+
 # ── Required ─────────────────────────────────────────────────────────────────
 
-# The URL users type. Sign-in redirects are built from it, so changing it later
-# means reconfiguring your identity provider.
+# The URL users type (APP_URL; its origin becomes CORS_ALLOWED_ORIGINS). Sign-in
+# redirects are built from it, so changing it later means reconfiguring your
+# identity provider. With ingress.hosts / route.host left empty, its host is
+# also the Ingress / Route host.
 appUrl: ""
 
-# The only data store. Not bundled — see the note in Chart.yaml.
-# Put TLS and replica-set options in the URI:
-#   mongodb://user:pass@mongo-0,mongo-1/?replicaSet=rs0&tls=true&authSource=admin
-#
-# Percent-encode anything in the password that a URI treats as structure —
-# / : @ ? # [ ] % — or the driver refuses the whole string with "Password
-# contains unescaped characters". A hex password avoids the question.
+# MONGODB_URI — the only data store, not bundled (see Chart.yaml). Put TLS and
+# replica-set options in the URI; a private CA goes in certs.* below:
+#   mongodb://tasksense:PASS@mongo-0,mongo-1,mongo-2/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+# Percent-encode / : @ ? # [ ] % in the password, or the driver refuses the
+# whole string. A hex password avoids the question. The database NAME is
+# config.mongodbDatabase, not the URI path.
 mongodbUri: ""
 
-# Encrypts stored provider credentials at rest. At least 32 characters.
-#   openssl rand -base64 32
+# STORAGE_SECRET — encrypts stored provider credentials at rest. At least 32
+# characters:  openssl rand -base64 32
 # Not recoverable: back it up with the database, or a restore returns
 # credentials nobody can decrypt.
 storageSecret: ""
 
-# First install only. Becomes the administrator of the new, empty workspace,
-# with no password — sign in through your identity provider, or register with
-# the same address to set one.
+# FIRST_ADMIN_EMAIL — first install only. Becomes the administrator of the new,
+# empty workspace, with no password: sign in through your identity provider or
+# directory, or register with the same address to set one.
 firstAdminEmail: ""
 
-# Supply the four above from a Secret you manage instead (Vault, sealed-secrets,
-# an external-secrets operator). It must contain APP_URL, MONGODB_URI,
-# STORAGE_SECRET, FIRST_ADMIN_EMAIL — and CORS_ALLOWED_ORIGINS, which the
-# chart-managed secret sets to appUrl and the browser needs to sign in. With
-# metrics on, METRICS_TOKEN too: the ServiceMonitor reads its bearer token from
-# this same secret. Anything set here is then ignored.
-existingSecret: ""
-
-# ── Optional ─────────────────────────────────────────────────────────────────
-
-# Ed25519-signed, verified offline. Without one, free-tier limits apply.
+# LICENSE_KEY — Ed25519-signed, verified offline. Without one, free-tier limits
+# apply. (Secret)
 licenseKey: ""
 
+# A Secret you manage (Vault, sealed-secrets, external-secrets) instead of the
+# chart-rendered one. Inline secret values above and under config.* are then
+# ignored. Keys, by exact name:
+#   MONGODB_URI          required
+#   STORAGE_SECRET       required, >= 32 characters
+#   METRICS_TOKEN        required when metrics.enabled
+#   LICENSE_KEY          optional
+#   OIDC_CLIENT_SECRET   optional (config.oidc)
+#   SMTP_PASS            optional (config.smtp)
+# APP_URL, CORS_ALLOWED_ORIGINS and FIRST_ADMIN_EMAIL are not secrets: they come
+# from appUrl / firstAdminEmail. (A Secret made for chart 1.0 may still carry
+# them; it is only used for them when appUrl is left empty.)
+existingSecret: ""
+
+# ── The application process (API) ────────────────────────────────────────────
+
+# Must be 1 (0 to stop it). The API is a single active process by design: its
+# schedulers and the live-update feed are in-process, with no distributed lock,
+# so a second replica runs every scheduled job twice. The chart refuses more,
+# deploys with strategy Recreate (never two overlapping during an upgrade), and
+# has no HPA and no PodDisruptionBudget. Availability = Kubernetes restarting the
+# pod + a MongoDB replica set; heavy imports = worker.enabled.
+# docs/15-SCALING-AND-HA.md
 replicaCount: 1
 
-# Extra environment variables, for anything the chart does not model —
-# OIDC_*, SMTP_*, EGRESS_ALLOWLIST, SESSION_TTL_HOURS. Reference
-# docs/04-CONFIGURATION.md; secrets belong in `existingSecret` or
-# `extraEnvFrom`, not here. (There are no LDAP_* variables: directory
-# sign-in is configured inside the application, Admin → Authentication.)
-extraEnv: {}
-#  SESSION_TTL_HOURS: "12"
-
-# Secrets and ConfigMaps to load wholesale.
-extraEnvFrom: []
-#  - secretRef:
-#      name: tasksense-ldap
-
-logging:
-  format: json     # json for a SIEM; text is readable but not parseable
-  level: log       # verbose | debug | log | warn | error | fatal
-
-metrics:
-  enabled: false
-  # Required when enabled — the endpoint 404s without it. The gauges report
-  # seat usage and licence expiry, which is an inventory of the installation.
-  #   openssl rand -hex 32
-  token: ""
-  serviceMonitor:
-    enabled: false          # needs the Prometheus Operator
-    interval: 30s
-    labels: {}              # e.g. release: kube-prometheus-stack
-
-# Schema migrations. `manual` plus the pre-upgrade hook below is the right
-# pairing in a cluster: migrations run once, from a Job, before any new pod
-# starts — rather than from whichever replica happens to boot first.
-migrations:
-  onBoot: manual
-  hook:
-    enabled: true
-    backoffLimit: 0         # a failed migration should stop the upgrade
-
-# ── Storage ──────────────────────────────────────────────────────────────────
-
-persistence:
-  # Uploaded files, agent workspaces and the in-application snapshots.
-  #
-  # With more than one replica this MUST be ReadWriteMany, or use object
-  # storage instead (Admin → Storage) and set enabled: false. Two replicas on
-  # a ReadWriteOnce volume will not schedule, which is the good failure; one
-  # replica writing files another cannot read is the bad one.
-  enabled: true
-  accessMode: ReadWriteOnce
-  size: 20Gi
-  storageClass: ""          # "" uses the cluster default
-  existingClaim: ""
-
-# ── Networking ───────────────────────────────────────────────────────────────
-
-service:
-  type: ClusterIP
-  port: 80
-
-ingress:
-  enabled: false
-  className: nginx
-  annotations:
-    # Live updates are server-sent events. Buffered, the interface looks frozen
-    # — changes arrive only when the buffer happens to flush.
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
-    # Must be at least storageMaxFileMb, or uploads are rejected before they
-    # reach the application and the error comes from the wrong place.
-    nginx.ingress.kubernetes.io/proxy-body-size: 25m
-  hosts:
-    - host: tasksense.example.internal
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
-  #  - secretName: tasksense-tls
-  #    hosts: [tasksense.example.internal]
-
-# OpenShift only; ignored elsewhere. See values-openshift.yaml.
-route:
-  enabled: false
-  host: ""
-  tls:
-    termination: edge
-    insecureEdgeTerminationPolicy: Redirect
-
-networkPolicy:
-  # Default-deny egress, then allow only what the application actually needs.
-  # Worth turning on: the product makes outbound requests to URLs an
-  # administrator configures, and this is the layer that bounds them.
-  enabled: false
-  # CIDRs the application may reach — MongoDB, the directory, the mail relay,
-  # a model endpoint. DNS to the cluster resolver is allowed automatically.
-  egressCIDRs: []
-  #  - 10.20.0.0/16
-  # Namespaces allowed to reach the application, beyond the ingress controller.
-  ingressNamespaceSelectors: []
-  # Where the ingress controller and Prometheus live, and where DNS answers.
-  # These are the upstream-Kubernetes defaults; values-openshift.yaml replaces
-  # all three, because a policy naming the wrong namespaces blocks every Route
-  # and all name resolution the moment it is enabled.
-  ingressControllerNamespace: ingress-nginx
-  monitoringNamespace: monitoring
-  dns:
-    namespace: kube-system
-    port: 53
-
-# ── Runtime ──────────────────────────────────────────────────────────────────
-
-storageMaxFileMb: 25
+# V8 old-space ceiling, rendered as NODE_OPTIONS=--max-old-space-size=<MB>.
+# Node sizes its heap from the NODE's memory, not the container limit, so
+# without it the kernel OOM-kills the pod before V8 collects. Keep about a
+# quarter of resources.limits.memory free for buffers and native memory.
+heapMb: 1536
 
 resources:
   requests:
     cpu: 500m
     memory: 1Gi
   limits:
-    # No CPU limit by default: throttling a Node process at the limit shows up
-    # as latency nobody can explain. The request reserves the capacity.
+    # No CPU limit by default: throttling a Node process shows up as latency
+    # nobody can explain. The request reserves the capacity.
     memory: 2Gi
 
-autoscaling:
-  enabled: false
-  minReplicas: 2
-  maxReplicas: 6
-  targetCPUUtilizationPercentage: 70
+# SIGTERM → drain. Matches the compose stop_grace_period.
+terminationGracePeriodSeconds: 45
 
-podDisruptionBudget:
-  enabled: false
-  minAvailable: 1
-
-# Matches the image: uid 1001, group 0, nothing writable but the data volume.
-# values-openshift.yaml clears the uid so the SCC can assign one.
-podSecurityContext:
-  runAsNonRoot: true
-  runAsUser: 1001
-  fsGroup: 0
-  seccompProfile:
-    type: RuntimeDefault
-
-containerSecurityContext:
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: [ALL]
-
+priorityClassName: ""
 nodeSelector: {}
 tolerations: []
 affinity: {}
 podAnnotations: {}
 podLabels: {}
+
+# ── Import worker (optional second process) ──────────────────────────────────
+
+worker:
+  # A separate Deployment running `node dist/worker.js` with WORKER_ROLE=worker:
+  # it lands Jira site backups (lease-based, resumes from checkpoints) so a
+  # multi-gigabyte migration can never take the user-facing API down with it.
+  # When on, the API runs with WORKER_ROLE=api. Exactly one; turn it on for a
+  # Jira migration.
+  #
+  # Needs persistence.accessMode: ReadWriteMany — uploads are staged on the data
+  # volume by the API and landed from the same files by the worker, usually on
+  # another node. The chart refuses the combination otherwise.
+  enabled: false
+  heapMb: 4096
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      # A batch process: throttling it protects the API on the same node.
+      cpu: "2"
+      memory: 6Gi
+  terminationGracePeriodSeconds: 45
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+# ── Application settings → ConfigMap (non-secret) / Secret (secret) ──────────
+#
+# Rendered explicitly, so `kubectl get configmap <release>-env -o yaml` is an
+# honest record of what is running. Defaults are the application's own unless
+# marked "bank".
+
+config:
+  # MONGODB_DB — the database the application (and the backup jobs) use.
+  mongodbDatabase: tasksense
+  # MONGODB_TIMEOUT_MS — server selection timeout for every operation. The app
+  # default (5000) assumes a database on the same host; across a network a
+  # replica-set election can take longer. (bank: 15000)
+  mongodbTimeoutMs: 15000
+  # MONGODB_OP_TIMEOUT_MS — deadline of one operation; 0 disables. Long jobs
+  # (imports, exports, backups, migrations) run without it.
+  mongodbOpTimeoutMs: 30000
+  # MONGODB_MIN_POOL_SIZE / MONGODB_MAX_POOL_SIZE — one API process holds the
+  # whole pool; the worker opens its own.
+  mongodbMinPoolSize: 10
+  mongodbMaxPoolSize: 100
+  # MONGODB_COMPRESSORS — zlib | none. zlib pays off across a network; `none`
+  # only when MongoDB shares the host.
+  mongodbCompressors: zlib
+
+  # SESSION_TTL_HOURS — sign-in lifetime; 0 = never expires. App default 720
+  # (30 days). (bank: 12 — a working day)
+  sessionTtlHours: 12
+  # SWAGGER_ENABLED — the interactive API reference at /api/v1/swagger. App default
+  # on. (bank: false — integrators can use the OpenAPI file from the release)
+  swaggerEnabled: false
+  # OWNER_EMAILS — addresses always granted the admin role. Keep empty; admins
+  # are managed in the application.
+  ownerEmails: ""
+  # AGENT_DISPATCHER — "on" | "off": the agent scheduler. Off by default on
+  # an on-premise install (the application's own default is on): with no model
+  # provider it has nothing to dispatch, and with one it should be a decision.
+  # Same default as compose/.env.example.
+  agentDispatcher: "off"
+  # AGENT_EXECUTOR is NOT configurable: always rendered "off" (there is no
+  # sandbox runtime; the unsafe-host mode would run agent tools as the API's OS
+  # user). Setting config.agentExecutor to anything else fails the render.
+
+  # EGRESS_ALLOWLIST — extra hosts the server may call (internal GitLab, Jira,
+  # an LLM gateway). List or comma-separated string. Everything else, including
+  # private addresses, is refused.
+  egressAllowlist: []
+
+  # RATE_LIMIT_STORE — memory | mongo. memory is right for the single API
+  # process; mongo keeps counters across restarts at one round trip per
+  # throttled request.
+  rateLimitStore: memory
+
+  # Upload ceilings. Attachments and the Jira/archive uploads travel through
+  # the upload ingress rule (ingress.uploadMaxBody), not the 25m default.
+  storageMaxFileMb: 25            # STORAGE_MAX_FILE_MB
+  storageMaxVideoFileMb: 200      # STORAGE_MAX_VIDEO_FILE_MB
+  jiraBackupMaxGb: 20             # JIRA_BACKUP_MAX_GB (fractions allowed)
+  jiraBackupRetentionDays: 7      # JIRA_BACKUP_RETENTION_DAYS
+
+  # Ceilings that keep one huge (migrated) workspace from exhausting memory.
+  stateTaskLimit: 5000            # STATE_TASK_LIMIT
+  reportsMaxTasks: 150000         # REPORTS_MAX_TASKS
+  automationProcessingMinutesPer12h: 60   # AUTOMATION_PROCESSING_MINUTES_PER_12H (0 = unlimited)
+
+  # Extra CORS origins beyond appUrl's own (CORS_ALLOWED_ORIGINS). List or CSV.
+  corsAllowedOrigins: []
+
+  # Enterprise SSO (generic OIDC: Azure AD / Entra ID, ADFS, Keycloak, Okta).
+  # Directory sign-in (LDAP/AD) is configured inside the application, not here.
+  oidc:
+    issuer: ""          # OIDC_ISSUER — discovery from <issuer>/.well-known/openid-configuration
+    clientId: ""        # OIDC_CLIENT_ID
+    clientSecret: ""    # OIDC_CLIENT_SECRET (Secret; with existingSecret put it there)
+    redirectUri: ""     # OIDC_REDIRECT_URI — empty derives <appUrl>/api/v1/auth/oidc/callback
+    label: ""           # OIDC_LABEL — sign-in button text
+
+  # Outbound mail through your relay.
+  smtp:
+    host: ""            # SMTP_HOST — empty = mail is simulated (logged, not sent)
+    port: 587           # SMTP_PORT
+    secure: false       # SMTP_SECURE — true for implicit TLS (465); STARTTLS on 587 needs false
+    user: ""            # SMTP_USER
+    pass: ""            # SMTP_PASS (Secret; with existingSecret put it there)
+  emailFrom: ""         # EMAIL_FROM, e.g. "TaskSense <tasksense@bank.internal>"
+
+logging:
+  format: json     # LOG_FORMAT — json for a SIEM; text is readable but not parseable
+  level: log       # LOG_LEVEL — verbose | debug | log | warn | error | fatal
+
+metrics:
+  # METRICS_ENABLED — Prometheus metrics at /api/v1/metrics.
+  enabled: false
+  # METRICS_TOKEN (Secret). Required when enabled — the endpoint 404s without
+  # it; its gauges report seat usage and licence expiry.  openssl rand -hex 32
+  token: ""
+  serviceMonitor:
+    enabled: false          # needs the Prometheus Operator (OpenShift: user-workload monitoring)
+    interval: 30s
+    labels: {}              # e.g. release: kube-prometheus-stack
+
+# Anything the chart does not model, as NAME: value. Rendered into the
+# ConfigMap and wins over config.* for the same name. Not for secrets (use
+# existingSecret or extraEnvFrom), and not for the variables the chart owns
+# (AGENT_EXECUTOR, WORKER_ROLE, MIGRATE_ON_BOOT, TMPDIR, NODE_OPTIONS,
+# NODE_EXTRA_CA_CERTS, MONGODB_URI, STORAGE_SECRET, …) — the render fails and
+# names the value to use instead.
+extraEnv: {}
+#  MONGODB_COMMAND_MONITORING: "true"
+
+# Secrets / ConfigMaps loaded wholesale (after the chart's own).
+extraEnvFrom: []
+#  - secretRef:
+#      name: tasksense-llm
+
+# ── Private CA and extra mounts ──────────────────────────────────────────────
+
+certs:
+  # Everything below is mounted read-only at /certs in the API, the worker, the
+  # migration Job and the backup jobs (one projected volume; file names must be
+  # distinct). Reference it as /certs/<file> — e.g. tlsCAFile=/certs/bank-ca.pem
+  # in mongodbUri.
+  existingConfigMap: ""     # a ConfigMap you manage (CA bundles are public)
+  existingSecret: ""        # a Secret you manage (client certificates / keys)
+  files: {}                 # inline PEMs, rendered into a ConfigMap
+  #  bank-ca.pem: |
+  #    -----BEGIN CERTIFICATE-----
+  #    ...
+  # File name under /certs that Node should trust in addition to its built-in
+  # roots → NODE_EXTRA_CA_CERTS=/certs/<caBundle>. Covers MongoDB TLS, SMTP,
+  # LDAPS, OIDC and an internal LLM gateway in one place.
+  caBundle: ""
+
+# Extra volumes / mounts for the API, the worker and the migration Job (CSI
+# secret stores, an extra trust store, …).
+extraVolumes: []
+extraVolumeMounts: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The application never talks to the Kubernetes API; no token is mounted.
+  automountToken: false
+
+# ── Schema migrations ────────────────────────────────────────────────────────
+
+migrations:
+  # A pre-install / pre-upgrade hook Job runs `migrations/cli.js up` once,
+  # before any new pod starts, and the application runs with
+  # MIGRATE_ON_BOOT=manual (it refuses to start on a pending migration instead
+  # of applying it). A failed migration fails the `helm upgrade`, visibly.
+  # false = MIGRATE_ON_BOOT=auto: the API migrates at boot.
+  enabled: true
+  # Dump the database to the backups volume before migrating (pre-upgrade only;
+  # needs backup.enabled). Migrations are forward-only: this dump is what a
+  # rollback restores.
+  backupBeforeUpgrade: true
+  backoffLimit: 0                 # a failed migration should stop the upgrade
+  activeDeadlineSeconds: 1800     # keep `helm --timeout` at least this long
+  ttlSecondsAfterFinished: 86400  # the Job (and its log) stays a day
+  heapMb: 1536
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+  podAnnotations: {}
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+
+persistence:
+  # /app/api/data: uploaded files, agent workspaces, in-application snapshots
+  # and the upload staging area (TMPDIR=/app/api/data/tmp) — a Jira site backup
+  # is staged here in full and kept for config.jiraBackupRetentionDays. Size it
+  # for at least 2 x config.jiraBackupMaxGb on top of your attachments.
+  #
+  # ReadWriteOnce is right for the API alone. worker.enabled needs
+  # ReadWriteMany. Disabled = an emptyDir: files vanish with the pod (trials only).
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 50Gi
+  storageClass: ""          # "" uses the cluster default
+  existingClaim: ""
+  annotations: {}
+
+# ── Networking ───────────────────────────────────────────────────────────────
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  # Hosts. Strings, or {host, paths} (the chart 1.0 form). Empty = appUrl's host.
+  hosts: []
+  tls: []
+  #  - secretName: tasksense-tls
+  #    hosts: [tasksense.bank.internal]
+  #
+  # The chart renders up to three Ingress objects for the same host(s), because
+  # three kinds of traffic need different proxy settings:
+  #   <release>         /                       body maxBody, timeouts timeoutSeconds
+  #   <release>-stream  the two SSE streams     buffering off, timeouts streamTimeoutSeconds (24h)
+  #   <release>-upload  uploadPaths             body uploadMaxBody, request buffering off,
+  #                                             timeouts uploadTimeoutSeconds
+  # Annotations for ingress-nginx and F5 NGINX (nginx.org/*) are set for you;
+  # other controllers ignore them — add theirs below.
+  maxBody: 25m
+  timeoutSeconds: 3600
+  streamTimeoutSeconds: 86400
+  # Must be at least config.jiraBackupMaxGb (plus multipart overhead) — the
+  # render fails otherwise.
+  uploadMaxBody: 21g
+  # Matches the application's own request ceiling (4 h for a 20 GB upload on a
+  # slow office uplink).
+  uploadTimeoutSeconds: 14400
+  # The large-body routes. Regular expressions (ImplementationSpecific): the
+  # attachment routes carry ids. On a controller without regex paths, replace
+  # them with Prefix paths it understands.
+  uploadPaths:
+    - /api/v1/integrations/jira/backup          # Jira site backup (+ activeobjects, media)
+    - /api/v1/import                            # workspace archive / JSON restore
+    - /api/v1/tasks/[^/]+/attachments           # task attachments (video up to storageMaxVideoFileMb)
+    - /api/v1/docs/[^/]+/attachments            # doc attachments
+    - /rest/api/[23]/issue/[^/]+/attachments    # Jira-compatible REST attachments
+  uploadPathType: ImplementationSpecific
+  # On every chart Ingress (cert-manager.io/* keys only on the main one, so a
+  # single Certificate owns the TLS secret).
+  annotations: {}
+  # Win over the chart's own per-object annotations.
+  streamAnnotations: {}
+  uploadAnnotations: {}
+
+# OpenShift Route (values-openshift.yaml turns it on). One Route carries all
+# traffic: the HAProxy router has no request-body limit, and its timeout is set
+# to 24h for the event streams, which also covers the long uploads.
+route:
+  enabled: false
+  host: ""            # empty = appUrl's host (APP_URL and the Route must agree)
+  annotations: {}     # wins over haproxy.router.openshift.io/timeout: 24h
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+    # certificate / key / caCertificate for your own certificate; reencrypt
+    # needs destinationCACertificate.
+
+networkPolicy:
+  # Default-deny for the release's pods (API, worker, jobs), then allow only
+  # what the application needs. Worth turning on: the product makes outbound
+  # requests to URLs an administrator configures, and this is the layer that
+  # bounds them.
+  enabled: false
+  # CIDRs the pods may reach — MongoDB, the directory, the mail relay, the IdP,
+  # a model endpoint. DNS to the cluster resolver is allowed automatically.
+  egressCIDRs: []
+  #  - 10.20.0.0/16
+  # More egress rules, verbatim (e.g. an in-cluster MongoDB namespace).
+  extraEgress: []
+  #  - to:
+  #      - namespaceSelector:
+  #          matchLabels:
+  #            kubernetes.io/metadata.name: mongodb
+  #    ports:
+  #      - port: 27017
+  # Namespaces (label selectors) allowed to reach the API beyond the ingress
+  # controller.
+  ingressNamespaceSelectors: []
+  # Empty = detected: ingress-nginx / monitoring / kube-system on Kubernetes;
+  # the router, user-workload monitoring and openshift-dns on OpenShift.
+  ingressControllerNamespace: ""
+  monitoringNamespace: ""
+  dns:
+    namespace: ""
+    port: ""            # empty = 53 (and 5353 on OpenShift)
+
+# ── Security posture ─────────────────────────────────────────────────────────
+
+# "" = detect (the route.openshift.io API on the target cluster). OpenShift:
+# no uid/gid is pinned — the restricted-v2 SCC assigns them. Kubernetes:
+# runAsUser 1001 / fsGroup 1001 (the image's uid; files are group 0 and
+# group-writable). Force true/false when rendering offline (helm template).
+openshift:
+  enabled: ""
+
+# Kubernetes-only overrides for the app pods (runAsUser, runAsGroup, fsGroup).
+# Ignored on OpenShift except fsGroup, which must then be inside the
+# namespace's range.
+podSecurityContext: {}
+
+commonLabels: {}
 nameOverride: ""
 fullnameOverride: ""
 
 # ── Backup ───────────────────────────────────────────────────────────────────
 
 backup:
-  # mongodump into the data volume. This is a convenience, not a disaster
-  # recovery plan — see docs/07-BACKUP-DR.md. A cluster with a backup operator
-  # should use that instead and leave this off.
+  # A nightly mongodump of config.mongodbDatabase onto its own volume, and the
+  # pre-upgrade dump (migrations.backupBeforeUpgrade). A convenience, not a DR
+  # plan: the data volume (attachments) is not in it — snapshot that PVC with
+  # your CSI / backup tooling. A cluster with a backup operator can leave this
+  # off. docs/07-BACKUP-DR.md
   enabled: false
   schedule: "0 2 * * *"
-  # The image needs mongodump. Any mongo image will do.
-  image: mongo:7
-  retentionDays: 30
+  timeZone: ""              # e.g. Asia/Baku; empty = the controller's (UTC)
+  suspend: false            # keep the volume and pre-upgrade dumps, skip the nightly run
+  retentionDays: 30         # nightly and pre-upgrade dumps older than this are deleted
+  activeDeadlineSeconds: 7200
+  # Any image with mongodump >= 100.3 and bash. Goes through global.imageRegistry.
+  image:
+    repository: mongo
+    tag: "7"
+    digest: ""
+    pullPolicy: IfNotPresent
+  persistence:
+    # Kept on `helm uninstall` (resource-policy: keep).
+    size: 50Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  # Kubernetes-only uid overrides for the mongo image (default 999, its
+  # mongodb user). Ignored on OpenShift except fsGroup.
+  podSecurityContext: {}
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

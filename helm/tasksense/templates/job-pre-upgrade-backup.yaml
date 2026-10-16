@@ -1,0 +1,35 @@
+{{- include "tasksense.validate" . -}}
+{{- if include "tasksense.preUpgradeBackup" . }}
+# A dump of the database taken BEFORE the migration Job runs, on every upgrade.
+# Migrations are forward-only: going back to the previous version means
+# restoring this file (docs/02-INSTALL-KUBERNETES.md, "Rollback").
+#
+# Hook order (weights): -10 config copies, -8 this dump, -5 migrations. Helm
+# waits for each Job to complete before the next, so a failed dump stops the
+# upgrade before anything has been migrated.
+#
+# The application keeps serving while this runs (the old pod is replaced only
+# after the hooks), so writes made during the dump may or may not be in it.
+# For a dump that is exactly the last state, scale the API to 0 first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "pre-upgrade-backup") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "backup") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-8"
+    # Kept after success (for its log) until the TTL below or the next upgrade.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ int .Values.backup.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ int .Values.migrations.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels: {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "backup") | nindent 8 }}
+      {{- with .Values.backup.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec: {{- include "tasksense.dumpPodSpec" (dict "root" $ "hook" true "kind" "pre-upgrade" "prefix" (printf "pre-upgrade-rev%d-to-%s" (int .Release.Revision) (include "tasksense.appVersion" .))) | nindent 6 }}
+{{- end }}

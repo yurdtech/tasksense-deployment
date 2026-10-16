@@ -49,6 +49,9 @@ probe_env_file() {
     printf 'DEPLOYMENT_MODE=onprem\n'
     printf 'NODE_ENV=production\n'
     printf 'PORT=3000\n'
+    # What compose would supply too: CORS defaults to APP_URL there.
+    grep -q '^CORS_ALLOWED_ORIGINS=.' "${candidate}" \
+      || printf 'CORS_ALLOWED_ORIGINS=%s\n' "$(sed -n 's/^APP_URL=//p' "${candidate}" | tail -n1)"
     if [ -n "${mongo_uri}" ]; then
       printf 'MONGODB_URI=%s\n' "${mongo_uri}"
     else
@@ -143,9 +146,11 @@ probe_run() {
   # check any more: directory sign-in is configured inside the application
   # (Admin → Authentication), which has its own live "Test connection" — the
   # environment simply has nothing to probe.
-  grep -q '^OIDC_ISSUER=' "${candidate}" && checks+=(oidc)
-  grep -q '^SMTP_HOST=' "${candidate}" && checks+=(smtp)
-  grep -q '^MONGODB_URI=' "${candidate}" && checks+=(mongo)
+  # `=.`: an active line with a value. A rendered file can carry `KEY=` for a
+  # setting the example has active, and that is not "configured".
+  grep -q '^OIDC_ISSUER=.' "${candidate}" && checks+=(oidc)
+  grep -q '^SMTP_HOST=.' "${candidate}" && checks+=(smtp)
+  grep -q '^MONGODB_URI=.' "${candidate}" && checks+=(mongo)
 
   if [ "${#checks[@]}" -eq 0 ]; then
     note "nothing external to check — local passwords, in-app notifications, bundled database"

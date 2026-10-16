@@ -20,9 +20,11 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-for tool in docker python3; do
-  command -v "${tool}" >/dev/null 2>&1 || { printf '\n  SKIPPED: %s is not installed\n\n' "${tool}"; exit 0; }
-done
+# shellcheck source=helpers/common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/helpers/common.sh"
+
+command -v python3 >/dev/null 2>&1 || skip "python3 is not installed"
+docker_usable || skip "no container daemon (needs bash:5)"
 
 printf '\nregistry login\n\n'
 

@@ -206,7 +206,7 @@ compose_up || recover "${TARGET} did not start"
 step "Verifying"
 wait_for_health 240 || recover "${TARGET} did not become healthy within 240s"
 
-STAGE_REACHED=done
+STAGE_REACHED="done"
 running_version | sed 's/^/  /'
 case "$(schema_state)" in
   ahead) warn "the application reports the schema as AHEAD of ${TARGET} — tell ${SUPPORT_EMAIL}" ;;

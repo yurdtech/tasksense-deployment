@@ -41,6 +41,8 @@ fresh() {  # fresh [fixture overrides…] — a new sandbox with a configured .e
   unset FAKE_RUNNING FAKE_PENDING FAKE_BAD_VERSION FAKE_BAD_STAGE FAKE_DUMP_FAIL FAKE_IMAGE_RC FAKE_SCHEMA
 }
 envv() { sed -n "s/^$1=//p" "${SANDBOX}/compose/.env" | tail -n1; }
+# $1 is a glob on purpose (tasksense-*Z.tar.gz) — quoting it would match nothing.
+# shellcheck disable=SC2086
 newest() { ls -1t "${SANDBOX}"/backups/$1 2>/dev/null | head -n1; }
 manifest() { tar xzOf "$1" ./manifest.json; }
 before() {  # before <name> <regex-a> <regex-b> — the first call to a precedes the first to b

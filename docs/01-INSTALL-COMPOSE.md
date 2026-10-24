@@ -395,7 +395,8 @@ Then, in **Admin**:
    password length for local accounts.
 3. **Email delivery** — send a test message.
 4. **Storage** — leave attachments on the volume, or connect S3 / MinIO /
-   WebDAV.
+   WebDAV. An internal endpoint's host must be in `EGRESS_ALLOWLIST` first
+   ([04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist)).
 5. **Users** — invite your team, or let them sign in through the directory.
 
 ---

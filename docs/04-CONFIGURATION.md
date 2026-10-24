@@ -124,6 +124,35 @@ address users type is terminated by your reverse proxy, not by TaskSense.
 
 ---
 
+## Internal hosts the application calls (`EGRESS_ALLOWLIST`)
+
+Every HTTP(S) address an administrator types into the application is checked
+before it is requested: the name is resolved, and a private, loopback or
+link-local address is refused unless its host is in `EGRESS_ALLOWLIST`. That
+check covers:
+
+- **object storage**: the S3 / MinIO endpoint, the WebDAV base URL;
+- webhooks, the Jira / Confluence importers, the model gateway's base URL.
+
+On-premise these are internal hosts, so **each one you use must be listed**:
+
+```dotenv
+EGRESS_ALLOWLIST=minio.bank.internal,llm-gateway.bank.internal
+```
+
+Use the host exactly as it appears in the URL, without scheme or port: a name
+(`minio.bank.internal`) or an IP literal (`10.20.30.40`). Without it, Admin →
+Storage refuses to save with *"Storage endpoint refused: … Add … to
+EGRESS_ALLOWLIST"*. Change it with `up -d`, or `helm upgrade` with
+`config.egressAllowlist`.
+
+These need **no** allowlist entry, because they are not HTTP calls built from
+user input: MongoDB, the SMTP relay, LDAP / Active Directory and the OIDC
+provider. Your firewall or NetworkPolicy still has to let them through
+(see [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md), section 2).
+
+---
+
 ## Changing a setting
 
 ```bash

@@ -26,6 +26,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 command -v python3 >/dev/null 2>&1 || skip "python3 is not installed"
 docker_usable || skip "no container daemon (needs bash:5)"
+# Pulled here, off the pty: on a runner without the image cached, `docker run`
+# pulled it inside the pty and its progress bar's own cursor-up (\e[1A) landed
+# in the stream this test measures.
+docker pull -q bash:5 >/dev/null 2>&1 || skip "cannot pull bash:5"
 
 printf '\nmenu redraw\n\n'
 
@@ -126,7 +130,9 @@ check("six downs from the first item select the third",
       f"got {re.findall(r'CHOSE=[0-9]*', plain)}")
 
 # The arithmetic itself, so a failure says which number is wrong.
-ups = sorted({int(n) for n in re.findall(r"\x1b\[(\d+)A", raw.decode(errors='replace'))})
+# Counted from the marker on: only what the menu itself wrote.
+menu_out = raw.decode(errors="replace").split("BEFORE-THE-MENU", 1)[-1]
+ups = sorted({int(n) for n in re.findall(r"\x1b\[(\d+)A", menu_out)})
 check("cursor-up matches the four options plus the hint line",
       ups == [5], f"moved up {ups}, expected [5] for a 4-item menu")
 

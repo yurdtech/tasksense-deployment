@@ -362,8 +362,8 @@ bundled_mongo_enabled() {
   [ -f "${ENV_FILE}" ] || return 0
   if env_has_key COMPOSE_PROFILES; then
     profile_enabled bundled-mongo
-  else
-    ! external_database
+  elif external_database; then
+    return 1
   fi
 }
 

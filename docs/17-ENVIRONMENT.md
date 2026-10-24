@@ -193,7 +193,7 @@ thousands of issues). Change them only on our advice.
 | Variable | Required | Default | What it does | Bank |
 | --- | --- | --- | --- | --- |
 | `SWAGGER_ENABLED` | — | **on** in the application; `.env.example` and the chart: `false` | The interactive API browser at `/api/v1/swagger`. The application serves it unless this is `false` — it publishes the whole API surface without sign-in. Removing the line from `.env` turns it back **on**. | **`false`** |
-| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from user-supplied URLs (webhooks, importers, model base URL). Everything private is refused otherwise. | Only hosts you intend: the Jira host during migration, GitLab, the model gateway |
+| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration, GitLab, the model gateway |
 | `RATE_LIMIT_STORE` | — | `memory` | Where rate-limit counters live. `memory` fits the single-process design; `mongo` survives restarts at one database round trip per throttled request. | `memory` |
 
 ## 13. AI features
@@ -281,4 +281,10 @@ During the Jira migration window, additionally:
 COMPOSE_PROFILES=import-worker
 WORKER_ROLE=api
 EGRESS_ALLOWLIST=jira.bank.internal    # only if importing over the Jira API rather than from a backup file
+```
+
+With attachments in an internal object store, add its host (keep the others):
+
+```dotenv
+EGRESS_ALLOWLIST=minio.bank.internal
 ```

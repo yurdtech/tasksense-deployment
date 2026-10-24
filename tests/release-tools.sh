@@ -136,8 +136,23 @@ contains "--version and --mongo-version choose the tags" \
   "skopeo copy --all docker://ghcr.io/yurdtech/tasksense:1.4.2 docker://harbor.abb.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
 contains "a trailing slash on the registry is harmless" "docker://harbor.abb.internal/tasksense/mongo:7.0.14" "$(docker_calls)"
 
+# A PATH with no skopeo anywhere. Dropping the fake is not enough: GitHub's
+# Ubuntu runners ship a real one in /usr/bin, which then tried a real copy and
+# failed — and /usr/bin itself cannot leave PATH. So: one directory linking
+# every command on PATH (first one wins, as in a lookup) except skopeo.
+NOSKOPEO_BIN="${WORK}/noskopeo-bin"
+mkdir -p "${NOSKOPEO_BIN}"
+IFS=: read -r -a path_dirs <<< "${PATH}"
+for dir in "${path_dirs[@]}"; do
+  [ -d "${dir}" ] || continue
+  for cmd in "${dir}"/*; do
+    name="${cmd##*/}"
+    [ "${name}" = skopeo ] || [ -e "${NOSKOPEO_BIN}/${name}" ] || [ ! -x "${cmd}" ] || ln -s "${cmd}" "${NOSKOPEO_BIN}/${name}"
+  done
+done
+
 : > "${FAKE_LOG}"
-out="$("${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense --version 1.4.2 2>&1)"; rc=$?
+out="$(PATH="${NOSKOPEO_BIN}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense --version 1.4.2 2>&1)"; rc=$?
 check "without skopeo: pull, tag and push instead" "0" "${rc}"
 contains "pushing the application" "push harbor.abb.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
 contains "and MongoDB" "push harbor.abb.internal/tasksense/mongo:7" "$(docker_calls)"

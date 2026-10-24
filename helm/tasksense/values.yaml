@@ -204,9 +204,10 @@ config:
   # sandbox runtime; the unsafe-host mode would run agent tools as the API's OS
   # user). Setting config.agentExecutor to anything else fails the render.
 
-  # EGRESS_ALLOWLIST — extra hosts the server may call (internal GitLab, Jira,
-  # an LLM gateway). List or comma-separated string. Everything else, including
-  # private addresses, is refused.
+  # EGRESS_ALLOWLIST — extra hosts the server may call (the MinIO / S3 endpoint,
+  # internal GitLab, Jira, an LLM gateway). List or comma-separated string, host
+  # only. Everything else, including private addresses, is refused — an
+  # internal object store must be listed or Admin → Storage will not save it.
   egressAllowlist: []
 
   # RATE_LIMIT_STORE — memory | mongo. memory is right for the single API

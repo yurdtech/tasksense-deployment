@@ -281,7 +281,7 @@ To agree in the kick-off meeting. The right-hand column is for ABB.
 | AI — dispatcher | `AGENT_DISPATCHER` on / off; max concurrent | off without a pilot | ☐ on ☐ off · max __ |
 | MCP / external AI clients | Not used · read-only PAT pilot · full | Not used, or read-only pilot | ☐ no ☐ pilot: ______ |
 | E-mail | SMTP relay (host, port, TLS, CA), `EMAIL_FROM`; or in-app only | Relay with STARTTLS | relay: ______ · port __ · ☐ STARTTLS ☐ 465 |
-| Attachments | Local volume (default) · S3 / MinIO · WebDAV; size limit; extension allow-list | Volume for the pilot; object storage for production | ☐ volume ☐ store: ______ · limit __ MB |
+| Attachments | Local volume (default) · S3 / MinIO · WebDAV; size limit; extension allow-list; an internal store's host in `EGRESS_ALLOWLIST` | Volume for the pilot; object storage for production | ☐ volume ☐ store: ______ · allowlisted ☐ · limit __ MB |
 | Jira migration | XML site backup (tested with a 13 GB / 574k-issue ABB dump), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
 | Integrations | GitLab webhook, inbound mail, outgoing webhooks (SIEM), `EGRESS_ALLOWLIST` | Only what is used; allowlist minimal | GitLab: ______ · mail: ______ · allowlist: ______ |
 | Monitoring | `METRICS_ENABLED` + `METRICS_TOKEN`; Prometheus; alert rules (`examples/prometheus-alerts.yaml`) | On | scrape: ______ · alert channel: ______ |

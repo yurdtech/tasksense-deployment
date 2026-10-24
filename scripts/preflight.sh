@@ -526,6 +526,22 @@ else
   ok "port ${PORT} is free"
 fi
 
+# The stack's containers have fixed names. One left over from an earlier
+# attempt or another product — a different Compose project, or a plain
+# `docker run` — makes `up` fail halfway with "Conflict. The container name …
+# is already in use", after the images were pulled and the volumes created.
+if [ "${RUNTIME_OK}" = "1" ]; then
+  CLASHES=0
+  for name in "${MONGO_CONTAINER}" "${MIGRATE_CONTAINER}" "${APP_CONTAINER}" "${WORKER_CONTAINER}"; do
+    owner="$(container_project "${name}")" || continue
+    [ "${owner}" = "${COMPOSE_PROJECT}" ] && continue
+    CLASHES=$((CLASHES + 1))
+    if [ "${owner}" = "-" ]; then from="not made by Compose"; else from="Compose project \"${owner}\""; fi
+    fail "a container named ${name} already exists (${from}) — the stack cannot create its own. Keep it under another name: ${RUNTIME} rename ${name} ${name}-old"
+  done
+  [ "${CLASHES}" = "0" ] && ok "no other container holds the stack's names"
+fi
+
 check_registry
 
 # ══ 9. Compose file ══════════════════════════════════════════════════════════

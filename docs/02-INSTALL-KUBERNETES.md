@@ -244,7 +244,7 @@ TaskSense 1.1.0 — chart 1.1.0, release tasksense (revision 1) in tasksense.
 ```bash
 kubectl -n tasksense get pods
 kubectl -n tasksense logs job/tasksense-migrate
-helm test tasksense -n tasksense
+helm test tasksense -n tasksense --logs
 ```
 
 Expected:
@@ -257,9 +257,10 @@ tasksense-migrate-7wq9z      0/1     Completed   0          3m
 
 The migration log ends with `✓ applied N: …` on a first install, or
 `✓ nothing pending — schema is up to date`. `helm test` prints
-`Phase: Succeeded`; its log (`kubectl -n tasksense logs tasksense-test-ready`)
-shows `GET /api/v1/health/ready -> 200 {"status":"ok",…}` and the running
-version. From outside the cluster:
+`Phase: Succeeded` and, with `--logs`, the test pod's output:
+`GET /api/v1/health/ready -> 200 {"status":"ok",…}` and the running version.
+(`--logs` is the only way to read it: the pod is deleted once it succeeds, so
+`kubectl logs tasksense-test-ready` afterwards finds nothing.) From outside the cluster:
 
 ```bash
 curl -s https://tasksense.bank.internal/api/v1/health/ready

@@ -239,7 +239,7 @@ Check:
 ```bash
 kubectl -n tasksense logs job/tasksense-migrate
 kubectl -n tasksense rollout status deploy/tasksense
-helm test tasksense -n tasksense
+helm test tasksense -n tasksense --logs
 ```
 
 > The hook Jobs run while the **previous** version is still serving, because

@@ -139,7 +139,7 @@ helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense \
 # 6. Verify
 kubectl -n tasksense get pods            # → tasksense-… 1/1 Running
 kubectl -n tasksense logs job/tasksense-migrate
-helm test tasksense -n tasksense         # → Phase: Succeeded
+helm test tasksense -n tasksense --logs  # → Phase: Succeeded
 ```
 
 The API runs as exactly one pod by design; the chart refuses `replicaCount`

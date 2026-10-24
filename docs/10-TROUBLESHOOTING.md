@@ -17,7 +17,7 @@ once, each with what is wrong.
 
 On Kubernetes the equivalents are `kubectl -n tasksense get pods`,
 `kubectl -n tasksense logs job/tasksense-migrate`,
-`kubectl -n tasksense logs deploy/tasksense` and `helm test tasksense -n tasksense`
+`kubectl -n tasksense logs deploy/tasksense` and `helm test tasksense -n tasksense --logs`
 — chart-specific problems are in [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md)
 and [03-INSTALL-OPENSHIFT](03-INSTALL-OPENSHIFT.md).
 

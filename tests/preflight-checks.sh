@@ -147,6 +147,21 @@ contains "a 1.0 file is carried over before it is checked" "Configuration carrie
 check "and then passes" "" "$(blockers)"
 check "with the bundled database it always had" "1" "$(grep -c '^COMPOSE_PROFILES=bundled-mongo$' "${ENV}")"
 
+# ── a container already holding one of the stack's names ─────────────────────
+# Left over from an earlier attempt: `up` would stop halfway on "Conflict. The
+# container name … is already in use", after pulling and creating volumes.
+fixture_env "${ENV}"
+run_preflight
+contains "no other container: said so" "no other container holds the stack's names" "${OUT}"
+FAKE_FOREIGN="tasksense-mongo=" run_preflight
+check "a plain docker-run container named tasksense-mongo: exit 1" "1" "${RC}"
+contains "names it, and that Compose did not make it" "x a container named tasksense-mongo already exists (not made by Compose)" "${OUT}"
+contains "and how to keep it out of the way" "rename tasksense-mongo tasksense-mongo-old" "${OUT}"
+FAKE_FOREIGN="tasksense-app=other-product" run_preflight
+contains "one from another Compose project: names the project" "(Compose project \"other-product\")" "${OUT}"
+FAKE_RUNNING="tasksense-app" run_preflight
+lacks "the stack's own running container is no clash" "x a container named tasksense-app" "${OUT}"
+
 # ── before any configuration exists ──────────────────────────────────────────
 rm -f "${ENV}"
 run_preflight

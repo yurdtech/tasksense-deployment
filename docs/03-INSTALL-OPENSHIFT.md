@@ -110,7 +110,7 @@ TaskSense 1.1.0 — chart 1.1.0, release tasksense (revision 1) in tasksense.
 oc -n tasksense get pods
 oc -n tasksense logs job/tasksense-migrate
 oc -n tasksense get route tasksense -o jsonpath='{.spec.host}{"\n"}'
-helm test tasksense -n tasksense
+helm test tasksense -n tasksense --logs
 ```
 
 Expected: the API pod `1/1 Running`, the migration Job `Completed` with

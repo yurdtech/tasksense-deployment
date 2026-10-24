@@ -26,6 +26,11 @@ case "${ENV_FILE}" in /*) ;; *) ENV_FILE="${PWD}/${ENV_FILE}" ;; esac
 APP_CONTAINER=tasksense-app
 WORKER_CONTAINER=tasksense-worker
 MONGO_CONTAINER=tasksense-mongo
+# shellcheck disable=SC2034  # read by preflight.sh
+MIGRATE_CONTAINER=tasksense-migrate
+# `name:` in docker-compose.yml — what Compose labels its containers with.
+# shellcheck disable=SC2034  # read by preflight.sh
+COMPOSE_PROJECT=tasksense
 # shellcheck disable=SC2034  # read by backup.sh, restore.sh and the panel
 APP_VOLUME="${APP_VOLUME:-tasksense-app-data}"
 MONGO_VOLUME="${MONGO_VOLUME:-tasksense-mongo-data}"
@@ -185,6 +190,15 @@ compose() {
 container_exists()  { "${RUNTIME}" container inspect "$1" >/dev/null 2>&1; }
 container_running() {
   [ "$("${RUNTIME}" container inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" = "true" ]
+}
+
+# The Compose project a container belongs to: its label, "-" when it exists
+# but no Compose project made it (a plain `docker run`). Fails when there is
+# no container by that name.
+container_project() {
+  local label
+  label="$("${RUNTIME}" container inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$1" 2>/dev/null)" || return 1
+  printf '%s' "${label:--}"
 }
 
 # Stop one container by name if it runs. Its restart policy (unless-stopped)

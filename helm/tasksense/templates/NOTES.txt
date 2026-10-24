@@ -63,7 +63,7 @@ TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }},
 
 4. Check it end to end:
 
-     helm test {{ .Release.Name }} -n {{ $ns }}
+     helm test {{ .Release.Name }} -n {{ $ns }} --logs
 {{- if $v.firstAdminEmail }}
 
 5. {{ $v.firstAdminEmail }} is the administrator of the new workspace (first

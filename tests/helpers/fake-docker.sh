@@ -88,7 +88,17 @@ case "${1:-}" in
     name="${!#}"
     case " ${FAKE_RUNNING:-} " in *" ${name} "*) state=true ;; *) state=false ;; esac
     grep -qx "${name}" "${STOPPED}" 2>/dev/null && state=false
-    case "$*" in *State.Running*) echo "${state}" ;; esac ;;
+    case "$*" in
+      *State.Running*) echo "${state}" ;;
+      *com.docker.compose.project*)
+        # FAKE_FOREIGN: "name=project" pairs ("name=" for a plain docker run)
+        # — containers this stack did not make. A running one is the stack's.
+        for pair in ${FAKE_FOREIGN:-}; do
+          [ "${pair%%=*}" = "${name}" ] && { echo "${pair#*=}"; exit 0; }
+        done
+        [ "${state}" = "true" ] && { echo tasksense; exit 0; }
+        exit 1 ;;
+    esac ;;
   load)
     archive="${3:-}"
     case "$(basename "${archive}")" in

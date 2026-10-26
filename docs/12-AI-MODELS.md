@@ -44,8 +44,8 @@ server is on one. Allow it by name, and trust its certificate if your CA issued
 it:
 
 ```dotenv
-EGRESS_ALLOWLIST=llm-gateway.bank.internal
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem     # if the gateway's certificate is from your CA
+EGRESS_ALLOWLIST=llm-gateway.corp.internal
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem     # if the gateway's certificate is from your CA
 AGENT_DISPATCHER=on                        # the scheduler that advances agent work
 AGENT_EXECUTOR=off                         # always
 ```
@@ -62,7 +62,7 @@ Open the firewall from the TaskSense host to the gateway as well
 In **Agents → Settings & roles** (administrators):
 
 1. Add a provider, kind `openai-compatible`.
-2. Base URL: `https://llm-gateway.bank.internal/v1`
+2. Base URL: `https://llm-gateway.corp.internal/v1`
 3. API key: whatever your endpoint expects, or a placeholder if it expects
    none. It is encrypted at rest with `STORAGE_SECRET` and never returned by
    the API.
@@ -71,7 +71,7 @@ In **Agents → Settings & roles** (administrators):
 
 Expected: the test answers with the model's reply within a few seconds.
 
-Do **not** set `ANTHROPIC_API_KEY` in `.env` for a bank installation: it is a
+Do **not** set `ANTHROPIC_API_KEY` in `.env` for an on-premise installation: it is a
 server-wide fallback for a cloud provider. Connect your gateway as above, where
 the key is encrypted.
 
@@ -101,7 +101,7 @@ docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama
 docker exec ollama ollama pull qwen2.5:7b
 ```
 
-Base URL: `http://ollama.bank.internal:11434/v1`
+Base URL: `http://ollama.corp.internal:11434/v1`
 
 CPU inference is slow — tens of seconds per summary. Fine for evaluating
 whether the features are worth a GPU; frustrating as a daily tool.
@@ -130,7 +130,7 @@ disconnect the provider in Agents → Settings & roles.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | "Test" fails with a blocked-URL error | The host is not in `EGRESS_ALLOWLIST` | Add it, `up -d` |
-| "Test" fails with `unable to get local issuer certificate` | The gateway's certificate is from your CA | `NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem` |
+| "Test" fails with `unable to get local issuer certificate` | The gateway's certificate is from your CA | `NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem` |
 | Test passes, agents do nothing | `AGENT_DISPATCHER=off` | `AGENT_DISPATCHER=on`, `up -d` |
 | Very slow | CPU inference, or a model too large for the GPU | A GPU, or a smaller model |
 | Malformed-response errors | The model is too small to hold a JSON format | 7B or larger |

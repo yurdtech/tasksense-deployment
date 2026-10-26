@@ -6,11 +6,11 @@
 #   ./scripts/load-images.sh --offline
 #       Load ./images/*.tar from the offline bundle into this host's runtime.
 #
-#   ./scripts/load-images.sh --offline --registry harbor.bank.internal/tasksense
+#   ./scripts/load-images.sh --offline --registry harbor.corp.internal/tasksense
 #       Load them, then push both into your registry — for an air-gapped site
 #       with a Harbor, Nexus or Quay inside.
 #
-#   ./scripts/load-images.sh --registry harbor.bank.internal/tasksense [--version 1.1.0]
+#   ./scripts/load-images.sh --registry harbor.corp.internal/tasksense [--version 1.1.0]
 #       Copy both straight from ghcr.io and Docker Hub into your registry. Run it
 #       from a machine that reaches both; it needs no compose/.env.
 #
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
 done
 [ "${OFFLINE}" = "1" ] || [ -n "${MIRROR}" ] || die "choose --offline, --registry <host/path>, or both" "Run with --help."
 MIRROR="${MIRROR%/}"
-case "${MIRROR}" in */*|"") ;; *) die "--registry takes <host>/<path>, e.g. harbor.bank.internal/tasksense" ;; esac
+case "${MIRROR}" in */*|"") ;; *) die "--registry takes <host>/<path>, e.g. harbor.corp.internal/tasksense" ;; esac
 
 detect_runtime
 

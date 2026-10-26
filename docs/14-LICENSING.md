@@ -26,7 +26,7 @@ Email **info@yurdtech.az** with the organisation the licence is for and how
 many people will have accounts. You will receive a single line:
 
 ```
-LICENSE_KEY=tsl_eyJvcmciOiJBQkIgQmFuayIsInBsYW4iOiJwcm8i…
+LICENSE_KEY=tsl_eyJvcmciOiJFeGFtcGxlIENvcnAiLCJwbGFuIjoicHJv…
 ```
 
 Put it in `compose/.env` and apply it with
@@ -64,7 +64,7 @@ printf '%s' "$p" | base64 -d; echo
 Expected — your organisation, seats and expiry:
 
 ```json
-{"org":"ABB Bank","plan":"pro","seats":200,"exp":"2027-08-01"}
+{"org":"Example Corp","plan":"pro","seats":200,"exp":"2027-08-01"}
 ```
 
 (The key is `tsl_<payload>.<signature>`, both base64url; the second and third

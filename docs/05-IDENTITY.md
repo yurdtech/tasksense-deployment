@@ -64,11 +64,11 @@ applies within about 30 seconds — no restart, no container access.
 
 | | Example |
 | --- | --- |
-| An `ldaps://` URL | `ldaps://dc01.bank.internal:636` |
-| A read-only service account | `CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal` |
-| The subtree to search | `DC=bank,DC=internal` |
-| Your issuing CA, as PEM text | contents of `bank-ca.pem` |
-| Two groups, for admins and users | `CN=TaskSense-Admins,OU=Groups,DC=bank,DC=internal` |
+| An `ldaps://` URL | `ldaps://dc01.corp.internal:636` |
+| A read-only service account | `CN=svc-tasksense,OU=Service Accounts,DC=corp,DC=internal` |
+| The subtree to search | `DC=corp,DC=internal` |
+| Your issuing CA, as PEM text | contents of `corp-ca.pem` |
+| Two groups, for admins and users | `CN=TaskSense-Admins,OU=Groups,DC=corp,DC=internal` |
 
 All of it goes into the Admin → Authentication form. Use `ldaps://` — the
 application refuses plain `ldap://` on-premise unless the directory's
@@ -81,15 +81,15 @@ the query.
 
 | Directory | Filter | Users sign in with |
 | --- | --- | --- |
-| Active Directory | `(sAMAccountName={{username}})` | `arustamli` |
-| Active Directory, by email | `(userPrincipalName={{username}})` | `arustamli@bank.internal` |
+| Active Directory | `(sAMAccountName={{username}})` | `jdoe` |
+| Active Directory, by email | `(userPrincipalName={{username}})` | `jdoe@corp.internal` |
 | Either, accepting both | `(\|(sAMAccountName={{username}})(userPrincipalName={{username}}))` | either |
-| OpenLDAP / 389DS | `(uid={{username}})` | `arustamli` |
+| OpenLDAP / 389DS | `(uid={{username}})` | `jdoe` |
 
 Restrict it if you do not want every directory account to have access:
 
 ```
-(&(sAMAccountName={{username}})(memberOf=CN=TaskSense-Users,OU=Groups,DC=bank,DC=internal))
+(&(sAMAccountName={{username}})(memberOf=CN=TaskSense-Users,OU=Groups,DC=corp,DC=internal))
 ```
 
 ### Group to role mapping
@@ -115,9 +115,9 @@ also checks the filter, the attributes, and the resolved role, end to end.
 Nothing is saved by a test. To cross-check from the host first:
 
 ```bash
-ldapsearch -H ldaps://dc01.bank.internal:636 \
-  -D "CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal" -W \
-  -b "DC=bank,DC=internal" "(sAMAccountName=arustamli)" mail displayName memberOf
+ldapsearch -H ldaps://dc01.corp.internal:636 \
+  -D "CN=svc-tasksense,OU=Service Accounts,DC=corp,DC=internal" -W \
+  -b "DC=corp,DC=internal" "(sAMAccountName=jdoe)" mail displayName memberOf
 ```
 
 If that returns the user, TaskSense will find them too. Sign-in activity lands
@@ -152,17 +152,17 @@ TaskSense.
 | | Value |
 | --- | --- |
 | Client type | Confidential, authorization-code flow |
-| Redirect URI | `https://tasksense.bank.internal/api/v1/auth/oidc/callback` — exactly `<APP_URL>/api/v1/auth/oidc/callback` |
+| Redirect URI | `https://tasksense.corp.internal/api/v1/auth/oidc/callback` — exactly `<APP_URL>/api/v1/auth/oidc/callback` |
 | Scopes | `openid`, `profile`, `email` |
 | Claims | `email` is **required** — it is how the identity is joined to a TaskSense account. Issue only verified addresses: TaskSense does not check `email_verified` |
 
 ### 2. Configure TaskSense
 
 ```dotenv
-OIDC_ISSUER=https://sso.bank.internal/realms/corporate
+OIDC_ISSUER=https://sso.corp.internal/realms/corporate
 OIDC_CLIENT_ID=tasksense
 OIDC_CLIENT_SECRET=<from your IdP>
-OIDC_REDIRECT_URI=https://tasksense.bank.internal/api/v1/auth/oidc/callback
+OIDC_REDIRECT_URI=https://tasksense.corp.internal/api/v1/auth/oidc/callback
 OIDC_LABEL=Sign in with corporate account
 ```
 
@@ -172,7 +172,7 @@ If the IdP's certificate is issued by your own CA, the application must trust
 it — discovery and the token exchange are server-to-server HTTPS calls:
 
 ```dotenv
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem      # the file in compose/certs/
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem      # the file in compose/certs/
 ```
 
 Apply with `docker compose -f compose/docker-compose.yml up -d`.
@@ -180,10 +180,10 @@ Apply with `docker compose -f compose/docker-compose.yml up -d`.
 ### 3. Verify
 
 ```bash
-curl -s https://sso.bank.internal/realms/corporate/.well-known/openid-configuration | head -c 200
+curl -s https://sso.corp.internal/realms/corporate/.well-known/openid-configuration | head -c 200
 ```
 
-Expected, from the TaskSense host: JSON starting with `{"issuer":"https://sso.bank.internal/realms/corporate"`.
+Expected, from the TaskSense host: JSON starting with `{"issuer":"https://sso.corp.internal/realms/corporate"`.
 Then open TaskSense: the sign-in page shows the `OIDC_LABEL` button; sign in
 with it and you land on the board.
 
@@ -237,7 +237,7 @@ minute per client address.
 
 | | |
 | --- | --- |
-| `SESSION_TTL_HOURS` | How long a sign-in lasts. Default **720** (30 days) in 1.1.0 — earlier versions defaulted to never. **Banks: 12.** |
+| `SESSION_TTL_HOURS` | How long a sign-in lasts. Default **720** (30 days) in 1.1.0 — earlier versions defaulted to never. **Recommended: 12.** |
 | Admin → Security → Session lifetime | Overrides the environment value for the workspace, without a restart. Empty follows the server default; `0` means never. |
 | Admin → Security → sign everyone out | Ends every session except yours — use it after shortening the lifetime, because sessions issued before a lifetime applied carry no expiry. |
 
@@ -254,7 +254,7 @@ profile, scoped read or write, with an optional expiry. Only a SHA-256 hash is
 stored; the token is shown once.
 
 ```bash
-curl -H "Authorization: Bearer tsk_..." https://tasksense.bank.internal/api/v1/tasks
+curl -H "Authorization: Bearer tsk_..." https://tasksense.corp.internal/api/v1/tasks
 ```
 
 ---
@@ -266,6 +266,6 @@ curl -H "Authorization: Bearer tsk_..." https://tasksense.bank.internal/api/v1/t
 - **SCIM provisioning** — accounts are created on first sign-in and their role
   follows directory group membership. There is no push from your IdP, so a
   disabled directory account cannot sign in, but an existing session survives
-  until it expires. Set `SESSION_TTL_HOURS` accordingly (banks: 12).
+  until it expires. Set `SESSION_TTL_HOURS` accordingly (recommended: 12).
 - **Multi-factor authentication inside TaskSense** — get it from your identity
   provider by signing in through OIDC. LDAP sign-in is password-only.

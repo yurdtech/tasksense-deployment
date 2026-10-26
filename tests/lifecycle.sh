@@ -60,7 +60,7 @@ contains "bundled: pulls what the profiles use" "compose --env-file ${SANDBOX}/c
 contains "bundled: brings the stack up with compose up -d" "compose --env-file ${SANDBOX}/compose/.env up -d" "$(docker_calls)"
 lacks "and never with the old --no-deps special case" "--no-deps" "$(docker_calls)"
 
-fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.abb.invalid/?authSource=admin"
+fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.acme.invalid/?authSource=admin"
 export FAKE_RUNNING="tasksense-mongo" FAKE_IMAGE_RC=1
 out="$("${SANDBOX}/scripts/install.sh" 2>&1)"; rc=$?
 check "external: installs without MONGO_USER / MONGO_PASSWORD" "0" "${rc}"
@@ -111,7 +111,7 @@ before "--stop-app: and the app" "^stop -t 45 tasksense-app" "mongodump"
 before "--stop-app: and both started again after" "mongodump" " up -d$"
 
 fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_DB=tasks_prod" \
-  "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.abb.invalid:27017/admin?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem"
+  "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.acme.invalid:27017/admin?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem"
 out="$("${SANDBOX}/scripts/backup.sh" 2>&1)"; rc=$?
 A="$(newest 'tasksense-[0-9]*Z.tar.gz')"
 check "external: a backup is written" "0" "${rc}"
@@ -119,7 +119,7 @@ contains "external: dumped through a throwaway tools container" "run --rm -i -e 
 lacks "external: the password is in no command line" "Sup3rS3cret" "$(docker_calls)"
 contains "external: the URI travelled in the environment instead" "Sup3rS3cret" "$(cat "${FAKE_LOG}.env" 2>/dev/null)"
 contains "external: without the path database, which stays the auth database" \
-  "TS_MONGO_URI=mongodb://ts:Sup3rS3cret@db.abb.invalid:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin" \
+  "TS_MONGO_URI=mongodb://ts:Sup3rS3cret@db.acme.invalid:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin" \
   "$(cat "${FAKE_LOG}.env" 2>/dev/null)"
 M="$(manifest "${A}")"
 contains "manifest: external, the database named by MONGODB_DB" "\"database\": \"tasks_prod\"" "${M}"
@@ -184,7 +184,7 @@ printf 'garbage' > "${A}.bad.tar.gz"; cp "${A}.sha256" "${A}.bad.tar.gz.sha256"
 out="$("${SANDBOX}/scripts/restore.sh" "${A}.bad.tar.gz" --yes 2>&1)"; rc=$?
 check "an archive that fails its checksum is refused before anything happens" "1" "${rc}"
 
-fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.abb.invalid/?authSource=admin"
+fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.acme.invalid/?authSource=admin"
 "${SANDBOX}/scripts/backup.sh" >/dev/null 2>&1
 A="$(newest 'tasksense-[0-9]*Z.tar.gz')"
 : > "${FAKE_LOG}"; rm -f "${FAKE_LOG}.env"

@@ -60,14 +60,14 @@ run_preflight
 check "the import worker with WORKER_ROLE=api passes" "" "$(blockers)"
 
 mkdir -p "${SANDBOX}/compose/certs"
-printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "${SANDBOX}/compose/certs/bank-ca.pem"
-fixture_env "${ENV}" "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem" \
-  "MONGODB_URI=mongodb://ts:pw@mongo-0.abb.invalid:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin" \
+printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "${SANDBOX}/compose/certs/corp-ca.pem"
+fixture_env "${ENV}" "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem" \
+  "MONGODB_URI=mongodb://ts:pw@mongo-0.acme.invalid:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin" \
   "MONGODB_COMPRESSORS=zlib" "MONGODB_TIMEOUT_MS=15000"
 run_preflight
 check "your own MongoDB with TLS and your CA passes" "" "$(blockers)"
-contains "the CA file is found" "+ tlsCAFile /certs/bank-ca.pem is in compose/certs/" "${OUT}"
-contains "the CA bundle is read" "+ NODE_EXTRA_CA_CERTS /certs/bank-ca.pem (1 certificate(s))" "${OUT}"
+contains "the CA file is found" "+ tlsCAFile /certs/corp-ca.pem is in compose/certs/" "${OUT}"
+contains "the CA bundle is read" "+ NODE_EXTRA_CA_CERTS /certs/corp-ca.pem (1 certificate(s))" "${OUT}"
 lacks "and the password never appears in what it prints" ":pw@" "${OUT}"
 
 # ── the configuration file ───────────────────────────────────────────────────
@@ -102,15 +102,15 @@ warns "a non-loopback bind address" "BIND_ADDRESS=0.0.0.0" "BIND_ADDRESS=0.0.0.0
 
 # ── database topology ────────────────────────────────────────────────────────
 blocks "bundled-mongo and MONGODB_URI both" "MONGODB_URI is set AND bundled-mongo is in COMPOSE_PROFILES" \
-  "MONGODB_URI=mongodb://db.abb.invalid/"
+  "MONGODB_URI=mongodb://db.acme.invalid/"
 blocks "neither" "no database: bundled-mongo is not in COMPOSE_PROFILES and MONGODB_URI is not set" \
   "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD="
 blocks "a profile typo" "COMPOSE_PROFILES names 'bundled_mongo'" "COMPOSE_PROFILES=bundled_mongo"
 blocks "a bundled password that breaks the URI" "MONGO_PASSWORD contains / : @ ? # % [ or ]" "MONGO_PASSWORD=ab/cd+ef=="
 blocks "a CA named in the URI but missing" "MONGODB_URI names tlsCAFile=/certs/missing.pem, but compose/certs/missing.pem does not exist" \
-  "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://u:p@db.abb.invalid/?tls=true&tlsCAFile=/certs/missing.pem"
+  "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://u:p@db.acme.invalid/?tls=true&tlsCAFile=/certs/missing.pem"
 blocks "a CA outside /certs" "tlsCAFile=/etc/ssl/ca.pem is not under /certs" \
-  "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://u:p@db.abb.invalid/?tls=true&tlsCAFile=/etc/ssl/ca.pem"
+  "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://u:p@db.acme.invalid/?tls=true&tlsCAFile=/etc/ssl/ca.pem"
 blocks "localhost from inside a container" "MONGODB_URI points at localhost" \
   "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=mongodb://u:p@localhost:27017/"
 

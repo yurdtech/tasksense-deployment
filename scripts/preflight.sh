@@ -287,11 +287,11 @@ esac
 
 TTL="$(env_value SESSION_TTL_HOURS)"
 if ! env_has_key SESSION_TTL_HOURS; then
-  advise "SESSION_TTL_HOURS is unset — sign-ins last 720 h (30 days). Bank: SESSION_TTL_HOURS=12"
+  advise "SESSION_TTL_HOURS is unset — sign-ins last 720 h (30 days). Recommended: SESSION_TTL_HOURS=12"
 elif [ -z "${TTL}" ] || [ "${TTL}" = "0" ]; then
-  advise "SESSION_TTL_HOURS=${TTL:-<empty>} — sessions never expire. Bank: SESSION_TTL_HOURS=12"
+  advise "SESSION_TTL_HOURS=${TTL:-<empty>} — sessions never expire. Recommended: SESSION_TTL_HOURS=12"
 elif is_uint "${TTL}" && [ "${TTL}" -gt 24 ]; then
-  advise "SESSION_TTL_HOURS=${TTL} — a sign-in lasts $((TTL / 24)) day(s). Bank: 12"
+  advise "SESSION_TTL_HOURS=${TTL} — a sign-in lasts $((TTL / 24)) day(s). Recommended: 12"
 else
   ok "SESSION_TTL_HOURS=${TTL}"
 fi
@@ -415,7 +415,7 @@ else
   [ "$(env_value MONGODB_COMPRESSORS)" = "none" ] && note "MONGODB_COMPRESSORS=none — across a network, zlib is usually much faster"
   TMO="$(env_value MONGODB_TIMEOUT_MS)"
   if [ -z "${TMO}" ] || { is_uint "${TMO}" && [ "${TMO}" -lt 15000 ]; }; then
-    note "MONGODB_TIMEOUT_MS is ${TMO:-5000 (default)} — across a network, 15000 is the bank recommendation"
+    note "MONGODB_TIMEOUT_MS is ${TMO:-5000 (default)} — across a network, 15000 is the recommended value"
   fi
   if [ -n "$(env_value MONGO_PASSWORD)" ]; then
     note "MONGO_USER / MONGO_PASSWORD are unused with your own MongoDB — leave them empty"

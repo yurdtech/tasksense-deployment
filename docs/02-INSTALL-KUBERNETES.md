@@ -100,7 +100,7 @@ operator — and give the chart the name:
 ```bash
 umask 077
 cat > tasksense-secrets.env <<'EOF'
-MONGODB_URI=mongodb://tasksense:PASSWORD@mongo-0.db.bank.internal:27017,mongo-1.db.bank.internal:27017,mongo-2.db.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb://tasksense:PASSWORD@mongo-0.db.corp.internal:27017,mongo-1.db.corp.internal:27017,mongo-2.db.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 EOF
 printf 'STORAGE_SECRET=%s\n' "$(openssl rand -base64 32)" >> tasksense-secrets.env
 
@@ -141,8 +141,8 @@ Or write it yourself. The minimal file:
 
 ```yaml
 # my-values.yaml
-appUrl: https://tasksense.bank.internal
-firstAdminEmail: admin@bank.internal
+appUrl: https://tasksense.corp.internal
+firstAdminEmail: admin@corp.internal
 existingSecret: tasksense-secrets
 
 ingress:
@@ -150,22 +150,22 @@ ingress:
   className: nginx
   tls:
     - secretName: tasksense-tls
-      hosts: [tasksense.bank.internal]
+      hosts: [tasksense.corp.internal]
 ```
 
 `ingress.hosts` defaults to the host of `appUrl`. Everything else has a working
-default chosen for a bank: 12-hour sessions, no Swagger UI, JSON logs, task
+default chosen for production: 12-hour sessions, no Swagger UI, JSON logs, task
 execution off. Add what applies to you:
 
 ```yaml
-# The bank CA — MongoDB TLS, SMTP, LDAPS, OIDC and an LLM gateway in one place.
+# Your internal CA — MongoDB TLS, SMTP, LDAPS, OIDC and an LLM gateway in one place.
 certs:
   files:
-    bank-ca.pem: |
+    corp-ca.pem: |
       -----BEGIN CERTIFICATE-----
       ...
       -----END CERTIFICATE-----
-  caBundle: bank-ca.pem            # → NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem
+  caBundle: corp-ca.pem            # → NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem
 
 # Jira migration: the import worker, on ReadWriteMany storage.
 worker:
@@ -263,8 +263,8 @@ The migration log ends with `✓ applied N: …` on a first install, or
 `kubectl logs tasksense-test-ready` afterwards finds nothing.) From outside the cluster:
 
 ```bash
-curl -s https://tasksense.bank.internal/api/v1/health/ready
-curl -s https://tasksense.bank.internal/api/v1/version
+curl -s https://tasksense.corp.internal/api/v1/health/ready
+curl -s https://tasksense.corp.internal/api/v1/version
 ```
 
 `/version` reports what is actually running — the first thing to check after an
@@ -293,16 +293,16 @@ trusts it:
 | Your Secret | `certs.existingSecret` | client certificates and keys |
 
 All of them appear read-only under `/certs` in the API, the worker, the
-migration Job and the backup Jobs. `certs.caBundle: bank-ca.pem` sets
-`NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem`; the MongoDB URI names the same file
-with `tlsCAFile=/certs/bank-ca.pem`. The directory (LDAP) CA is the exception: it
+migration Job and the backup Jobs. `certs.caBundle: corp-ca.pem` sets
+`NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem`; the MongoDB URI names the same file
+with `tlsCAFile=/certs/corp-ca.pem`. The directory (LDAP) CA is the exception: it
 is pasted in the application, Admin → Authentication.
 
 ```bash
 kubectl -n tasksense exec deploy/tasksense -- ls -l /certs
 ```
 
-Expected: your file(s), e.g. `bank-ca.pem`.
+Expected: your file(s), e.g. `corp-ca.pem`.
 
 ---
 
@@ -502,7 +502,7 @@ with the new version, and:
 ```bash
 kubectl -n tasksense logs job/tasksense-pre-upgrade-backup | tail -1   # wrote /backups/pre-upgrade-…
 kubectl -n tasksense logs job/tasksense-migrate | tail -2              # ✓ applied … / nothing pending
-curl -s https://tasksense.bank.internal/api/v1/version                 # the new version
+curl -s https://tasksense.corp.internal/api/v1/version                 # the new version
 ```
 
 The order inside `helm upgrade` is fixed by hook weights: hook copies of the
@@ -569,14 +569,14 @@ or `skopeo login` — any of the three works):
 sha256sum -c tasksense-helm-airgap-1.1.0.tar.gz.sha256
 mkdir tasksense-bundle && tar -xzf tasksense-helm-airgap-1.1.0.tar.gz -C tasksense-bundle
 cd tasksense-bundle
-./helm-airgap-load.sh harbor.bank.internal            # --push-chart to also push the chart
+./helm-airgap-load.sh harbor.corp.internal            # --push-chart to also push the chart
 ```
 
 Expected: every checksum `OK`, then
 
 ```
-  ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.bank.internal/yurdtech/tasksense:1.1.0
-  mongo:7 -> harbor.bank.internal/library/mongo:7
+  ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.corp.internal/yurdtech/tasksense:1.1.0
+  mongo:7 -> harbor.corp.internal/library/mongo:7
 ```
 
 and the install command. That is the rule `global.imageRegistry` applies: the
@@ -585,19 +585,19 @@ registry host is replaced and the path kept; Docker Hub official images gain
 
 ```bash
 kubectl create secret docker-registry tasksense-pull -n tasksense \
-  --docker-server=harbor.bank.internal --docker-username='<robot account>' --docker-password='<token>'
+  --docker-server=harbor.corp.internal --docker-username='<robot account>' --docker-password='<token>'
 
 helm install tasksense ./tasksense-1.1.0.tgz -n tasksense \
-  --set global.imageRegistry=harbor.bank.internal \
+  --set global.imageRegistry=harbor.corp.internal \
   --set 'imagePullSecrets[0].name=tasksense-pull' \
   -f my-values.yaml --wait --timeout 30m
 ```
 
 If your mirror already follows the Compose layout (`load-images.sh --registry
-harbor.bank.internal/tasksense` → `…/tasksense/tasksense`, `…/tasksense/mongo`),
+harbor.corp.internal/tasksense` → `…/tasksense/tasksense`, `…/tasksense/mongo`),
 leave `global.imageRegistry` empty and name the repositories instead:
-`image.repository: harbor.bank.internal/tasksense/tasksense`,
-`backup.image.repository: harbor.bank.internal/tasksense/mongo`.
+`image.repository: harbor.corp.internal/tasksense/tasksense`,
+`backup.image.repository: harbor.corp.internal/tasksense/mongo`.
 
 ---
 

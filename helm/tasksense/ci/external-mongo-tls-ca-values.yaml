@@ -1,18 +1,18 @@
-# CI: an external MongoDB replica set over TLS with a private (bank) CA.
+# CI: an external MongoDB replica set over TLS with a private (internal) CA.
 # The CA is inlined (certs.files) and trusted process-wide (NODE_EXTRA_CA_CERTS),
 # the URI points tlsCAFile at the same /certs path, timeouts for a network hop,
 # and the nightly + pre-upgrade dumps (which mount /certs too).
-appUrl: https://tasksense.bank.internal
-mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.db.bank.internal:27017,mongo-1.db.bank.internal:27017,mongo-2.db.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+appUrl: https://tasksense.corp.internal
+mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.db.corp.internal:27017,mongo-1.db.corp.internal:27017,mongo-2.db.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 storageSecret: ci-storage-secret-0123456789abcdef0123456789
-firstAdminEmail: admin@bank.internal
+firstAdminEmail: admin@corp.internal
 certs:
   files:
-    bank-ca.pem: |
+    corp-ca.pem: |
       -----BEGIN CERTIFICATE-----
       MIIBCzCBs6ADAgECAgEBMAoGCCqGSM49BAMCMA8xDTALBgNVBAMTBHRlc3QwHhcN
       -----END CERTIFICATE-----
-  caBundle: bank-ca.pem
+  caBundle: corp-ca.pem
 config:
   mongodbDatabase: tasksense_prod
   mongodbTimeoutMs: 15000

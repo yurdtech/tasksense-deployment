@@ -56,9 +56,9 @@ scrape_configs:
       type: Bearer
       credentials_file: /etc/prometheus/secrets/tasksense-metrics-token
     tls_config:
-      ca_file: /etc/prometheus/bank-ca.pem
+      ca_file: /etc/prometheus/corp-ca.pem
     static_configs:
-      - targets: ["tasksense.bank.internal"]
+      - targets: ["tasksense.corp.internal"]
 ```
 
 Expected: the target is `UP` on Prometheus's *Targets* page within a minute.
@@ -137,7 +137,7 @@ modules:
       valid_status_codes: [200]
       fail_if_body_not_matches_regexp: ['"indexes":"ready"']
       tls_config:
-        ca_file: /etc/blackbox/bank-ca.pem
+        ca_file: /etc/blackbox/corp-ca.pem
   tasksense_schema:
     prober: http
     timeout: 5s
@@ -145,7 +145,7 @@ modules:
       valid_status_codes: [200]
       fail_if_body_not_matches_regexp: ['"schema":\{"state":"current"\}']
       tls_config:
-        ca_file: /etc/blackbox/bank-ca.pem
+        ca_file: /etc/blackbox/corp-ca.pem
 ```
 
 ```yaml
@@ -155,7 +155,7 @@ scrape_configs:
     metrics_path: /probe
     params: { module: [tasksense_ready] }
     static_configs:
-      - targets: ["https://tasksense.bank.internal/api/v1/health/ready"]
+      - targets: ["https://tasksense.corp.internal/api/v1/health/ready"]
     relabel_configs:
       - { source_labels: [__address__], target_label: __param_target }
       - { source_labels: [__param_target], target_label: instance }
@@ -164,7 +164,7 @@ scrape_configs:
     metrics_path: /probe
     params: { module: [tasksense_schema] }
     static_configs:
-      - targets: ["https://tasksense.bank.internal/api/v1/health/ready"]
+      - targets: ["https://tasksense.corp.internal/api/v1/health/ready"]
     relabel_configs:
       - { source_labels: [__address__], target_label: __param_target }
       - { source_labels: [__param_target], target_label: instance }

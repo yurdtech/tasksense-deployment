@@ -56,7 +56,7 @@ fi
 # A tick is three bytes. Printed to a terminal that is not in a UTF-8 locale it
 # comes out as three replacement characters, which is how "✓ healthy" becomes
 # "??? healthy" over a serial console or an ssh session that carried LC_ALL=C —
-# both ordinary inside a bank. Adopt a UTF-8 locale if the host has one; use
+# both ordinary inside an enterprise network. Adopt a UTF-8 locale if the host has one; use
 # ASCII if it does not, rather than printing rubbish either way.
 if ! printf '%s' "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" | grep -qi 'utf-\{0,1\}8'; then
   if locale -a 2>/dev/null | grep -qi '^C\.utf-\{0,1\}8$'; then
@@ -70,7 +70,7 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *)              UI_UTF8=0; MARK_OK="+"; MARK_BAD="x" ;;
 esac
 # TASKSENSE_ASCII=1 forces it, for a terminal that claims UTF-8 and is lying —
-# some emulators reached over a bank's jump host do.
+# some emulators reached over a corporate jump host do.
 if [ "${TASKSENSE_ASCII:-0}" = "1" ]; then
   # shellcheck disable=SC2034  # read by ui.sh
   UI_UTF8=0
@@ -145,7 +145,7 @@ version_cmp() {
 version_ge() { [ "$(version_cmp "$1" "$2")" != "-1" ]; }
 
 # ── Container runtime ────────────────────────────────────────────────────────
-# Podman ships a compose-compatible CLI, and several banks forbid the Docker
+# Podman ships a compose-compatible CLI, and several enterprises forbid the Docker
 # daemon outright, so accept either rather than assuming Docker.
 detect_runtime() {
   if [ -n "${CONTAINER_RUNTIME:-}" ]; then

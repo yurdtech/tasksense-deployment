@@ -267,7 +267,7 @@ procedure above:
 | **Docker Compose v2.20+** is required (profiles, optional dependencies) | `docker compose version` before you start. |
 | `.env` gains `COMPOSE_PROFILES` | Added for you (`bundled-mongo`, when `MONGODB_URI` is empty) by `upgrade.sh`, `install.sh` and `preflight.sh`. With your own MongoDB, nothing is added — check it is not listed. |
 | Migrations run in the one-shot `migrate` service | Nothing to do; the application now starts only after it succeeded (`MIGRATE_ON_BOOT=manual` is set by the stack). |
-| Session lifetime default changes from never (`0`) to 30 days | Set `SESSION_TTL_HOURS=12` for a bank. Sessions issued before the upgrade keep no expiry; to end them all, Admin → Security → sign everyone out. |
+| Session lifetime default changes from never (`0`) to 30 days | Set `SESSION_TTL_HOURS=12` for production. Sessions issued before the upgrade keep no expiry; to end them all, Admin → Security → sign everyone out. |
 | `AGENT_EXECUTOR` | Anything other than `off` now fails `preflight.sh`. Set `AGENT_EXECUTOR=off`. |
 | `SWAGGER_ENABLED` | Still on unless set — set `SWAGGER_ENABLED=false`. |
 | Uploads are staged on the data volume (`TMPDIR=/app/api/data/tmp`) | Free disk on Docker's data root for the largest upload; 2× a Jira backup's size during a migration. |

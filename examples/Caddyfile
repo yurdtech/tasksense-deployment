@@ -3,7 +3,7 @@
 #   sudo cp examples/Caddyfile /etc/caddy/Caddyfile
 #   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 #
-# Replace tasksense.bank.internal (it must equal APP_URL in compose/.env). The
+# Replace tasksense.corp.internal (it must equal APP_URL in compose/.env). The
 # same five things as examples/nginx.conf, in Caddy's terms:
 #
 #   1. Upstream keep-alive shorter than the application's 65 s. Caddy's own
@@ -33,7 +33,7 @@
 	}
 }
 
-tasksense.bank.internal {
+tasksense.corp.internal {
 	# By default Caddy obtains and renews a certificate itself, which needs it
 	# to reach a certificate authority. On an isolated network use one from
 	# your internal PKI instead (full chain first, then the key):

@@ -95,12 +95,12 @@ Encrypting at rest, if your policy requires it:
 
 ```bash
 ./scripts/backup.sh --output /var/tmp/tasksense-staging
-gpg --encrypt --recipient backup@bank.internal /var/tmp/tasksense-staging/tasksense-*.tar.gz
+gpg --encrypt --recipient backup@corp.internal /var/tmp/tasksense-staging/tasksense-*.tar.gz
 mv /var/tmp/tasksense-staging/*.gpg /mnt/backup/tasksense/
 shred -u /var/tmp/tasksense-staging/tasksense-*.tar.gz
 ```
 
-Keep the private key of `backup@bank.internal` where a disaster cannot take it
+Keep the private key of `backup@corp.internal` where a disaster cannot take it
 along with the server.
 
 ### 3. Restore
@@ -159,7 +159,7 @@ account needs `dropDatabase` on `MONGODB_DB` — the `dbAdmin` role in
 has `readWrite` only, restore the database as your DBA, then the files:
 
 ```bash
-mongorestore --uri="mongodb://dba@mongo-1.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/etc/pki/bank-ca.pem" \
+mongorestore --uri="mongodb://dba@mongo-1.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/etc/pki/corp-ca.pem" \
   --nsInclude='tasksense.*' --drop --archive=mongodb.archive.gz --gzip
 ```
 
@@ -186,7 +186,7 @@ Restore procedure on Kubernetes:
 ## Rehearsing it
 
 Do this once before go-live, and at least once a year — quarterly is better for
-a bank. Twenty minutes plus restore time.
+production. Twenty minutes plus restore time.
 
 On a **scratch VM**, not the production host (the Compose project and volume
 names are fixed — `tasksense`, `tasksense-app-data`, `tasksense-mongo-data` —

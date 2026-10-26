@@ -149,7 +149,7 @@ Behaviours worth knowing:
   no cookies — so no CSRF surface. Only the SHA-256 hash is stored server-side,
   so revocation is immediate.
 - **Lifetime: `SESSION_TTL_HOURS`**, default 720 hours (30 days) in 1.1.0 —
-  before 1.1.0 the default was never. **Set 12 for a bank.** A workspace policy
+  before 1.1.0 the default was never. **Set 12 for production.** A workspace policy
   in Admin → Security overrides it. Sessions issued before a lifetime applied
   carry no expiry — so an upgrade does not sign the company out at once — and
   are ended with Admin → Security → sign everyone out. There is no idle
@@ -214,7 +214,7 @@ proxy; if you do, allow them only from the mail relay / GitLab segment.
 | Proxy → application | Plain HTTP on loopback (Compose) or the cluster network |
 | Application → directory | LDAPS, certificate verified against the CA pasted per directory |
 | Application → MongoDB | TLS when the URI says `tls=true`, verified against `tlsCAFile=/certs/…`. The bundled container is on the internal Compose network without TLS |
-| Application → SMTP, IdP, object storage, model gateway | TLS, verified against the public roots plus `NODE_EXTRA_CA_CERTS=/certs/<bank-ca>.pem` |
+| Application → SMTP, IdP, object storage, model gateway | TLS, verified against the public roots plus `NODE_EXTRA_CA_CERTS=/certs/<corp-ca>.pem` |
 
 **At rest.** Two layers, and they are different:
 

@@ -145,7 +145,7 @@ the same installer. On Kubernetes it is `helm install` from
 
 ## What you decide before installing
 
-The wizard asks about these, but it cannot decide them for you. Banks: the full
+The wizard asks about these, but it cannot decide them for you. The full
 list, with what each team prepares, is
 [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md).
 
@@ -154,9 +154,9 @@ list, with what each team prepares, is
 2. **How people sign in.** Active Directory (LDAPS), OIDC (for MFA), or local
    passwords. Keep at least one local administrator regardless, as an escape
    hatch.
-3. **Session lifetime.** 30 days unless you say otherwise; banks set 12 hours.
+3. **Session lifetime.** 30 days unless you say otherwise; production installs set 12 hours.
 4. **Where MongoDB lives.** The bundled container is fine for a pilot and small
-   installations. A bank's production install uses its own replica set.
+   installations. A production install uses its own replica set.
 5. **Where attachments live.** The data volume by default; MinIO, S3 or WebDAV
    for shared or replicated storage.
 6. **Where backups go.** A path on this host is not a backup. See
@@ -188,7 +188,7 @@ hypothesis.
 
 ## Where to go next
 
-- The bank's preparation: [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md)
+- Preparing your environment: [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md)
 - Installing: [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md) — or just run `./tasksense`
 - Every setting: [17-ENVIRONMENT](17-ENVIRONMENT.md)
 - For the security review: [06-SECURITY](06-SECURITY.md)

@@ -54,16 +54,16 @@ COMPOSE_PROFILES=bundled-mongo,import-worker
 WORKER_ROLE=api
 BIND_ADDRESS=127.0.0.1
 HTTP_PORT=3000
-APP_URL=https://tasksense.abb.internal
-CORS_ALLOWED_ORIGINS=https://tasksense.abb.internal
-FIRST_ADMIN_EMAIL=infra@abb.internal
-NODE_EXTRA_CA_CERTS=/certs/abb-ca.pem
+APP_URL=https://tasksense.acme.internal
+CORS_ALLOWED_ORIGINS=https://tasksense.acme.internal
+FIRST_ADMIN_EMAIL=infra@acme.internal
+NODE_EXTRA_CA_CERTS=/certs/acme-ca.pem
 STORAGE_SECRET=Zt7xKQm2vN8pLdR4sYcW1jH6bF0aGuEo9iTnMkPx3vQ=
 MONGO_USER=tasksense
 MONGO_PASSWORD=hV2mQ8sLpX4tZnB7kRdY
 MONGODB_COMPRESSORS=none
 SESSION_TTL_HOURS=12
-OIDC_ISSUER=https://sso.abb.internal/realms/corporate
+OIDC_ISSUER=https://sso.acme.internal/realms/corporate
 OIDC_CLIENT_ID=tasksense
 OIDC_CLIENT_SECRET=s3cr{e}t=with,braces=and.equals
 STORAGE_MAX_FILE_MB=25
@@ -97,7 +97,7 @@ check "the example names no key twice — the renderer would uncomment both" "" 
   "$(keys_of "${EXAMPLE}" | sort | uniq -d)"
 
 # The answers actually landed.
-check "APP_URL written" "https://tasksense.abb.internal" "$(value_of "${WORK}/rendered.env" APP_URL)"
+check "APP_URL written" "https://tasksense.acme.internal" "$(value_of "${WORK}/rendered.env" APP_URL)"
 check "STORAGE_SECRET written" "Zt7xKQm2vN8pLdR4sYcW1jH6bF0aGuEo9iTnMkPx3vQ=" \
   "$(value_of "${WORK}/rendered.env" STORAGE_SECRET)"
 check "profiles written" "bundled-mongo,import-worker" "$(value_of "${WORK}/rendered.env" COMPOSE_PROFILES)"
@@ -143,7 +143,7 @@ COMPOSE_PROFILES=
 WORKER_ROLE=all
 MONGO_USER=
 MONGO_PASSWORD=
-MONGODB_URI=mongodb://ts:pw@mongo-0.abb.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/abb-ca.pem&authSource=admin
+MONGODB_URI=mongodb://ts:pw@mongo-0.acme.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/acme-ca.pem&authSource=admin
 MONGODB_COMPRESSORS=zlib
 MONGODB_TIMEOUT_MS=15000
 EOF

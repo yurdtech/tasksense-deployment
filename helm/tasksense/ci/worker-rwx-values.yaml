@@ -1,9 +1,9 @@
 # CI: a Jira migration — the import worker on a ReadWriteMany data volume, the
 # API with WORKER_ROLE=api, a larger upload ceiling the ingress must follow.
-appUrl: https://tasksense.bank.internal
+appUrl: https://tasksense.corp.internal
 mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin
 storageSecret: ci-storage-secret-0123456789abcdef0123456789
-firstAdminEmail: admin@bank.internal
+firstAdminEmail: admin@corp.internal
 worker:
   enabled: true
 persistence:
@@ -17,4 +17,4 @@ ingress:
   uploadMaxBody: 41g
   tls:
     - secretName: tasksense-tls
-      hosts: [tasksense.bank.internal]
+      hosts: [tasksense.corp.internal]

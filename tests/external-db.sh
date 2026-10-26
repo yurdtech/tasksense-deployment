@@ -28,7 +28,7 @@ printf '\nan external MongoDB\n\n'
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"; docker rm -f ts-empty-auth >/dev/null 2>&1 || true' EXIT
 
-THEIRS="mongodb://tasksense:pw@mongo-0.bank.internal:27017,mongo-1.bank.internal:27017/?replicaSet=rs0&tls=true&authSource=admin"
+THEIRS="mongodb://tasksense:pw@mongo-0.corp.internal:27017,mongo-1.corp.internal:27017/?replicaSet=rs0&tls=true&authSource=admin"
 external() { fixture_env "$1" "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=$2"; }
 
 # ── 1. compose: theirs is used, and ours is not part of the project ──────────
@@ -50,11 +50,11 @@ if compose_cli; then
   # A cluster with no authentication is a connection string with no
   # credentials in it — and MONGO_USER / MONGO_PASSWORD left empty must not
   # make compose refuse the project, as `${MONGO_USER:?}` once did.
-  external "${WORK}/noauth.env" "mongodb://mongo.bank.internal:27017/tasksense"
+  external "${WORK}/noauth.env" "mongodb://mongo.corp.internal:27017/tasksense"
   cfg "${WORK}/noauth.env" -q
   check "an external database needs no bundled credentials" "0" "$?"
   check "and a passwordless connection string reaches the application" \
-    "mongodb://mongo.bank.internal:27017/tasksense" "$(uri_of "${WORK}/noauth.env")"
+    "mongodb://mongo.corp.internal:27017/tasksense" "$(uri_of "${WORK}/noauth.env")"
 else
   printf '  (the compose CLI is not installed — compose checks skipped)\n'
 fi

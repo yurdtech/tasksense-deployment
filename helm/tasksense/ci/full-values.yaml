@@ -4,19 +4,19 @@
 # metrics + ServiceMonitor, CA from an existing ConfigMap + client cert Secret,
 # extra volumes/env, OIDC + SMTP, pull credentials rendered by the chart.
 global:
-  imageRegistry: harbor.bank.internal
+  imageRegistry: harbor.corp.internal
 image:
   tag: 1.1.0
 imagePullSecrets:
   - harbor-pull
 imageCredentials:
   create: true
-  registry: harbor.bank.internal
+  registry: harbor.corp.internal
   username: robot$tasksense
   password: ci-registry-password
-existingSecret: tasksense-bank-secrets
-appUrl: https://tasksense.bank.internal/
-firstAdminEmail: admin@bank.internal
+existingSecret: tasksense-corp-secrets
+appUrl: https://tasksense.corp.internal/
+firstAdminEmail: admin@corp.internal
 heapMb: 3072
 resources:
   requests:
@@ -32,7 +32,7 @@ worker:
       cpu: "4"
       memory: 8Gi
   nodeSelector:
-    node-role.bank.internal/batch: "true"
+    node-role.corp.internal/batch: "true"
 persistence:
   accessMode: ReadWriteMany
   storageClass: ocs-storagecluster-cephfs
@@ -42,26 +42,26 @@ config:
   sessionTtlHours: 8
   swaggerEnabled: false
   agentDispatcher: off
-  egressAllowlist: [gitlab.bank.internal, llm-gateway.bank.internal]
-  corsAllowedOrigins: https://tasksense-legacy.bank.internal
+  egressAllowlist: [gitlab.corp.internal, llm-gateway.corp.internal]
+  corsAllowedOrigins: https://tasksense-legacy.corp.internal
   rateLimitStore: mongo
   reportsMaxTasks: 1000000
   oidc:
-    issuer: https://adfs.bank.internal/adfs
+    issuer: https://adfs.corp.internal/adfs
     clientId: tasksense
-    label: Continue with ABB SSO
+    label: Continue with company SSO
   smtp:
-    host: smtp.bank.internal
+    host: smtp.corp.internal
     port: 25
     secure: false
-  emailFrom: TaskSense <tasksense@bank.internal>
+  emailFrom: TaskSense <tasksense@corp.internal>
 extraEnv:
   MONGODB_COMMAND_MONITORING: "true"
 extraEnvFrom:
   - secretRef:
       name: tasksense-llm
 certs:
-  existingConfigMap: bank-ca-bundle
+  existingConfigMap: corp-ca-bundle
   existingSecret: tasksense-mongo-client
   caBundle: ca-bundle.pem
 extraVolumes:
@@ -72,7 +72,7 @@ extraVolumeMounts:
     mountPath: /app/api/audit
 serviceAccount:
   annotations:
-    bank.internal/owner: platform-team
+    corp.internal/owner: platform-team
 metrics:
   enabled: true
   serviceMonitor:
@@ -93,17 +93,17 @@ ingress:
   enabled: true
   className: nginx
   hosts:
-    - tasksense.bank.internal
-    - host: tasksense-legacy.bank.internal
+    - tasksense.corp.internal
+    - host: tasksense-legacy.corp.internal
       paths:
         - path: /
           pathType: Prefix
   annotations:
-    cert-manager.io/cluster-issuer: bank-internal-ca
+    cert-manager.io/cluster-issuer: corp-internal-ca
     nginx.ingress.kubernetes.io/whitelist-source-range: 10.0.0.0/8
   tls:
     - secretName: tasksense-tls
-      hosts: [tasksense.bank.internal, tasksense-legacy.bank.internal]
+      hosts: [tasksense.corp.internal, tasksense-legacy.corp.internal]
 networkPolicy:
   enabled: true
   egressCIDRs: [10.20.0.0/16, 10.30.5.0/24]
@@ -115,6 +115,6 @@ networkPolicy:
       ports:
         - port: 27017
   ingressNamespaceSelectors:
-    - kubernetes.io/metadata.name: bank-monitoring
+    - kubernetes.io/metadata.name: corp-monitoring
 commonLabels:
-  bank.internal/cost-center: "4711"
+  corp.internal/cost-center: "4711"

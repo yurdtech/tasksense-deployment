@@ -90,8 +90,8 @@ fixture_env() {
   local out="$1" kv; shift
   sed -e 's/<CHANGE_ME_STORAGE_SECRET>/0123456789abcdefghijABCDEFGHIJ0123456789/' \
       -e 's/<CHANGE_ME_MONGO_PASSWORD>/0123456789abcdef0123456789abcdef/' \
-      -e 's#<CHANGE_ME_APP_URL>#https://tasksense.abb.internal#' \
-      -e 's/<CHANGE_ME_ADMIN_EMAIL>/infra@abb.internal/' \
+      -e 's#<CHANGE_ME_APP_URL>#https://tasksense.acme.internal#' \
+      -e 's/<CHANGE_ME_ADMIN_EMAIL>/infra@acme.internal/' \
       -e 's/^HTTP_PORT=.*/HTTP_PORT=39317/' \
       "${ROOT}/compose/.env.example" > "${out}"
   for kv in "$@"; do

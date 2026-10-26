@@ -5,7 +5,7 @@
 #
 #   mkdir tasksense-bundle && tar -xzf tasksense-helm-airgap-<v>.tar.gz -C tasksense-bundle
 #   cd tasksense-bundle
-#   ./helm-airgap-load.sh harbor.bank.internal [--push-chart] [--dry-run]
+#   ./helm-airgap-load.sh harbor.corp.internal [--push-chart] [--dry-run]
 #
 #   <registry>     host[/project] the cluster pulls from — the value you then set
 #                  as global.imageRegistry
@@ -40,9 +40,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "${REGISTRY}" ] || die "usage: helm-airgap-load.sh <registry> [--push-chart] [--dry-run]" \
-  "e.g. ./helm-airgap-load.sh harbor.bank.internal"
+  "e.g. ./helm-airgap-load.sh harbor.corp.internal"
 REGISTRY="${REGISTRY%/}"
-case "${REGISTRY}" in *://*) die "give the registry without a scheme (harbor.bank.internal, not https://…)" ;; esac
+case "${REGISTRY}" in *://*) die "give the registry without a scheme (harbor.corp.internal, not https://…)" ;; esac
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 [ -f manifest.yaml ] && [ -f images.tar ] && [ -f checksums.sha256 ] \

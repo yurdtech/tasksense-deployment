@@ -157,6 +157,6 @@ cat <<EOF
 
     sha256sum -c $(basename "${BUNDLE}").sha256
     mkdir tasksense-bundle && tar -xzf $(basename "${BUNDLE}") -C tasksense-bundle
-    cd tasksense-bundle && ./helm-airgap-load.sh harbor.bank.internal
+    cd tasksense-bundle && ./helm-airgap-load.sh harbor.corp.internal
 
 EOF

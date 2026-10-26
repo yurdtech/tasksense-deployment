@@ -122,19 +122,19 @@ printf '#!/usr/bin/env bash\nprintf "skopeo %%s\\n" "$*" >> "${FAKE_LOG}"\n' > "
 chmod +x "${WORK}/skopeo-bin/skopeo"
 
 : > "${FAKE_LOG}"
-out="$(PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense 2>&1)"; rc=$?
+out="$(PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.acme.internal/tasksense 2>&1)"; rc=$?
 check "mirroring works with no compose/.env at all" "0" "${rc}"
 contains "the application, at the version the bundle ships" \
-  "skopeo copy --all docker://ghcr.io/yurdtech/tasksense:${V} docker://harbor.abb.internal/tasksense/tasksense:${V}" "$(docker_calls)"
+  "skopeo copy --all docker://ghcr.io/yurdtech/tasksense:${V} docker://harbor.acme.internal/tasksense/tasksense:${V}" "$(docker_calls)"
 contains "and MongoDB, which an air-gapped host needs just as much" \
-  "skopeo copy --all docker://docker.io/library/mongo:7 docker://harbor.abb.internal/tasksense/mongo:7" "$(docker_calls)"
-contains "and both .env lines are named" "MONGO_IMAGE=harbor.abb.internal/tasksense/mongo" "${out}"
+  "skopeo copy --all docker://docker.io/library/mongo:7 docker://harbor.acme.internal/tasksense/mongo:7" "$(docker_calls)"
+contains "and both .env lines are named" "MONGO_IMAGE=harbor.acme.internal/tasksense/mongo" "${out}"
 
 : > "${FAKE_LOG}"
-PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense/ --version 1.4.2 --mongo-version 7.0.14 >/dev/null 2>&1
+PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.acme.internal/tasksense/ --version 1.4.2 --mongo-version 7.0.14 >/dev/null 2>&1
 contains "--version and --mongo-version choose the tags" \
-  "skopeo copy --all docker://ghcr.io/yurdtech/tasksense:1.4.2 docker://harbor.abb.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
-contains "a trailing slash on the registry is harmless" "docker://harbor.abb.internal/tasksense/mongo:7.0.14" "$(docker_calls)"
+  "skopeo copy --all docker://ghcr.io/yurdtech/tasksense:1.4.2 docker://harbor.acme.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
+contains "a trailing slash on the registry is harmless" "docker://harbor.acme.internal/tasksense/mongo:7.0.14" "$(docker_calls)"
 
 # A PATH with no skopeo anywhere. Dropping the fake is not enough: GitHub's
 # Ubuntu runners ship a real one in /usr/bin, which then tried a real copy and
@@ -152,10 +152,10 @@ for dir in "${path_dirs[@]}"; do
 done
 
 : > "${FAKE_LOG}"
-out="$(PATH="${NOSKOPEO_BIN}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense --version 1.4.2 2>&1)"; rc=$?
+out="$(PATH="${NOSKOPEO_BIN}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.acme.internal/tasksense --version 1.4.2 2>&1)"; rc=$?
 check "without skopeo: pull, tag and push instead" "0" "${rc}"
-contains "pushing the application" "push harbor.abb.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
-contains "and MongoDB" "push harbor.abb.internal/tasksense/mongo:7" "$(docker_calls)"
+contains "pushing the application" "push harbor.acme.internal/tasksense/tasksense:1.4.2" "$(docker_calls)"
+contains "and MongoDB" "push harbor.acme.internal/tasksense/mongo:7" "$(docker_calls)"
 
 mkdir -p "${SANDBOX}/images"
 printf 'x' > "${SANDBOX}/images/tasksense-${V}.tar"; printf 'x' > "${SANDBOX}/images/mongo-7.tar"
@@ -165,15 +165,15 @@ check "--offline loads every archive in images/" "2" "$(grep -c '^load -i' "${FA
 lacks "and pushes nothing" "push" "$(docker_calls)"
 
 : > "${FAKE_LOG}"
-out="$(FAKE_LOADED_VERSION="${V}" "${SANDBOX}/scripts/load-images.sh" --offline --registry harbor.abb.internal/tasksense 2>&1)"; rc=$?
+out="$(FAKE_LOADED_VERSION="${V}" "${SANDBOX}/scripts/load-images.sh" --offline --registry harbor.acme.internal/tasksense 2>&1)"; rc=$?
 check "--offline --registry: loads, then fills the registry inside" "0" "${rc}"
-contains "with the application" "push harbor.abb.internal/tasksense/tasksense:${V}" "$(docker_calls)"
-contains "and MongoDB" "push harbor.abb.internal/tasksense/mongo:7" "$(docker_calls)"
+contains "with the application" "push harbor.acme.internal/tasksense/tasksense:${V}" "$(docker_calls)"
+contains "and MongoDB" "push harbor.acme.internal/tasksense/mongo:7" "$(docker_calls)"
 
 fixture_env "${SANDBOX}/compose/.env"
-PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.abb.internal/tasksense --update-env >/dev/null 2>&1
+PATH="${WORK}/skopeo-bin:${PATH}" "${SANDBOX}/scripts/load-images.sh" --registry harbor.acme.internal/tasksense --update-env >/dev/null 2>&1
 check "--update-env points BOTH images at the mirror" \
-  "harbor.abb.internal/tasksense/tasksense harbor.abb.internal/tasksense/mongo" \
+  "harbor.acme.internal/tasksense/tasksense harbor.acme.internal/tasksense/mongo" \
   "$(sed -n 's/^TASKSENSE_IMAGE=//p' "${SANDBOX}/compose/.env") $(sed -n 's/^MONGO_IMAGE=//p' "${SANDBOX}/compose/.env")"
 check "where the example documents them, not appended" "1" "$(grep -c '^TASKSENSE_IMAGE=' "${SANDBOX}/compose/.env")"
 

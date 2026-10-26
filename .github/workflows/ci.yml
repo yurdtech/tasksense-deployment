@@ -1,7 +1,7 @@
 # Runs on every pull request and every push to main.
 #
 # The scripts here are the installation. A typo in them is not a broken build
-# somebody notices at their desk — it is a bank's engineer, on a host we cannot
+# somebody notices at their desk — it is a customer.s engineer, on a host we cannot
 # reach, reading an error we did not intend to write. So the checks are aimed at
 # the failures that actually escaped review rather than at coverage: the ones
 # below both come from bugs found by running this on a customer's distribution
@@ -102,7 +102,7 @@ jobs:
           ingress.uploadMaxBody (21g) is smaller|--set ingress.enabled=true --set config.jiraBackupMaxGb=40
           metrics.token is required|--set metrics.enabled=true
           mongodbUri is required|--set mongodbUri=
-          no certificate is mounted|--set certs.caBundle=bank-ca.pem
+          no certificate is mounted|--set certs.caBundle=corp-ca.pem
           leaves too little|--set heapMb=2000
           these values come from chart 1.0|--set config=null
           CASES
@@ -118,7 +118,7 @@ jobs:
       - name: fresh clone — the first command a customer runs
         run: ./tests/fresh-clone.sh
 
-      - name: terminal rendering — locales a bank actually has
+      - name: terminal rendering — locales a customer host actually has
         run: ./tests/terminal.sh
 
       - name: answers survive a run that stops

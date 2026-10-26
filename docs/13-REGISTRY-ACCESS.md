@@ -146,7 +146,7 @@ imagePullSecrets:
 Or let the chart create it from values (`imageCredentials.create: true` with
 `registry`, `username`, `password`) — convenient, but the token is then part
 of the Helm release, readable by anyone who can read the release. A secret you
-create, or one from Vault / External Secrets, is the better choice for a bank.
+create, or one from Vault / External Secrets, is the better choice for production.
 
 ### 2. The chart
 
@@ -177,8 +177,8 @@ The Docker daemon does not read your shell's `HTTPS_PROXY`. Give it its own:
 sudo mkdir -p /etc/systemd/system/docker.service.d
 sudo tee /etc/systemd/system/docker.service.d/proxy.conf <<'EOF'
 [Service]
-Environment="HTTPS_PROXY=http://proxy.bank.internal:3128"
-Environment="NO_PROXY=localhost,127.0.0.1,.bank.internal"
+Environment="HTTPS_PROXY=http://proxy.corp.internal:3128"
+Environment="NO_PROXY=localhost,127.0.0.1,.corp.internal"
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart docker
 ```
@@ -203,14 +203,14 @@ everything internally from there. Run this on a machine that can reach both
 
 ```bash
 echo '<TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
-docker login harbor.bank.internal
+docker login harbor.corp.internal
 
-./scripts/load-images.sh --registry harbor.bank.internal/tasksense --version 1.1.0
+./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.0
 ```
 
 Expected: one line per image copied —
-`harbor.bank.internal/tasksense/tasksense:1.1.0` and
-`harbor.bank.internal/tasksense/mongo:7` — then the settings to put in `.env`
+`harbor.corp.internal/tasksense/tasksense:1.1.0` and
+`harbor.corp.internal/tasksense/mongo:7` — then the settings to put in `.env`
 (`--update-env` writes them for you). `--mongo-version` picks another MongoDB
 tag.
 
@@ -224,21 +224,21 @@ backup script runs `mongodump` in a throwaway container from that image.
 **Compose** — in `compose/.env`, both lines:
 
 ```dotenv
-TASKSENSE_IMAGE=harbor.bank.internal/tasksense/tasksense
-MONGO_IMAGE=harbor.bank.internal/tasksense/mongo
+TASKSENSE_IMAGE=harbor.corp.internal/tasksense/tasksense
+MONGO_IMAGE=harbor.corp.internal/tasksense/mongo
 ```
 
 **Helm** — point the chart at the mirror:
 
 ```yaml
 global:
-  imageRegistry: harbor.bank.internal
+  imageRegistry: harbor.corp.internal
 ```
 
 `global.imageRegistry` replaces the registry **host** and keeps the
 repository path, so it expects the images at
-`harbor.bank.internal/yurdtech/tasksense:<version>` and
-`harbor.bank.internal/library/mongo:7` — the layout `helm-airgap-load.sh`
+`harbor.corp.internal/yurdtech/tasksense:<version>` and
+`harbor.corp.internal/library/mongo:7` — the layout `helm-airgap-load.sh`
 (below) produces. That is **not** the layout `load-images.sh --registry`
 produces: for a cluster, mirror with `helm-airgap-load.sh`, or set the image
 repositories explicitly in your values.
@@ -350,13 +350,13 @@ Inside your network, on a machine logged in to your registry:
 
 ```bash
 mkdir bundle && tar xzf tasksense-helm-airgap-1.1.0.tar.gz -C bundle && cd bundle
-./helm-airgap-load.sh harbor.bank.internal
+./helm-airgap-load.sh harbor.corp.internal
 ```
 
 Expected: the checksums verify (`OK`), each image is pushed
-(`==> ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.bank.internal/yurdtech/tasksense:1.1.0`),
+(`==> ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.corp.internal/yurdtech/tasksense:1.1.0`),
 and the script prints the `helm install` command with
-`--set global.imageRegistry=harbor.bank.internal`.
+`--set global.imageRegistry=harbor.corp.internal`.
 
 ---
 

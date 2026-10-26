@@ -80,7 +80,7 @@ reports the real problem rather than a nil-pointer error further down.
 {{- /* ── required values ───────────────────────────────────────────────── */ -}}
 {{- if not $v.existingSecret -}}
 {{- if not $v.appUrl -}}
-{{- fail "appUrl is required — the URL users type, e.g. https://tasksense.bank.internal" -}}
+{{- fail "appUrl is required — the URL users type, e.g. https://tasksense.corp.internal" -}}
 {{- end -}}
 {{- if not $v.mongodbUri -}}
 {{- fail "mongodbUri is required — this chart does not bundle MongoDB (docs/16-EXTERNAL-DATABASES.md). Or supply MONGODB_URI through existingSecret." -}}
@@ -100,7 +100,7 @@ reports the real problem rather than a nil-pointer error further down.
 {{- end -}}
 {{- if $v.appUrl -}}
 {{- if not (regexMatch "^https?://[^/?#]+" (toString $v.appUrl)) -}}
-{{- fail (printf "appUrl must be an absolute http(s) URL, e.g. https://tasksense.bank.internal (got %q)" (toString $v.appUrl)) -}}
+{{- fail (printf "appUrl must be an absolute http(s) URL, e.g. https://tasksense.corp.internal (got %q)" (toString $v.appUrl)) -}}
 {{- end -}}
 {{- end -}}
 

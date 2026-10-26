@@ -1,7 +1,7 @@
 # Environment reference
 
 Every setting TaskSense reads, grouped by what it is for: whether you must set
-it, its default, what it does, and what we recommend for a bank.
+it, its default, what it does, and what we recommend for production.
 
 - **Docker Compose:** all of these go in `compose/.env` (copy
   `compose/.env.example`). You never edit `docker-compose.yml`.
@@ -13,7 +13,7 @@ it, its default, what it does, and what we recommend for a bank.
   `MONGODB_URI`, `OIDC_CLIENT_SECRET`, `SMTP_PASS`, `METRICS_TOKEN`,
   `LICENSE_KEY` — go in the Secret named by `existingSecret`. The full mapping
   is the [values reference](02-INSTALL-KUBERNETES.md#values-reference).
-  **The chart's defaults are already the bank recommendations** where they
+  **The chart's defaults are already the recommended values** where they
   differ from the application's: `sessionTtlHours: 12`, `swaggerEnabled:
   false`, `mongodbTimeoutMs: 15000`; `AGENT_EXECUTOR` is always rendered
   `off`.
@@ -35,20 +35,20 @@ In the **Required** column: **yes** means no default exists and the
 installation does not start without it; **bundled** means required only with
 the bundled MongoDB; **—** means optional.
 
-**Bank** is our recommendation for a regulated installation. Where it is
+**Recommended** is the value we suggest for a production installation. Where it is
 blank, the default is the recommendation.
 
 ---
 
 ## 1. Version, images and profiles *(Compose)*
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `TASKSENSE_VERSION` | yes | `1.1.0` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
-| `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.bank.internal/tasksense/tasksense` if mirrored |
+| `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
-| `COMPOSE_PROFILES` | yes | `bundled-mongo` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. Comma-separated; empty runs neither. | `bundled-mongo` for a pilot; empty with the bank's MongoDB; add `import-worker` for the Jira migration |
+| `COMPOSE_PROFILES` | yes | `bundled-mongo` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. Comma-separated; empty runs neither. | `bundled-mongo` for a pilot; empty with your own MongoDB; add `import-worker` for the Jira migration |
 
 > **`COMPOSE_PROFILES` and `MONGODB_URI` go together.** Remove
 > `bundled-mongo` *and* set `MONGODB_URI`, or neither — `preflight.sh` fails
@@ -58,16 +58,16 @@ blank, the default is the recommendation.
 
 ## 2. Address and network
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `APP_URL` | yes | — | The URL users type, with scheme, no trailing slash. Sign-in redirects, e-mail links and the OIDC redirect URI are built from it. | `https://tasksense.<bank-domain>` |
+| `APP_URL` | yes | — | The URL users type, with scheme, no trailing slash. Sign-in redirects, e-mail links and the OIDC redirect URI are built from it. | `https://tasksense.<corp-domain>` |
 | `CORS_ALLOWED_ORIGINS` | — | must be set; `.env.example` uses `APP_URL` | Browser origins allowed to call the API, comma-separated. UI and API share one origin, so this is `APP_URL`. | Same as `APP_URL` |
 | `BIND_ADDRESS` *(Compose)* | — | `127.0.0.1` | Host interface the application port is published on. Loopback means only a proxy on this host reaches it. | Keep `127.0.0.1`; if the proxy is another host, that host's interface plus a firewall rule |
 | `HTTP_PORT` *(Compose)* | — | `3000` | Host port. The container always listens on 3000. | |
 
 ## 3. Secrets and licence
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `STORAGE_SECRET` | yes | — | At least 32 characters. Root key for every credential stored in the database: LDAP bind passwords, SMTP, object storage, model-provider and VCS webhook secrets (AES-256-GCM, one derived key per purpose). **Not recoverable, and there is no re-encryption tool** — changing it means re-entering those credentials. | `openssl rand -base64 32`, kept in your secrets vault next to the database backups |
 | `LICENSE_KEY` | — | — | The `tsl_…` licence, verified offline. Without it: 10 accounts, 500 automation runs a month. [14-LICENSING](14-LICENSING.md) | Set; treat as a secret (it cannot be revoked) |
@@ -77,22 +77,22 @@ blank, the default is the recommendation.
 LDAP / Active Directory has **no environment variables** — it is configured in
 the application (Admin → Authentication). See [05-IDENTITY](05-IDENTITY.md).
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `FIRST_ADMIN_EMAIL` | first install | — | Created on first start as the administrator, with **no password**. Claimed by signing in through LDAP/OIDC with that address, or by registering with it. | A named administrator's address — the break-glass account |
 | `OWNER_EMAILS` | — | empty | Comma-separated addresses that are always administrators. A lockout escape hatch; nothing else on-premise needs it. | **Empty.** Use it only to recover from a lockout, then remove it |
 | `SESSION_TTL_HOURS` | — | `720` (30 days); `.env.example` and the chart: `12` | How long a sign-in lasts. `0` means never — the default before 1.1.0. A workspace policy in Admin → Security overrides it. Sessions issued before a limit applied keep no expiry. | **`12`** (one working day) |
-| `OIDC_ISSUER` | — | — | OIDC issuer URL; discovery is read from `<issuer>/.well-known/openid-configuration`. | The bank IdP (Keycloak / AD FS / Entra) |
+| `OIDC_ISSUER` | — | — | OIDC issuer URL; discovery is read from `<issuer>/.well-known/openid-configuration`. | Your IdP (Keycloak / AD FS / Entra) |
 | `OIDC_CLIENT_ID` | with OIDC | — | Client id registered at the IdP. | |
 | `OIDC_CLIENT_SECRET` | with OIDC | — | Client secret. Also keys the HMAC that protects the `state` parameter. | Secret |
 | `OIDC_REDIRECT_URI` | — | `<APP_URL>/api/v1/auth/oidc/callback` | Must match the IdP registration exactly. | Register exactly this |
-| `OIDC_LABEL` | — | `Continue with SSO` | Sign-in button text. | `Sign in with <bank> account` |
+| `OIDC_LABEL` | — | `Continue with SSO` | Sign-in button text. | `Sign in with <company> account` |
 
 ## 5. Database
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `MONGODB_URI` | yes, unless bundled | built from `MONGO_USER`/`MONGO_PASSWORD` for the bundled container | Connection string to your own MongoDB. TLS, replica set and auth source go in the URI. Percent-encode `/ : @ ? # [ ] %` in the password. [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md) | `mongodb://tasksense:<pw>@m1,m2,m3/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin` |
+| `MONGODB_URI` | yes, unless bundled | built from `MONGO_USER`/`MONGO_PASSWORD` for the bundled container | Connection string to your own MongoDB. TLS, replica set and auth source go in the URI. Percent-encode `/ : @ ? # [ ] %` in the password. [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md) | `mongodb://tasksense:<pw>@m1,m2,m3/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin` |
 | `MONGO_USER` *(Compose)* | bundled | `tasksense` | Root user the bundled container is created with. Unused with `MONGODB_URI` — leave empty. | |
 | `MONGO_PASSWORD` *(Compose)* | bundled | — | Its password. Applied **only when the volume is first created**; changing it later does not change it in MongoDB. Hex, not base64 (it is substituted into a URI). | `openssl rand -hex 24` |
 | `MONGODB_DB` | — | `tasksense` | Database name. Backups, restores and the migration job all read it. | |
@@ -109,7 +109,7 @@ the application (Admin → Authentication). See [05-IDENTITY](05-IDENTITY.md).
 The API is **one process by design** — see [15-SCALING-AND-HA](15-SCALING-AND-HA.md).
 The only optional second process is the import worker.
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it |
 | `APP_HEAP_MB` *(Compose)* | — | `1536` | Node.js heap of the API (`--max-old-space-size`). Keep it at about 75 % of `APP_MEMORY_LIMIT`. | |
@@ -125,9 +125,9 @@ The only optional second process is the import worker.
 
 ## 7. Trusting your certificate authority
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `NODE_EXTRA_CA_CERTS` | — | — | A PEM bundle the application trusts **in addition to** the public roots, for every outbound TLS connection: MongoDB, SMTP, OIDC discovery and token calls, object storage, the model gateway. Path **inside the container**. One file may hold several CAs. | **`/certs/bank-ca.pem`** — root and issuing CAs concatenated |
+| `NODE_EXTRA_CA_CERTS` | — | — | A PEM bundle the application trusts **in addition to** the public roots, for every outbound TLS connection: MongoDB, SMTP, OIDC discovery and token calls, object storage, the model gateway. Path **inside the container**. One file may hold several CAs. | **`/certs/corp-ca.pem`** — root and issuing CAs concatenated |
 
 Put the file in `compose/certs/` (Compose; mounted read-only at `/certs`) or
 in `certs.*` values (Helm). The LDAP CA is the exception: it is pasted as text
@@ -139,19 +139,19 @@ the URI (`tlsCAFile=/certs/…`).
 Unset, notifications still appear in the application; only e-mail is skipped.
 Admin → Email delivery overrides these once saved there.
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `SMTP_HOST` | — | — | Relay host. | The internal relay |
 | `SMTP_PORT` | — | `587` | Relay port. | `25` / `587` (STARTTLS) or `465` (implicit TLS) |
 | `SMTP_SECURE` | — | `false` | `true`: TLS from the first byte (port 465). `false`: plain connection, upgraded with STARTTLS when the relay offers it. | Match the relay |
 | `SMTP_USER` / `SMTP_PASS` | — | — | Relay authentication; omitted when either is empty. | Per relay policy |
-| `EMAIL_FROM` | — | — | Sender, e.g. `TaskSense <tasksense@bank.internal>`. | An address the relay accepts |
+| `EMAIL_FROM` | — | — | Sender, e.g. `TaskSense <tasksense@corp.internal>`. | An address the relay accepts |
 
 ## 9. Files, uploads and the Jira import
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `STORAGE_MAX_FILE_MB` | — | `25` | Per-file attachment limit. | Per bank policy |
+| `STORAGE_MAX_FILE_MB` | — | `25` | Per-file attachment limit. | Per your policy |
 | `STORAGE_MAX_VIDEO_FILE_MB` | — | `200` | Limit for inline-playable video (mp4/webm/mov). | Lower, or equal to the above, if video is not wanted |
 | `JIRA_BACKUP_MAX_GB` | — | `20` | Largest Jira site backup (`entities.xml`) and workspace archive accepted. Streamed to disk, never held in memory. Your reverse proxy's upload limit must be at least this (`examples/nginx.conf` uses 21g). | At least the size of the backup you will import |
 | `JIRA_BACKUP_RETENTION_DAYS` | — | `7` | How long an uploaded Jira backup is kept for further landings before it is deleted. | `7` during the migration; it is a full copy of your Jira, so not longer than needed |
@@ -181,7 +181,7 @@ thousands of issues). Change them only on our advice.
 
 ## 11. Logs and metrics
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `LOG_FORMAT` | — | `json` on-premise | `json`: one object per line for a SIEM. `text`: readable, not parseable. | `json` |
 | `LOG_LEVEL` | — | `log` | `verbose`, `debug`, `log`, `warn`, `error`, `fatal`. There is no `info`; `log` is the ordinary level. | `log` |
@@ -190,7 +190,7 @@ thousands of issues). Change them only on our advice.
 
 ## 12. Security switches
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `SWAGGER_ENABLED` | — | **on** in the application; `.env.example` and the chart: `false` | The interactive API browser at `/api/v1/swagger`. The application serves it unless this is `false` — it publishes the whole API surface without sign-in. Removing the line from `.env` turns it back **on**. | **`false`** |
 | `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration, GitLab, the model gateway |
@@ -201,7 +201,7 @@ thousands of issues). Change them only on our advice.
 Off unless you connect a model provider (Agents → Settings & roles). See
 [12-AI-MODELS](12-AI-MODELS.md).
 
-| Variable | Required | Default | What it does | Bank |
+| Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `AGENT_DISPATCHER` | — | `on` (app); `off` in the chart and `.env.example` | The scheduler that advances agent work every `AGENT_TICK_MS`. | `off` unless an AI pilot is approved |
 | `AGENT_EXECUTOR` | — | `off` | Running agent tasks with shell and file tools. **No sandbox ships with TaskSense, so `off` is the only supported value.** The application refuses `on`/`auto` at startup (logged as an error; execution stays off) and `unsafe-host` in production; `preflight.sh` fails on any of them; the wizard and the Helm chart never set anything else. | **`off`** |
@@ -243,25 +243,25 @@ and `SLACK_WEBHOOK_URL` reach public cloud services.
 
 ---
 
-## A bank baseline
+## A hardened baseline
 
 What we would put in `compose/.env` for a regulated installation with its own
 MongoDB, before site-specific values:
 
 ```dotenv
 TASKSENSE_VERSION=1.1.0
-COMPOSE_PROFILES=                      # bank MongoDB; add import-worker for the Jira migration
-APP_URL=https://tasksense.bank.internal
-CORS_ALLOWED_ORIGINS=https://tasksense.bank.internal
+COMPOSE_PROFILES=                      # your own MongoDB; add import-worker for the Jira migration
+APP_URL=https://tasksense.corp.internal
+CORS_ALLOWED_ORIGINS=https://tasksense.corp.internal
 BIND_ADDRESS=127.0.0.1
-FIRST_ADMIN_EMAIL=tasksense-admin@bank.internal
+FIRST_ADMIN_EMAIL=tasksense-admin@corp.internal
 STORAGE_SECRET=<openssl rand -base64 32>
 LICENSE_KEY=tsl_...
 
-MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin
+MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin
 MONGODB_TIMEOUT_MS=15000
 MONGODB_COMPRESSORS=zlib
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem
 
 SESSION_TTL_HOURS=12
 SWAGGER_ENABLED=false
@@ -280,11 +280,11 @@ During the Jira migration window, additionally:
 ```dotenv
 COMPOSE_PROFILES=import-worker
 WORKER_ROLE=api
-EGRESS_ALLOWLIST=jira.bank.internal    # only if importing over the Jira API rather than from a backup file
+EGRESS_ALLOWLIST=jira.corp.internal    # only if importing over the Jira API rather than from a backup file
 ```
 
 With attachments in an internal object store, add its host (keep the others):
 
 ```dotenv
-EGRESS_ALLOWLIST=minio.bank.internal
+EGRESS_ALLOWLIST=minio.corp.internal
 ```

@@ -122,7 +122,7 @@ networkPolicy is off. The application makes outbound requests to URLs an
 {{- end }}
 {{- if eq (toString $v.config.swaggerEnabled) "true" }}
 
-NOTE: the Swagger UI is on (/api/v1/swagger). Banks usually turn it off: config.swaggerEnabled=false.
+NOTE: the Swagger UI is on (/api/v1/swagger). Production installs usually turn it off: config.swaggerEnabled=false.
 {{- end }}
 {{- if eq (include "tasksense.str" $v.config.sessionTtlHours) "0" }}
 

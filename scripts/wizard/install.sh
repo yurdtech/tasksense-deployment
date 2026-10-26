@@ -250,9 +250,9 @@ case "${UI_CHOICE}" in
     ;;
   3)
     ui_text "Point the configuration at your mirror — both images come from it, TaskSense and MongoDB. If you have not copied them across yet, the script that does it runs from a machine that can reach both (or from the offline bundle, inside):"
-    ui_hint "./scripts/load-images.sh --registry harbor.bank.internal/tasksense"
+    ui_hint "./scripts/load-images.sh --registry harbor.corp.internal/tasksense"
     printf '\n'
-    ui_ask "Your registry path" "harbor.bank.internal/tasksense" \
+    ui_ask "Your registry path" "harbor.corp.internal/tasksense" \
       "Registry and project, without an image name or tag: <path>/tasksense and <path>/mongo are used. The version is set separately in the next step."
     MIRROR_PREFIX="${UI_VALUE%/}"
     # Somebody pasting the full image path means the same thing.

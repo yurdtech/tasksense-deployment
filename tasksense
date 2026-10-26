@@ -154,7 +154,7 @@ doc_index() {
   ${C_BOLD}For the architecture and the change board${C_OFF}
     docs/15-SCALING-AND-HA.md    one API process, the import worker, HA
     docs/16-EXTERNAL-DATABASES.md  your own MongoDB: replica set, TLS, roles
-    docs/17-ENVIRONMENT.md       every variable, its default, the bank value
+    docs/17-ENVIRONMENT.md       every variable, its default, the recommended value
 
 EOF
   local f listed="00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18" n

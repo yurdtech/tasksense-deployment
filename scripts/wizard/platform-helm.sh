@@ -16,7 +16,7 @@
 #
 # Only what differs from the chart defaults goes into the file, so what you
 # review is what is different about your cluster rather than a copy of
-# values.yaml. The chart's defaults are already the bank ones (12h sessions, no
+# values.yaml. The chart's defaults are already the recommended ones (12h sessions, no
 # Swagger, no task execution); the questions below are the ones with no right
 # default.
 
@@ -93,14 +93,14 @@ ui_ask "Namespace" "tasksense" \
 NAMESPACE="${UI_VALUE}"
 
 printf '\n'
-ui_ask "appUrl" "https://tasksense.bank.internal" \
+ui_ask "appUrl" "https://tasksense.corp.internal" \
   "The URL users type. Sign-in redirects and CORS are built from it, and its host becomes the Ingress / Route host — so changing it later means reconfiguring your identity provider too." ui_valid_url
 APP_URL="${UI_VALUE%/}"
 HOST="${APP_URL#https://}"; HOST="${HOST#http://}"; HOST="${HOST%%/*}"; HOST="${HOST%%:*}"
 
 printf '\n'
 ui_text "MongoDB is not bundled in the chart: in a cluster the database is your platform team's (an operator, a managed service), with its own backups. A replica set is what makes TaskSense survive a database node failure."
-ui_ask "mongodbUri" "mongodb://tasksense:PASSWORD@mongo-0.db.bank.internal:27017,mongo-1.db.bank.internal:27017,mongo-2.db.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem" \
+ui_ask "mongodbUri" "mongodb://tasksense:PASSWORD@mongo-0.db.corp.internal:27017,mongo-1.db.corp.internal:27017,mongo-2.db.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem" \
   "Replica set, TLS and the auth database go in the URI. A private CA is referenced as /certs/<file> (step 4 mounts it). Percent-encode / : @ ? # [ ] % in the password." valid_mongo_uri
 MONGO_URI="${UI_VALUE}"
 
@@ -148,7 +148,7 @@ fi
 ui_step 3 "${STEPS}" "Sessions and the API reference"
 
 ui_ask "Session lifetime (hours)" "12" \
-  "How long a sign-in lasts (SESSION_TTL_HOURS). A working day is the usual bank answer; 0 means sessions never expire. A workspace policy (Admin → Security) can still shorten it." valid_hours
+  "How long a sign-in lasts (SESSION_TTL_HOURS). A working day is the usual answer; 0 means sessions never expire. A workspace policy (Admin → Security) can still shorten it." valid_hours
 SESSION_TTL="${UI_VALUE}"
 [ "${SESSION_TTL}" = "0" ] && warn "sessions will never expire — a stolen session stays valid forever"
 
@@ -157,10 +157,10 @@ if ui_yesno "Serve the interactive API reference (Swagger UI at /api/v1/swagger)
   SWAGGER=true
 fi
 
-# ── 4. bank CA ───────────────────────────────────────────────────────────────
+# ── 4. internal CA ───────────────────────────────────────────────────────────
 
 ui_step 4 "${STEPS}" "Your certificate authority"
-ui_text "If MongoDB, the mail relay, the identity provider or an internal model gateway present certificates your bank issued, Node must trust that CA. The PEM is mounted at /certs/bank-ca.pem in every TaskSense pod and set as NODE_EXTRA_CA_CERTS. (The directory/LDAP CA is pasted in the application instead: Admin → Authentication.)"
+ui_text "If MongoDB, the mail relay, the identity provider or an internal model gateway present certificates your organisation issued, Node must trust that CA. The PEM is mounted at /certs/corp-ca.pem in every TaskSense pod and set as NODE_EXTRA_CA_CERTS. (The directory/LDAP CA is pasted in the application instead: Admin → Authentication.)"
 
 CA_FILE=""
 printf '\n  %sPath to the CA bundle (PEM) on this machine — empty for none%s\n  > ' "${C_BOLD}" "${C_OFF}"
@@ -248,7 +248,7 @@ ui_menu "Where do the cluster's nodes pull images from?" \
   "ghcr.io|directly or through a proxy, with your registry token" \
   "Internal registry|Harbor / Nexus / Quay mirror, or the offline bundle"
 if [ "${UI_CHOICE}" = "2" ]; then
-  ui_ask "Registry (host[/project])" "harbor.bank.internal" \
+  ui_ask "Registry (host[/project])" "harbor.corp.internal" \
     "Becomes global.imageRegistry: ghcr.io/yurdtech/tasksense is pulled as <registry>/yurdtech/tasksense, mongo as <registry>/library/mongo — the layout scripts/helm-airgap-load.sh pushes."
   MIRROR="${UI_VALUE%/}"
   PULL_SERVER="${MIRROR%%/*}"
@@ -300,9 +300,9 @@ ui_menu "Install the chart from" \
   if [ -n "${CA_FILE}" ]; then
     printf 'certs:\n'
     printf '  files:\n'
-    printf '    bank-ca.pem: |\n'
+    printf '    corp-ca.pem: |\n'
     tr -d '\r' < "${CA_FILE}" | sed 's/^/      /'
-    printf '  caBundle: bank-ca.pem\n\n'
+    printf '  caBundle: corp-ca.pem\n\n'
   fi
 
   if [ "${WORKER}" = "1" ]; then

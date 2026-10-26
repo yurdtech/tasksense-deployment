@@ -22,7 +22,7 @@ There are two ways through it, and they produce the same installation:
   to know what the wizard writes, or if change control wants every command on
   paper. The wizard does exactly this.
 
-Banks: before the maintenance window, work through
+Before the maintenance window, work through
 [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md) with your network,
 directory and database teams. Almost every failed first install is a firewall
 rule, a certificate or a database account that was not ready.
@@ -122,7 +122,7 @@ monitoring), point TaskSense at it instead. It is two lines in `.env`:
 
 ```dotenv
 COMPOSE_PROFILES=                      # drop "bundled-mongo"
-MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin
+MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin
 ```
 
 Read [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md) first — the account,
@@ -144,9 +144,9 @@ The file explains every setting where it appears. These have no default:
 
 ```dotenv
 TASKSENSE_VERSION=1.1.0                          # pin it; never "latest"
-APP_URL=https://tasksense.bank.internal          # what users type
-CORS_ALLOWED_ORIGINS=https://tasksense.bank.internal
-FIRST_ADMIN_EMAIL=tasksense-admin@bank.internal  # becomes the administrator
+APP_URL=https://tasksense.corp.internal          # what users type
+CORS_ALLOWED_ORIGINS=https://tasksense.corp.internal
+FIRST_ADMIN_EMAIL=tasksense-admin@corp.internal  # becomes the administrator
 STORAGE_SECRET=                                  # openssl rand -base64 32
 MONGO_PASSWORD=                                  # openssl rand -hex 24 (bundled MongoDB only)
 ```
@@ -167,7 +167,7 @@ openssl rand -hex 24        # → MONGO_PASSWORD  (hex: it goes into a URI)
 > first created. Changing it in `.env` later does not change it inside MongoDB
 > — see [10-TROUBLESHOOTING](10-TROUBLESHOOTING.md#authentication-failed-with-the-right-password-in-env).
 
-The template already carries the values we recommend for a bank — keep them
+The template already carries the values we recommend for production — keep them
 (the reasons are in [17-ENVIRONMENT](17-ENVIRONMENT.md)) and add your licence:
 
 ```dotenv
@@ -184,11 +184,11 @@ issuing CAs, PEM, concatenated) in `compose/certs/` and point the application
 at it. The folder is mounted read-only at `/certs` in every container:
 
 ```bash
-cp /etc/pki/ca-trust/source/anchors/bank-ca.pem compose/certs/bank-ca.pem
+cp /etc/pki/ca-trust/source/anchors/corp-ca.pem compose/certs/corp-ca.pem
 ```
 
 ```dotenv
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem      # the path INSIDE the container
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem      # the path INSIDE the container
 ```
 
 The directory (LDAP) CA does not go here — it is pasted as text per directory
@@ -250,8 +250,8 @@ Expected ending (abridged):
 
   TaskSense is running.
 
-  Address        https://tasksense.bank.internal
-  Administrator  tasksense-admin@bank.internal
+  Address        https://tasksense.corp.internal
+  Administrator  tasksense-admin@corp.internal
   Containers     tasksense-app tasksense-mongo
 ```
 
@@ -359,8 +359,8 @@ Expected: `nginx: configuration file /etc/nginx/nginx.conf test is successful`.
 Verify from a workstation:
 
 ```bash
-curl -fsS https://tasksense.bank.internal/api/v1/health
-curl -fsS https://tasksense.bank.internal/api/v1/version
+curl -fsS https://tasksense.corp.internal/api/v1/health
+curl -fsS https://tasksense.corp.internal/api/v1/version
 ```
 
 Expected: the same two answers as in step 7. Then open the address in two
@@ -372,7 +372,7 @@ is buffering the streams.
 
 ## 9. First sign-in
 
-Open `https://tasksense.bank.internal`.
+Open `https://tasksense.corp.internal`.
 
 The `FIRST_ADMIN_EMAIL` account exists and is an administrator, but **has no
 password** — no default credential ships with the product. Claim it one of two

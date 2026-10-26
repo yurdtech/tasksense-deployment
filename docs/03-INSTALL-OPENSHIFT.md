@@ -30,7 +30,7 @@ echo "$TASKSENSE_REGISTRY_TOKEN" | helm registry login ghcr.io -u yurdtech --pas
 Expected:
 
 ```
-Now using project "tasksense" on server "https://api.ocp.bank.internal:6443".
+Now using project "tasksense" on server "https://api.ocp.corp.internal:6443".
 secret/ghcr created
 Login Succeeded
 ```
@@ -60,8 +60,8 @@ Or by hand — the minimal file:
 
 ```yaml
 # my-values.yaml
-appUrl: https://tasksense.apps.ocp.bank.internal
-firstAdminEmail: admin@bank.internal
+appUrl: https://tasksense.apps.ocp.corp.internal
+firstAdminEmail: admin@corp.internal
 existingSecret: tasksense-secrets
 ```
 
@@ -233,21 +233,21 @@ oc get storageclass
 ## Private CA
 
 As on Kubernetes: `certs.files` (or `certs.existingConfigMap`) plus
-`certs.caBundle`. If the bank CA is already distributed through the cluster-wide
+`certs.caBundle`. If your internal CA is already distributed through the cluster-wide
 trusted CA bundle, inject it into a ConfigMap and mount that:
 
 ```bash
-oc -n tasksense create configmap bank-ca
-oc -n tasksense label configmap bank-ca config.openshift.io/inject-trusted-cabundle=true
+oc -n tasksense create configmap corp-ca
+oc -n tasksense label configmap corp-ca config.openshift.io/inject-trusted-cabundle=true
 ```
 
 ```yaml
 certs:
-  existingConfigMap: bank-ca
+  existingConfigMap: corp-ca
   caBundle: ca-bundle.crt          # the key OpenShift injects
 ```
 
-Expected: `oc -n tasksense get cm bank-ca -o jsonpath='{.data}' | head -c 80`
+Expected: `oc -n tasksense get cm corp-ca -o jsonpath='{.data}' | head -c 80`
 shows `{"ca-bundle.crt":"-----BEGIN CERTIFICATE-----…`.
 
 ---

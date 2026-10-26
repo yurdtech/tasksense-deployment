@@ -72,13 +72,13 @@ database name comes from `MONGODB_DB`, **not** from the path of the URI.
 
 ```dotenv
 # Replica set — list every member; the driver finds the primary itself.
-MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 
 # Standalone
-MONGODB_URI=mongodb://tasksense:<pw>@mongo.bank.internal:27017/?authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb://tasksense:<pw>@mongo.corp.internal:27017/?authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 
 # DNS seed list (SRV). TLS is on by default with +srv.
-MONGODB_URI=mongodb+srv://tasksense:<pw>@mongo.bank.internal/?authSource=admin&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb+srv://tasksense:<pw>@mongo.corp.internal/?authSource=admin&tlsCAFile=/certs/corp-ca.pem
 ```
 
 Rules:
@@ -111,12 +111,12 @@ your CA, give it the CA file.
 it in the URI:
 
 ```bash
-cp /etc/pki/ca-trust/source/anchors/bank-ca.pem compose/certs/bank-ca.pem
+cp /etc/pki/ca-trust/source/anchors/corp-ca.pem compose/certs/corp-ca.pem
 ```
 
 ```dotenv
-MONGODB_URI=mongodb://…/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem     # the same bundle, for SMTP, OIDC and the rest
+MONGODB_URI=mongodb://…/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem     # the same bundle, for SMTP, OIDC and the rest
 ```
 
 The path is the one **inside** the container. `preflight.sh` checks that the
@@ -131,8 +131,8 @@ worker, the migration Job and the backup Jobs alike.
 
 ```yaml
 certs:
-  existingConfigMap: tasksense-ca      # kubectl create configmap tasksense-ca --from-file=bank-ca.pem
-  caBundle: bank-ca.pem
+  existingConfigMap: tasksense-ca      # kubectl create configmap tasksense-ca --from-file=corp-ca.pem
+  caBundle: corp-ca.pem
 ```
 
 **Client certificates (x.509 authentication)** are supported by the driver
@@ -148,7 +148,7 @@ and is a private key — on Kubernetes mount it from a Secret, not a ConfigMap.
 
 ```dotenv
 COMPOSE_PROFILES=                  # was: bundled-mongo   (keep import-worker if you use it)
-MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 MONGODB_DB=tasksense
 MONGODB_TIMEOUT_MS=15000           # an election takes seconds; 5 s is for the same host
 MONGODB_COMPRESSORS=zlib           # the default; worth it across any network
@@ -166,7 +166,7 @@ in values:
 
 ```bash
 kubectl -n tasksense create secret generic tasksense-secrets \
-  --from-literal=MONGODB_URI='mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,…/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem' \
+  --from-literal=MONGODB_URI='mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,…/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem' \
   --from-literal=STORAGE_SECRET="$(openssl rand -base64 32)"
 ```
 
@@ -210,7 +210,7 @@ docker compose -f compose/docker-compose.yml logs app | grep "MongoDB connected"
 Expected — your host, with the password masked:
 
 ```
-MongoDB connected: mongodb://tasksense:***@mongo-1.bank.internal:27017,…/tasksense
+MongoDB connected: mongodb://tasksense:***@mongo-1.corp.internal:27017,…/tasksense
 ```
 
 ```bash

@@ -1,6 +1,6 @@
 # CI: the minimal install — the three required values plus the first admin.
 # Chart-rendered Secret, ReadWriteOnce data volume, migration hook, no worker.
-appUrl: https://tasksense.bank.internal
+appUrl: https://tasksense.corp.internal
 mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin
 storageSecret: ci-storage-secret-0123456789abcdef0123456789
-firstAdminEmail: admin@bank.internal
+firstAdminEmail: admin@corp.internal

@@ -291,8 +291,8 @@ example `8g` / `6144`), `up -d`, and let it resume.
 **Fix:** test the same bind from the host before changing anything:
 
 ```bash
-ldapsearch -H ldaps://dc01.bank.internal:636 -D "CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal" -W \
-  -b "DC=bank,DC=internal" "(sAMAccountName=<user>)" mail memberOf
+ldapsearch -H ldaps://dc01.corp.internal:636 -D "CN=svc-tasksense,OU=Service Accounts,DC=corp,DC=internal" -W \
+  -b "DC=corp,DC=internal" "(sAMAccountName=<user>)" mail memberOf
 ```
 
 More in [05-IDENTITY](05-IDENTITY.md#when-it-does-not-work).
@@ -325,7 +325,7 @@ a look in the proxy log — that is what the lock is for.
 **Cause:** the IdP's certificate is issued by your CA, and the application's
 server-to-server calls (discovery, token exchange) do not trust it.
 
-**Fix:** `NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem` with the bundle in
+**Fix:** `NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem` with the bundle in
 `compose/certs/` (Helm: `certs.*`), then `up -d`. The same fixes SMTP and object
 storage with internal certificates.
 
@@ -341,7 +341,7 @@ storage with internal certificates.
 **Cause:** `SESSION_TTL_HOURS=12` (or the workspace policy in Admin → Security)
 — working as configured.
 
-**Fix:** none needed; it is the bank recommendation. Change the policy if yours
+**Fix:** none needed; it is the recommended value. Change the policy if yours
 differs.
 
 ### Locked out entirely
@@ -354,7 +354,7 @@ address to `OWNER_EMAILS` and restart — those accounts are always
 administrators — then remove it again:
 
 ```bash
-echo 'OWNER_EMAILS=you@bank.internal' >> compose/.env
+echo 'OWNER_EMAILS=you@corp.internal' >> compose/.env
 docker compose -f compose/docker-compose.yml up -d
 ```
 

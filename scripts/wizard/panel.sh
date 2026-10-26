@@ -242,7 +242,7 @@ EOF
     return 0
   }
   # Twice, and the second time by typing the word: a stray Enter on a `[y/N]`
-  # must not be able to destroy a bank's task history.
+  # must not be able to destroy a customer.s task history.
   printf '\n  Type %sDELETE%s to confirm: ' "$C_BOLD" "$C_OFF"
   local typed; IFS= read -r typed
   [ "${typed}" = "DELETE" ] || { ok "cancelled — data kept"; return 0; }

@@ -9,7 +9,7 @@
 # Without existingSecret, three values have no default and the chart refuses to
 # render without them: appUrl, mongodbUri, storageSecret. firstAdminEmail is
 # needed on the first install. Everything else has a working default, chosen
-# for a bank: short sessions, no Swagger UI, no task execution.
+# for production: short sessions, no Swagger UI, no task execution.
 #
 # Every value maps to one environment variable of the application;
 # docs/17-ENVIRONMENT.md describes each one, docs/02-INSTALL-KUBERNETES.md has
@@ -21,8 +21,8 @@
 global:
   # Air-gap / internal mirror. Replaces the registry HOST of every image and
   # keeps the repository path; Docker Hub official images gain `library/`:
-  #   harbor.bank.internal + ghcr.io/yurdtech/tasksense -> harbor.bank.internal/yurdtech/tasksense
-  #   harbor.bank.internal + mongo                      -> harbor.bank.internal/library/mongo
+  #   harbor.corp.internal + ghcr.io/yurdtech/tasksense -> harbor.corp.internal/yurdtech/tasksense
+  #   harbor.corp.internal + mongo                      -> harbor.corp.internal/library/mongo
   # scripts/helm-airgap-load.sh pushes the offline bundle with exactly this rule.
   imageRegistry: ""
 
@@ -61,7 +61,7 @@ appUrl: ""
 
 # MONGODB_URI — the only data store, not bundled (see Chart.yaml). Put TLS and
 # replica-set options in the URI; a private CA goes in certs.* below:
-#   mongodb://tasksense:PASS@mongo-0,mongo-1,mongo-2/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+#   mongodb://tasksense:PASS@mongo-0,mongo-1,mongo-2/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 # Percent-encode / : @ ? # [ ] % in the password, or the driver refuses the
 # whole string. A hex password avoids the question. The database NAME is
 # config.mongodbDatabase, not the URI path.
@@ -166,14 +166,14 @@ worker:
 #
 # Rendered explicitly, so `kubectl get configmap <release>-env -o yaml` is an
 # honest record of what is running. Defaults are the application's own unless
-# marked "bank".
+# marked "recommended".
 
 config:
   # MONGODB_DB — the database the application (and the backup jobs) use.
   mongodbDatabase: tasksense
   # MONGODB_TIMEOUT_MS — server selection timeout for every operation. The app
   # default (5000) assumes a database on the same host; across a network a
-  # replica-set election can take longer. (bank: 15000)
+  # replica-set election can take longer. (recommended: 15000)
   mongodbTimeoutMs: 15000
   # MONGODB_OP_TIMEOUT_MS — deadline of one operation; 0 disables. Long jobs
   # (imports, exports, backups, migrations) run without it.
@@ -187,10 +187,10 @@ config:
   mongodbCompressors: zlib
 
   # SESSION_TTL_HOURS — sign-in lifetime; 0 = never expires. App default 720
-  # (30 days). (bank: 12 — a working day)
+  # (30 days). (recommended: 12 — a working day)
   sessionTtlHours: 12
   # SWAGGER_ENABLED — the interactive API reference at /api/v1/swagger. App default
-  # on. (bank: false — integrators can use the OpenAPI file from the release)
+  # on. (recommended: false — integrators can use the OpenAPI file from the release)
   swaggerEnabled: false
   # OWNER_EMAILS — addresses always granted the admin role. Keep empty; admins
   # are managed in the application.
@@ -246,7 +246,7 @@ config:
     secure: false       # SMTP_SECURE — true for implicit TLS (465); STARTTLS on 587 needs false
     user: ""            # SMTP_USER
     pass: ""            # SMTP_PASS (Secret; with existingSecret put it there)
-  emailFrom: ""         # EMAIL_FROM, e.g. "TaskSense <tasksense@bank.internal>"
+  emailFrom: ""         # EMAIL_FROM, e.g. "TaskSense <tasksense@corp.internal>"
 
 logging:
   format: json     # LOG_FORMAT — json for a SIEM; text is readable but not parseable
@@ -282,12 +282,12 @@ extraEnvFrom: []
 certs:
   # Everything below is mounted read-only at /certs in the API, the worker, the
   # migration Job and the backup jobs (one projected volume; file names must be
-  # distinct). Reference it as /certs/<file> — e.g. tlsCAFile=/certs/bank-ca.pem
+  # distinct). Reference it as /certs/<file> — e.g. tlsCAFile=/certs/corp-ca.pem
   # in mongodbUri.
   existingConfigMap: ""     # a ConfigMap you manage (CA bundles are public)
   existingSecret: ""        # a Secret you manage (client certificates / keys)
   files: {}                 # inline PEMs, rendered into a ConfigMap
-  #  bank-ca.pem: |
+  #  corp-ca.pem: |
   #    -----BEGIN CERTIFICATE-----
   #    ...
   # File name under /certs that Node should trust in addition to its built-in
@@ -363,7 +363,7 @@ ingress:
   hosts: []
   tls: []
   #  - secretName: tasksense-tls
-  #    hosts: [tasksense.bank.internal]
+  #    hosts: [tasksense.corp.internal]
   #
   # The chart renders up to three Ingress objects for the same host(s), because
   # three kinds of traffic need different proxy settings:

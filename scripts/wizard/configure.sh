@@ -235,7 +235,7 @@ section_identity() {
   ui_step 2 9 "This installation's identity"
 
   ui_ask "APP_URL" "$(default_for APP_URL)" \
-    "The address users type, including https:// — e.g. https://tasksense.bank.internal. Sign-in redirects are built from it, so a wrong value breaks SSO in a way that is hard to trace: the login page appears, and the return trip lands nowhere." ui_valid_url
+    "The address users type, including https:// — e.g. https://tasksense.corp.internal. Sign-in redirects are built from it, so a wrong value breaks SSO in a way that is hard to trace: the login page appears, and the return trip lands nowhere." ui_valid_url
   cfg_set APP_URL "${UI_VALUE%/}"
 
   # Same host for UI and API is the normal case, and typing it twice is how the
@@ -258,7 +258,7 @@ section_identity() {
     local suggested=""
     [ -n "${current}" ] && suggested="${COMPOSE_DIR}/certs/${current#/certs/}"
     ui_ask "CA bundle (PEM file on this host)" "${suggested}" \
-      "Your root and any intermediate certificates in one PEM file, e.g. /etc/pki/ca-trust/source/anchors/bank-ca.pem. It is copied into compose/certs/, which the containers see as /certs — public certificates only, never a private key." valid_pem
+      "Your root and any intermediate certificates in one PEM file, e.g. /etc/pki/ca-trust/source/anchors/corp-ca.pem. It is copied into compose/certs/, which the containers see as /certs — public certificates only, never a private key." valid_pem
     local src="${UI_VALUE}" name
     name="$(basename "${src}")"
     if [ "$(cd "$(dirname "${src}")" && pwd)/${name}" != "${COMPOSE_DIR}/certs/${name}" ]; then
@@ -297,7 +297,7 @@ section_secrets() {
     local ca_hint="tls=true&tlsCAFile=/certs/<your CA>.pem"
     [ -n "$(cfg_get NODE_EXTRA_CA_CERTS)" ] && ca_hint="tls=true&tlsCAFile=$(cfg_get NODE_EXTRA_CA_CERTS)"
     ui_ask "MONGODB_URI" "$(cfg_get MONGODB_URI)" \
-      "e.g. mongodb://tasksense:PASSWORD@mongo-0.bank.internal:27017,mongo-1.bank.internal:27017,mongo-2.bank.internal:27017/?replicaSet=rs0&${ca_hint}&authSource=admin — percent-encode anything in the password that a URI reads as structure: / : @ ? # [ ] %." valid_mongo_uri
+      "e.g. mongodb://tasksense:PASSWORD@mongo-0.corp.internal:27017,mongo-1.corp.internal:27017,mongo-2.corp.internal:27017/?replicaSet=rs0&${ca_hint}&authSource=admin — percent-encode anything in the password that a URI reads as structure: / : @ ? # [ ] %." valid_mongo_uri
     cfg_set MONGODB_URI "${UI_VALUE}"
 
     ui_ask "MONGODB_DB" "$(default_for MONGODB_DB)" \
@@ -348,7 +348,7 @@ section_signin() {
   ui_step 4 9 "Sign-in"
 
   ui_ask "SESSION_TTL_HOURS" "$(default_for SESSION_TTL_HOURS)" \
-    "How long a sign-in lasts, in hours. 12 covers a working day and is what we recommend for a bank; the application's own default is 720 (30 days). A workspace policy set in Admin → Security still wins." valid_hours
+    "How long a sign-in lasts, in hours. 12 covers a working day and is what we recommend for production; the application's own default is 720 (30 days). A workspace policy set in Admin → Security still wins." valid_hours
   cfg_set SESSION_TTL_HOURS "${UI_VALUE}"
 
   printf '\n'
@@ -534,7 +534,7 @@ section_operations() {
   fi
 
   printf '\n'
-  ui_text "The interactive API browser (Swagger, at /api/v1/swagger) publishes the complete API surface. The application serves it unless told not to; for a bank, leave it off and turn it on while somebody is building an integration."
+  ui_text "The interactive API browser (Swagger, at /api/v1/swagger) publishes the complete API surface. The application serves it unless told not to; for production, leave it off and turn it on while somebody is building an integration."
   if ui_yesno "Serve the API browser?" "$([ "$(cfg_get SWAGGER_ENABLED)" = "true" ] && echo y || echo n)"; then
     cfg_set SWAGGER_ENABLED true
     warn "the API browser is on — SWAGGER_ENABLED=false in .env turns it off again"

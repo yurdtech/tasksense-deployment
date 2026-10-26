@@ -46,7 +46,7 @@ print(" ".join(map(str, v)) if isinstance(v, (list, tuple)) else v)
 
 ENV_PRESENT_BEFORE=0; [ -f "${ROOT}/compose/.env" ] && ENV_PRESENT_BEFORE=1
 
-THEIRS="mongodb://ts:pw@mongo-0.abb.internal:27017,mongo-1.abb.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin"
+THEIRS="mongodb://ts:pw@mongo-0.acme.internal:27017,mongo-1.acme.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin"
 fixture_env "${WORK}/bundled.env"
 fixture_env "${WORK}/external.env" "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_URI=${THEIRS}"
 fixture_env "${WORK}/worker.env" "COMPOSE_PROFILES=bundled-mongo,import-worker" "WORKER_ROLE=api" \
@@ -91,7 +91,7 @@ check "app: staging on the data volume" "/app/api/data/tmp" "$(q "${WORK}/bundle
 check "migrate: the same TMPDIR" "/app/api/data/tmp" "$(q "${WORK}/bundled.json" 'env("migrate","TMPDIR")')"
 check "app: WORKER_ROLE from .env" "all" "$(q "${WORK}/bundled.json" 'env("app","WORKER_ROLE")')"
 check "app: WORKER_ROLE=api beside the worker" "api" "$(q "${WORK}/worker.json" 'env("app","WORKER_ROLE")')"
-check "app: CORS defaults to APP_URL" "https://tasksense.abb.internal" "$(q "${WORK}/bundled.json" 'env("app","CORS_ALLOWED_ORIGINS")')"
+check "app: CORS defaults to APP_URL" "https://tasksense.acme.internal" "$(q "${WORK}/bundled.json" 'env("app","CORS_ALLOWED_ORIGINS")')"
 check "app: on-premise contract forced" "onprem production" \
   "$(q "${WORK}/bundled.json" '[env("app","DEPLOYMENT_MODE"), env("app","NODE_ENV")]')"
 check "app: published on the loopback address only" "127.0.0.1 39317 3000" \
@@ -120,10 +120,10 @@ check "mongo: cache size from MONGO_CACHE_GB" "--wiredTigerCacheSizeGB 2" \
 check "mongo: publishes no port" "None" "$(q "${WORK}/bundled.json" 's["mongo"].get("ports")')"
 
 # ── a mirror moves both images ───────────────────────────────────────────────
-fixture_env "${WORK}/mirror.env" "TASKSENSE_IMAGE=harbor.abb.internal/tasksense/tasksense" "MONGO_IMAGE=harbor.abb.internal/tasksense/mongo" "MONGO_VERSION=7.0.14"
+fixture_env "${WORK}/mirror.env" "TASKSENSE_IMAGE=harbor.acme.internal/tasksense/tasksense" "MONGO_IMAGE=harbor.acme.internal/tasksense/mongo" "MONGO_VERSION=7.0.14"
 render "${WORK}/mirror.env" > "${WORK}/mirror.json"
 check "mirror: app, migrate and mongo all come from it" \
-  "harbor.abb.internal/tasksense/tasksense:$(example_version) harbor.abb.internal/tasksense/tasksense:$(example_version) harbor.abb.internal/tasksense/mongo:7.0.14" \
+  "harbor.acme.internal/tasksense/tasksense:$(example_version) harbor.acme.internal/tasksense/tasksense:$(example_version) harbor.acme.internal/tasksense/mongo:7.0.14" \
   "$(q "${WORK}/mirror.json" '[s["app"]["image"], s["migrate"]["image"], s["mongo"]["image"]]')"
 
 # ── refusals ─────────────────────────────────────────────────────────────────

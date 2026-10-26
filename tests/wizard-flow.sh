@@ -43,8 +43,8 @@ answers = [
     version + "\n",                         # 1 TASKSENSE_VERSION
     "127.0.0.1\n",                          #   BIND_ADDRESS
     "3000\n",                               #   HTTP_PORT
-    "https://tasksense.abb.internal\n",     # 2 APP_URL
-    "infra@abb.internal\n",                 #   FIRST_ADMIN_EMAIL
+    "https://tasksense.acme.internal\n",     # 2 APP_URL
+    "infra@acme.internal\n",                 #   FIRST_ADMIN_EMAIL
     "n\n",                                  #   own certificate authority?
     "g\n",                                  # 3 STORAGE_SECRET: generate
     "1",                                    #   database: bring one with it
@@ -133,10 +133,10 @@ value_of() { sed -n "s/^$2=//p" "$1" | tail -n1; }
 check "TASKSENSE_VERSION as typed" "${VERSION}" "$(value_of "${OUT}" TASKSENSE_VERSION)"
 check "BIND_ADDRESS as typed" "127.0.0.1" "$(value_of "${OUT}" BIND_ADDRESS)"
 check "HTTP_PORT as typed" "3000" "$(value_of "${OUT}" HTTP_PORT)"
-check "APP_URL as typed" "https://tasksense.abb.internal" "$(value_of "${OUT}" APP_URL)"
-check "CORS follows APP_URL without being asked" "https://tasksense.abb.internal" \
+check "APP_URL as typed" "https://tasksense.acme.internal" "$(value_of "${OUT}" APP_URL)"
+check "CORS follows APP_URL without being asked" "https://tasksense.acme.internal" \
   "$(value_of "${OUT}" CORS_ALLOWED_ORIGINS)"
-check "administrator" "infra@abb.internal" "$(value_of "${OUT}" FIRST_ADMIN_EMAIL)"
+check "administrator" "infra@acme.internal" "$(value_of "${OUT}" FIRST_ADMIN_EMAIL)"
 # Pasted with spaces around it. `IFS= read` keeps them, and nothing downstream
 # would have complained — it produces a value that looks right and fails later.
 check "MONGO_USER is trimmed of pasted whitespace" "tasksense" "$(value_of "${OUT}" MONGO_USER)"
@@ -176,7 +176,7 @@ check "no OIDC configured" "" "$(value_of "${OUT}" OIDC_ISSUER)"
 check "no CA bundle configured" "" "$(value_of "${OUT}" NODE_EXTRA_CA_CERTS)"
 check "AI off" "off" "$(value_of "${OUT}" AGENT_DISPATCHER)"
 
-# Asked, with the bank defaults offered.
+# Asked, with the recommended defaults offered.
 check "session lifetime: the 12-hour default" "12" "$(value_of "${OUT}" SESSION_TTL_HOURS)"
 check "API browser off" "false" "$(value_of "${OUT}" SWAGGER_ENABLED)"
 check "the bundled database is the bundled-mongo profile" "none" "$(value_of "${OUT}" MONGODB_COMPRESSORS)"

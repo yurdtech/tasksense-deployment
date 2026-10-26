@@ -9,8 +9,8 @@ certificate your organisation issued — your own MongoDB over TLS, the SMTP
 relay, the OIDC identity provider, an internal LLM gateway:
 
 ```bash
-cp /etc/pki/ca-trust/source/anchors/bank-ca.pem compose/certs/
-chmod 644 compose/certs/bank-ca.pem
+cp /etc/pki/ca-trust/source/anchors/corp-ca.pem compose/certs/
+chmod 644 compose/certs/corp-ca.pem
 ```
 
 Then name it in `.env` by its path **inside** the container — `/certs/…`, not
@@ -19,10 +19,10 @@ rather than at startup:
 
 ```bash
 # Every outbound TLS connection the application makes trusts this bundle:
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem
 
 # MongoDB reads its CA from the connection string:
-MONGODB_URI=mongodb://…/?replicaSet=rs0&tls=true&tlsCAFile=/certs/bank-ca.pem&authSource=admin
+MONGODB_URI=mongodb://…/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin
 ```
 
 `scripts/preflight.sh` checks that both files exist here. A bundle with

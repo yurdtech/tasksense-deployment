@@ -2,7 +2,7 @@
 
 How TaskSense is configured, where each kind of setting lives, and how to change
 one safely. The table of **every** variable — required or not, default, what it
-does, what we recommend for a bank — is [17-ENVIRONMENT](17-ENVIRONMENT.md).
+does, what we recommend for production — is [17-ENVIRONMENT](17-ENVIRONMENT.md).
 
 ---
 
@@ -61,15 +61,15 @@ These have no default; the stack does not start without them.
 | Setting | Example | |
 | --- | --- | --- |
 | `TASKSENSE_VERSION` | `1.1.0` | Pin it; never `latest`. |
-| `APP_URL` | `https://tasksense.bank.internal` | What users type. Sign-in redirects and e-mail links are built from it. |
+| `APP_URL` | `https://tasksense.corp.internal` | What users type. Sign-in redirects and e-mail links are built from it. |
 | `CORS_ALLOWED_ORIGINS` | same as `APP_URL` | |
 | `STORAGE_SECRET` | `openssl rand -base64 32` | At least 32 characters. **Not recoverable — back it up.** |
-| `FIRST_ADMIN_EMAIL` | `tasksense-admin@bank.internal` | First install only. Becomes the administrator, with no password. |
+| `FIRST_ADMIN_EMAIL` | `tasksense-admin@corp.internal` | First install only. Becomes the administrator, with no password. |
 | `MONGO_PASSWORD` | `openssl rand -hex 24` | **Bundled MongoDB only.** Hex — it is substituted into a URI. |
 | or `MONGODB_URI` | `mongodb://…/?replicaSet=rs0&tls=true&…` | **Your own MongoDB**, together with `COMPOSE_PROFILES` without `bundled-mongo`. [16](16-EXTERNAL-DATABASES.md) |
 
-For a bank, add the settings in
-[17-ENVIRONMENT › A bank baseline](17-ENVIRONMENT.md#a-bank-baseline):
+For production, add the settings in
+[17-ENVIRONMENT › A hardened baseline](17-ENVIRONMENT.md#a-hardened-baseline):
 `SESSION_TTL_HOURS=12`, `SWAGGER_ENABLED=false`, `AGENT_EXECUTOR=off`,
 `NODE_EXTRA_CA_CERTS`, metrics with a token.
 
@@ -99,12 +99,12 @@ certificate from your own CA:
 **Compose:**
 
 ```bash
-cat bank-root-ca.pem bank-issuing-ca.pem > compose/certs/bank-ca.pem    # one bundle, several CAs
+cat corp-root-ca.pem corp-issuing-ca.pem > compose/certs/corp-ca.pem    # one bundle, several CAs
 ```
 
 ```dotenv
-NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem
-MONGODB_URI=mongodb://…&tls=true&tlsCAFile=/certs/bank-ca.pem   # MongoDB names the file itself
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem
+MONGODB_URI=mongodb://…&tls=true&tlsCAFile=/certs/corp-ca.pem   # MongoDB names the file itself
 ```
 
 `compose/certs/` is mounted read-only at `/certs` in every container; the
@@ -137,11 +137,11 @@ check covers:
 On-premise these are internal hosts, so **each one you use must be listed**:
 
 ```dotenv
-EGRESS_ALLOWLIST=minio.bank.internal,llm-gateway.bank.internal
+EGRESS_ALLOWLIST=minio.corp.internal,llm-gateway.corp.internal
 ```
 
 Use the host exactly as it appears in the URL, without scheme or port: a name
-(`minio.bank.internal`) or an IP literal (`10.20.30.40`). Without it, Admin →
+(`minio.corp.internal`) or an IP literal (`10.20.30.40`). Without it, Admin →
 Storage refuses to save with *"Storage endpoint refused: … Add … to
 EGRESS_ALLOWLIST"*. Change it with `up -d`, or `helm upgrade` with
 `config.egressAllowlist`.

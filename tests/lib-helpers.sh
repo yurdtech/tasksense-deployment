@@ -43,10 +43,10 @@ check "a database in the path becomes authSource — it was the auth db" \
   "$(lib /dev/null 'mongo_uri_without_db "mongodb://u:p@h/mydb?tls=true"')"
 check "an explicit authSource (any case) is kept" \
   "mongodb://h1,h2/?AuthSource=y" "$(lib /dev/null 'mongo_uri_without_db "mongodb://h1,h2/x?AuthSource=y"')"
-check "SRV URIs too" "mongodb+srv://u:p@c.abb.internal/" "$(lib /dev/null 'mongo_uri_without_db "mongodb+srv://u:p@c.abb.internal/"')"
-check "first host of a seed list" "mongo-0.abb.internal 27018" \
-  "$(lib /dev/null 'printf "%s %s" "$(uri_host "mongodb://u:p@mongo-0.abb.internal:27018,m1:27017/x")" "$(uri_port "mongodb://u:p@mongo-0.abb.internal:27018,m1:27017/x")"')"
-check "default port" "27017" "$(lib /dev/null 'uri_port "mongodb://u:p@db.abb.internal/x"')"
+check "SRV URIs too" "mongodb+srv://u:p@c.acme.internal/" "$(lib /dev/null 'mongo_uri_without_db "mongodb+srv://u:p@c.acme.internal/"')"
+check "first host of a seed list" "mongo-0.acme.internal 27018" \
+  "$(lib /dev/null 'printf "%s %s" "$(uri_host "mongodb://u:p@mongo-0.acme.internal:27018,m1:27017/x")" "$(uri_port "mongodb://u:p@mongo-0.acme.internal:27018,m1:27017/x")"')"
+check "default port" "27017" "$(lib /dev/null 'uri_port "mongodb://u:p@db.acme.internal/x"')"
 check "credentials redacted for messages" "mongodb://***@h:1/x" "$(lib /dev/null 'uri_redacted "mongodb://u:s3cret@h:1/x?tls=true"')"
 
 # ── reading and writing .env ─────────────────────────────────────────────────
@@ -84,7 +84,7 @@ check "no configuration yet means the default: bundled" "bundled" \
   "$(lib "${WORK}/none.env" 'bundled_mongo_enabled && echo bundled || echo external')"
 check "the profile decides once it is set" "external" \
   "$(lib "${WORK}/ext-unfinished.env" 'bundled_mongo_enabled && echo bundled || echo external')"
-printf 'TASKSENSE_VERSION=1.0.0\nMONGODB_URI=mongodb://db.abb.internal/x\n' > "${WORK}/legacy-ext.env"
+printf 'TASKSENSE_VERSION=1.0.0\nMONGODB_URI=mongodb://db.acme.internal/x\n' > "${WORK}/legacy-ext.env"
 check "a 1.0 file without profiles: the URI decides, as it did then" "external" \
   "$(lib "${WORK}/legacy-ext.env" 'bundled_mongo_enabled && echo bundled || echo external')"
 fixture_env "${WORK}/worker.env" "COMPOSE_PROFILES=bundled-mongo, import-worker"
@@ -110,7 +110,7 @@ out="$(lib "${SANDBOX}/compose/.env" 'migrate_legacy_env')"
 check "running it again changes nothing" "${before}" "$(cat "${SANDBOX}/compose/.env")"
 check "and says nothing" "" "${out}"
 
-printf 'TASKSENSE_VERSION=1.0.0\nMONGODB_URI=mongodb://u:p@db.abb.internal/?authSource=admin\nSWAGGER_ENABLED=true\n' > "${SANDBOX}/compose/.env"
+printf 'TASKSENSE_VERSION=1.0.0\nMONGODB_URI=mongodb://u:p@db.acme.internal/?authSource=admin\nSWAGGER_ENABLED=true\n' > "${SANDBOX}/compose/.env"
 lib "${SANDBOX}/compose/.env" 'migrate_legacy_env' >/dev/null
 check "an external 1.0 install gets an empty COMPOSE_PROFILES" "1" "$(grep -c '^COMPOSE_PROFILES=$' "${SANDBOX}/compose/.env")"
 check "an explicit SWAGGER_ENABLED is left alone" "true" "$(lib "${SANDBOX}/compose/.env" 'env_value SWAGGER_ENABLED')"

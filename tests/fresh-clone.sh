@@ -12,7 +12,7 @@
 # This runs on GNU sed, deliberately. Alpine's busybox sed is quiet about a
 # missing file; GNU sed exits 2, `set -o pipefail` propagates it and `set -e`
 # ends the script with no output whatsoever. The whole class of bug is invisible
-# in an Alpine test container and fatal on the RHEL host a bank actually uses,
+# in an Alpine test container and fatal on the RHEL host a customer actually uses,
 # so the test has to run where the customer does.
 
 set -uo pipefail

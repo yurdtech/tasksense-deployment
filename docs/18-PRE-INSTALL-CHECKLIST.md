@@ -1,6 +1,6 @@
-# Pre-install checklist (for the bank)
+# Pre-install checklist
 
-Everything the bank's teams need to prepare **before** the installation window,
+Everything your teams need to prepare **before** the installation window,
 in one place: network, DNS and certificates, the reverse proxy, directory and
 SSO, mail, the database, sizing, backups, registry access, and who does what.
 
@@ -9,7 +9,7 @@ a firewall rule, a certificate chain, a database account. Work through this
 with the network, PKI, directory, database and security teams two weeks ahead;
 the install itself then takes an afternoon.
 
-Section 12 is the **ABB deployment profile**: the values to agree in the
+Section 12 is the **deployment profile**: the values to agree in the
 kick-off meeting, and the questions still open.
 
 Applies to TaskSense **1.1.0** or later.
@@ -21,7 +21,7 @@ Applies to TaskSense **1.1.0** or later.
 | Decision | Options | Notes |
 | --- | --- | --- |
 | Platform | **Docker Compose** on one Linux VM · **Helm** on Kubernetes 1.27+ / OpenShift 4.12+ | Same image, same features. Compose is simpler to operate and restore; choose Helm because you already run a cluster ([00-OVERVIEW](00-OVERVIEW.md#choosing-a-platform)). |
-| Database | Bundled MongoDB 7 (Compose only) · the bank's MongoDB 7 | For production, the bank's replica set ([16](16-EXTERNAL-DATABASES.md)). Bundled is fine for a pilot. |
+| Database | Bundled MongoDB 7 (Compose only) · your own MongoDB 7 | For production, your own replica set ([16](16-EXTERNAL-DATABASES.md)). Bundled is fine for a pilot. |
 | Software delivery | Pull from `ghcr.io` · mirror into Harbor/Nexus · offline bundle | [13-REGISTRY-ACCESS](13-REGISTRY-ACCESS.md) |
 | Jira migration | XML site backup import · Jira API import · none | A backup import needs the import worker and disk (section 8). |
 | AI features | Off · internal model gateway | Off unless a pilot is approved. Tool-using execution is not available in any case. |
@@ -57,7 +57,7 @@ MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
 | --- | --- | --- | --- | --- |
 | O1 | Domain controllers (every domain configured) | 636/tcp (LDAPS) | Directory sign-in | If LDAP |
 | O2 | OIDC identity provider | 443/tcp | Discovery, token, userinfo (server-to-server) | If OIDC |
-| O3 | **Every** MongoDB replica-set member | 27017/tcp (or yours) | The database | Bank MongoDB |
+| O3 | **Every** MongoDB replica-set member | 27017/tcp (or yours) | The database | Own MongoDB |
 | O4 | SMTP relay | 25, 587 or 465/tcp | Notifications, invitations, password reset | If mail |
 | O5 | Object storage (S3 / MinIO / WebDAV) | 443/tcp | Attachments, if not on the volume | If used |
 | O6 | Internal model gateway | 443/tcp (or its port) | AI features | If AI pilot |
@@ -84,13 +84,13 @@ namespaces.
 
 | Item | Value / requirement |
 | --- | --- |
-| FQDN | e.g. `tasksense.bank.internal` — becomes `APP_URL`. Changing it later means re-registering the OIDC client. |
+| FQDN | e.g. `tasksense.corp.internal` — becomes `APP_URL`. Changing it later means re-registering the OIDC client. |
 | DNS record | A/CNAME to the reverse proxy / ingress VIP |
-| Server certificate | Issued by the bank CA; SAN contains the FQDN; full chain (leaf + intermediates) in PEM; key unencrypted for the proxy or in the proxy's HSM/keystore |
+| Server certificate | Issued by your internal CA; SAN contains the FQDN; full chain (leaf + intermediates) in PEM; key unencrypted for the proxy or in the proxy's HSM/keystore |
 | Renewal | Owner and date recorded; the proxy, not TaskSense, holds it |
-| CA bundle for TaskSense | One PEM file with the bank's **root and issuing** CAs, used for outbound TLS (MongoDB, SMTP, IdP, object storage, gateway): `compose/certs/bank-ca.pem` → `NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem` |
+| CA bundle for TaskSense | One PEM file with your **root and issuing** CAs, used for outbound TLS (MongoDB, SMTP, IdP, object storage, gateway): `compose/certs/corp-ca.pem` → `NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem` |
 | LDAP CA | The CA that issued the domain controllers' certificates, as PEM text — pasted in Admin → Authentication |
-| Workstations | Trust the bank CA (browser policy) |
+| Workstations | Trust your internal CA (browser policy) |
 
 - [ ] FQDN and DNS record created
 - [ ] Certificate (full chain) issued and on the proxy
@@ -100,7 +100,7 @@ namespaces.
 
 ## 4. Reverse proxy / WAF
 
-TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
+TaskSense speaks plain HTTP on port 3000; TLS terminates at your reverse proxy
 (nginx, HAProxy, F5) or Ingress/Route. Ready-made: `examples/nginx.conf`,
 `examples/Caddyfile`. Whatever the product, it must:
 
@@ -127,9 +127,9 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 
 | Item | Example |
 | --- | --- |
-| LDAPS URL(s) | `ldaps://dc01.bank.internal:636` (two DCs or a VIP) |
-| Service account | `CN=svc-tasksense,OU=Service Accounts,DC=bank,DC=internal` — **read-only**, no interactive logon, password rotation process agreed |
-| Search base | `DC=bank,DC=internal` |
+| LDAPS URL(s) | `ldaps://dc01.corp.internal:636` (two DCs or a VIP) |
+| Service account | `CN=svc-tasksense,OU=Service Accounts,DC=corp,DC=internal` — **read-only**, no interactive logon, password rotation process agreed |
+| Search base | `DC=corp,DC=internal` |
 | User filter | `(sAMAccountName={{username}})`, optionally `(&(…)(memberOf=CN=TaskSense-Users,…))` |
 | Groups → roles | Full DNs for `admin`, `lead`, `member`, `viewer` (and `release_manager` if used) |
 | Required attribute | `mail` on every user who will sign in — it joins the directory identity to the TaskSense account |
@@ -143,7 +143,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 | Client | Confidential, authorization-code flow |
 | Redirect URI | `https://<FQDN>/api/v1/auth/oidc/callback`, exactly |
 | Scopes / claims | `openid profile email`; `email` required and **verified** |
-| Issuer URL | e.g. `https://sso.bank.internal/realms/corporate` |
+| Issuer URL | e.g. `https://sso.corp.internal/realms/corporate` |
 | MFA | Enforced at the IdP (TaskSense has no MFA of its own) |
 | Client secret | Delivered through the vault, into `OIDC_CLIENT_SECRET` |
 
@@ -160,16 +160,16 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 
 | Item | Value |
 | --- | --- |
-| Relay host / port | e.g. `smtp.bank.internal:587` |
-| TLS | STARTTLS (587/25) or implicit TLS (465 → `SMTP_SECURE=true`); certificate from the bank CA (covered by the CA bundle) |
+| Relay host / port | e.g. `smtp.corp.internal:587` |
+| TLS | STARTTLS (587/25) or implicit TLS (465 → `SMTP_SECURE=true`); certificate from your internal CA (covered by the CA bundle) |
 | Authentication | Account or IP-based relay permission for the TaskSense host |
-| Sender | `EMAIL_FROM`, e.g. `TaskSense <tasksense@bank.internal>`, allowed by the relay |
+| Sender | `EMAIL_FROM`, e.g. `TaskSense <tasksense@corp.internal>`, allowed by the relay |
 
 - [ ] Relay permits the TaskSense host and sender
 
 ---
 
-## 7. MongoDB (if the bank provides it)
+## 7. MongoDB (if you provide it)
 
 | Item | Requirement |
 | --- | --- |
@@ -177,7 +177,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 | Topology | Replica set of three (name, e.g. `rs0`, and every member's host:port) |
 | Database | `tasksense` (or agreed name → `MONGODB_DB`) |
 | Account | `tasksense`, in `admin`, with `readWrite` + `dbAdmin` on the database only ([16 › Create the account](16-EXTERNAL-DATABASES.md#1-create-the-account)) |
-| TLS | On; server certificates from the bank CA with SANs matching the host names in the URI |
+| TLS | On; server certificates from your internal CA with SANs matching the host names in the URI |
 | Encryption at rest | Encrypted storage or MongoDB Enterprise encryption — TaskSense does not encrypt business content |
 | Backups | DBA policy (snapshots / PITR) **in addition to** `backup.sh`, or `backup.sh` as the primary |
 | Monitoring | DBA's usual tooling; TaskSense exports pool and latency metrics |
@@ -195,7 +195,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 | Profile | S / M / L — [11-SIZING](11-SIZING.md) |
 | TaskSense host | vCPU ____ · RAM ____ GB · OS ____ |
 | Docker data root (`/var/lib/docker`) on its own volume | ____ GB = images (~3 GB) + attachments + **2 × the Jira backup** + MongoDB (bundled) |
-| Jira site backup size | ____ GB (ABB test dump: 13 GB → 26 GB free for the import) |
+| Jira site backup size | ____ GB (e.g. a 13 GB backup needs 26 GB free for the import) |
 | Migration window extra | +2 vCPU, +6 GB RAM for the import worker |
 | Attachments growth | ____ GB/year — or object storage |
 
@@ -224,7 +224,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at the bank's proxy
 
 ## 10. Registry access or air-gap
 
-| Path | Bank prepares |
+| Path | You prepare |
 | --- | --- |
 | Direct pull | Outbound O14 during windows; Docker daemon proxy if used |
 | Harbor / Nexus mirror | A project/repository; a robot account for pushes; pulls from the TaskSense host (O13); image scanning policy |
@@ -240,7 +240,7 @@ In every case:
 
 ## 11. Who does what
 
-| Task | Bank infrastructure | Bank network | Bank PKI | Directory / IdP team | DBA | Security | Application owner | YurdTech |
+| Task | Infrastructure | Network | PKI | Directory / IdP team | DBA | Security | Application owner | YurdTech |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | VM / cluster, OS, Docker | **R** | | | | | | | advises |
 | Firewall rules, DNS | | **R** | | | | A | | provides matrix |
@@ -257,20 +257,20 @@ In every case:
 | Support | | | | | | | C | **R** — no remote access; diagnostics archive only |
 
 R = responsible, A = approves, C = consulted. YurdTech has **no remote access**
-to the bank environment; support works from the redacted output of
+to your environment; support works from the redacted output of
 `./scripts/collect-diagnostics.sh`.
 
 ---
 
-## 12. ABB deployment profile
+## 12. Deployment profile
 
-To agree in the kick-off meeting. The right-hand column is for ABB.
+To agree in the kick-off meeting. The right-hand column is for your values.
 
-| Parameter | Options / default | Our recommendation | ABB value |
+| Parameter | Options / default | Our recommendation | Your value |
 | --- | --- | --- | --- |
-| Deployment model | Compose (one Linux VM) · Helm (OpenShift / Kubernetes) | Compose for the pilot; OpenShift if ABB standardises on it | ☐ Compose ☐ Helm — host / cluster: ______ |
+| Deployment model | Compose (one Linux VM) · Helm (OpenShift / Kubernetes) | Compose for the pilot; OpenShift if you standardise on it | ☐ Compose ☐ Helm — host / cluster: ______ |
 | Version | `TASKSENSE_VERSION` ≥ 1.1.0 | The current 1.1.x | version ____ · commit ______ |
-| MongoDB | Bundled `mongo:7` (Compose) · ABB's own (standalone / replica set, TLS + CA, own account) | ABB's replica set, TLS, disk encryption | ☐ bundled ☐ ABB: hosts ______ · TLS ☐ · disk encryption ☐ |
+| MongoDB | Bundled `mongo:7` (Compose) · your own (standalone / replica set, TLS + CA, own account) | Your own replica set, TLS, disk encryption | ☐ bundled ☐ own: hosts ______ · TLS ☐ · disk encryption ☐ |
 | TLS termination and address | Reverse proxy (nginx / HAProxy / F5) or Route / Ingress; issuing CA; `APP_URL` | | proxy: ______ · CA: ______ · `https://______` |
 | Sign-in | LDAP directories (one or more forests, group → role); OIDC (Keycloak / AD FS / Entra, MFA at the IdP); local break-glass admin; registration closed | LDAPS + OIDC for MFA, break-glass local admin | directories: ______ · LDAPS ☐ · OIDC: ______ · registration off ☐ · break-glass ☐ |
 | Role mapping | AD group → admin / lead / member / viewer / release_manager | | admin: ______ · lead: ______ · default: ______ |
@@ -282,7 +282,7 @@ To agree in the kick-off meeting. The right-hand column is for ABB.
 | MCP / external AI clients | Not used · read-only PAT pilot · full | Not used, or read-only pilot | ☐ no ☐ pilot: ______ |
 | E-mail | SMTP relay (host, port, TLS, CA), `EMAIL_FROM`; or in-app only | Relay with STARTTLS | relay: ______ · port __ · ☐ STARTTLS ☐ 465 |
 | Attachments | Local volume (default) · S3 / MinIO · WebDAV; size limit; extension allow-list; an internal store's host in `EGRESS_ALLOWLIST` | Volume for the pilot; object storage for production | ☐ volume ☐ store: ______ · allowlisted ☐ · limit __ MB |
-| Jira migration | XML site backup (tested with a 13 GB / 574k-issue ABB dump), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
+| Jira migration | XML site backup (tested with a 13 GB / 574k-issue site backup), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
 | Integrations | GitLab webhook, inbound mail, outgoing webhooks (SIEM), `EGRESS_ALLOWLIST` | Only what is used; allowlist minimal | GitLab: ______ · mail: ______ · allowlist: ______ |
 | Monitoring | `METRICS_ENABLED` + `METRICS_TOKEN`; Prometheus; alert rules (`examples/prometheus-alerts.yaml`) | On | scrape: ______ · alert channel: ______ |
 | Logging / SIEM | Container logs → SIEM; audit export or webhook; retention | JSON logs; audit via webhook or periodic export | SIEM: ______ · retention __ days · audit export: ______ |
@@ -292,9 +292,9 @@ To agree in the kick-off meeting. The right-hand column is for ABB.
 | Registry / air-gap | `ghcr.io` read-only token · Harbor mirror · offline bundle; cosign | Harbor mirror | ☐ ghcr.io ☐ Harbor: ______ ☐ offline · cosign ☐ |
 | Licence | `LICENSE_KEY`: organisation, seats, expiry | | seats __ · expiry ______ |
 | Support and SLA | Channel, response times (critical / high / medium), release cadence, vulnerability notice | | channel: ______ · SLA: ______ |
-| Pentest / audit | ABB pentest environment and window; third-party report; vendor incident report (2026-08-03) | | date: ______ · report: ☐ yes ☐ no |
+| Pentest / audit | Your pentest environment and window; third-party report | | date: ______ · report: ☐ yes ☐ no |
 
-### Open questions for ABB
+### Questions to settle before the install
 
 1. **MongoDB ownership.** Does the DBA team run it (replica set, disk
    encryption, separate accounts)? Should the TaskSense account be denied
@@ -317,11 +317,11 @@ To agree in the kick-off meeting. The right-hand column is for ABB.
    into the zone), the migration window, the resource uplift (RAM, disk), and
    who deletes the staged backup afterwards (it is a full copy of Jira; kept
    7 days by default).
-8. **Sessions and passwords.** The bank standard for session lifetime and local
+8. **Sessions and passwords.** Your standard for session lifetime and local
    password policy; must directory deactivation cut existing sessions
    immediately (today: at session expiry)?
 9. **Backup and DR.** Who owns backups and restores (infrastructure vs DBA), the
-   archive encryption key, and whether RPO 24 h / RTO 1 h meet the bank's
+   archive encryption key, and whether RPO 24 h / RTO 1 h meet your
    classification for this system.
 10. **Reverse proxy and WAF.** Which product fronts TaskSense, and can it meet
     P2–P5 (unbuffered streams, 21 GB unbuffered uploads, 4 h timeouts) — or do
@@ -329,4 +329,4 @@ To agree in the kick-off meeting. The right-hand column is for ABB.
 11. **Delivery.** Harbor mirror or offline bundle; the image scanning policy and
     who signs off findings; the cosign fingerprint exchange.
 12. **Incidents.** Contact and escalation channels on both sides; aligning
-    vendor patch releases with the bank's change windows.
+    vendor patch releases with your change windows.

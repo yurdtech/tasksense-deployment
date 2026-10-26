@@ -43,7 +43,7 @@ feature set; pick the one that fits your infrastructure.
 Why one API process, and what "HA" honestly means here:
 [docs/15-SCALING-AND-HA.md](docs/15-SCALING-AND-HA.md).
 
-Banks: start with [docs/18-PRE-INSTALL-CHECKLIST.md](docs/18-PRE-INSTALL-CHECKLIST.md)
+Before installing, start with [docs/18-PRE-INSTALL-CHECKLIST.md](docs/18-PRE-INSTALL-CHECKLIST.md)
 — firewall matrix, certificates, directory, database and who does what.
 
 ---
@@ -69,7 +69,7 @@ echo '<TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
 cp compose/.env.example compose/.env && chmod 600 compose/.env
 #    → edit compose/.env: APP_URL, CORS_ALLOWED_ORIGINS, FIRST_ADMIN_EMAIL,
 #      STORAGE_SECRET (openssl rand -base64 32), MONGO_PASSWORD (openssl rand -hex 24),
-#      LICENSE_KEY. The template already carries the bank defaults
+#      LICENSE_KEY. The template already carries the recommended defaults
 #      (SESSION_TTL_HOURS=12, SWAGGER_ENABLED=false, AGENT_EXECUTOR=off) — keep them.
 
 # 4. Check it before starting anything
@@ -109,22 +109,22 @@ kubectl -n tasksense create secret docker-registry ghcr \
 
 # 2. The secrets, as one Kubernetes Secret (or from Vault / External Secrets)
 kubectl -n tasksense create secret generic tasksense-secrets \
-  --from-literal=MONGODB_URI='mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem' \
+  --from-literal=MONGODB_URI='mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem' \
   --from-literal=STORAGE_SECRET="$(openssl rand -base64 32)" \
   --from-literal=LICENSE_KEY='tsl_…'
 #    → secret/tasksense-secrets created
 
 # 3. Your CA, mounted at /certs and trusted process-wide
-kubectl -n tasksense create configmap tasksense-ca --from-file=bank-ca.pem
+kubectl -n tasksense create configmap tasksense-ca --from-file=corp-ca.pem
 
 # 4. A minimal values file
 cat > my-values.yaml <<'EOF'
-appUrl: https://tasksense.bank.internal
-firstAdminEmail: tasksense-admin@bank.internal
+appUrl: https://tasksense.corp.internal
+firstAdminEmail: tasksense-admin@corp.internal
 existingSecret: tasksense-secrets
 certs:
   existingConfigMap: tasksense-ca
-  caBundle: bank-ca.pem            # → NODE_EXTRA_CA_CERTS=/certs/bank-ca.pem
+  caBundle: corp-ca.pem            # → NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem
 config:
   sessionTtlHours: 12              # the chart's defaults already; stated for the reviewer
   swaggerEnabled: false
@@ -163,7 +163,7 @@ database, a replica set, TLS with your CA:
 ```dotenv
 # compose/.env — drop the profile, set the URI
 COMPOSE_PROFILES=
-MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.bank.internal:27017,mongo-2.bank.internal:27017,mongo-3.bank.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/bank-ca.pem
+MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 MONGODB_TIMEOUT_MS=15000
 ```
 
@@ -177,7 +177,7 @@ up either kind. Full guide: [docs/16-EXTERNAL-DATABASES.md](docs/16-EXTERNAL-DAT
 | Your servers can… | Use | |
 | --- | --- | --- |
 | reach `ghcr.io` during installs | `docker login` / `helm registry login` with the token | [13 › Pulling directly](docs/13-REGISTRY-ACCESS.md#pulling-directly) |
-| reach only your Harbor / Nexus / Artifactory | `./scripts/load-images.sh --registry harbor.bank.internal/tasksense --version 1.1.0` | [13 › Mirroring](docs/13-REGISTRY-ACCESS.md#mirroring-into-your-own-registry) |
+| reach only your Harbor / Nexus / Artifactory | `./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.0` | [13 › Mirroring](docs/13-REGISTRY-ACCESS.md#mirroring-into-your-own-registry) |
 | reach nothing | the offline bundle: `oras pull ghcr.io/yurdtech/tasksense-offline:1.1.0`, `verify-signature.sh`, carry in, `install.sh --offline` | [13 › Air-gapped](docs/13-REGISTRY-ACCESS.md#no-route-out-air-gapped) |
 
 The registry token is read-only and per customer (username always `yurdtech`).
@@ -234,8 +234,8 @@ size for the window. Sizing: [docs/11-SIZING.md](docs/11-SIZING.md).
 | [14-LICENSING](docs/14-LICENSING.md) | asking what the licence key does |
 | [15-SCALING-AND-HA](docs/15-SCALING-AND-HA.md) | asking "can we run two?" — and what HA means here |
 | [16-EXTERNAL-DATABASES](docs/16-EXTERNAL-DATABASES.md) | connecting your own MongoDB |
-| [17-ENVIRONMENT](docs/17-ENVIRONMENT.md) | looking up any setting, with the bank recommendation |
-| [18-PRE-INSTALL-CHECKLIST](docs/18-PRE-INSTALL-CHECKLIST.md) | **preparing a bank install**: firewall, certificates, accounts, who does what |
+| [17-ENVIRONMENT](docs/17-ENVIRONMENT.md) | looking up any setting, with the recommended value |
+| [18-PRE-INSTALL-CHECKLIST](docs/18-PRE-INSTALL-CHECKLIST.md) | **preparing an on-premise install**: firewall, certificates, accounts, who does what |
 
 ---
 

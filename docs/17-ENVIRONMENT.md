@@ -64,6 +64,8 @@ blank, the default is the recommendation.
 | `CORS_ALLOWED_ORIGINS` | — | must be set; `.env.example` uses `APP_URL` | Browser origins allowed to call the API, comma-separated. UI and API share one origin, so this is `APP_URL`. | Same as `APP_URL` |
 | `BIND_ADDRESS` *(Compose)* | — | `127.0.0.1` | Host interface the application port is published on. Loopback means only a proxy on this host reaches it. | Keep `127.0.0.1`; if the proxy is another host, that host's interface plus a firewall rule |
 | `HTTP_PORT` *(Compose)* | — | `3000` | Host port. The container always listens on 3000. | |
+| `NODE_USE_ENV_PROXY` | with an outbound proxy | — | `1` makes the application's own HTTPS calls (the Jira Cloud sync, the Jira API import, outgoing webhooks, a cloud model) go through `HTTPS_PROXY`. Without it they try to connect directly. Compose: `compose/.env`; Helm: `extraEnv`. | `1` when the host reaches the internet only through a proxy |
+| `HTTPS_PROXY` / `NO_PROXY` | with an outbound proxy | — | The corporate proxy, e.g. `http://proxy.corp.internal:3128`, and what bypasses it — keep `localhost,127.0.0.1,mongo` and your internal hosts in `NO_PROXY`. Read only when `NODE_USE_ENV_PROXY=1`. | As your network team gives them |
 
 ## 3. Secrets and licence
 
@@ -193,7 +195,7 @@ thousands of issues). Change them only on our advice.
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `SWAGGER_ENABLED` | — | **on** in the application; `.env.example` and the chart: `false` | The interactive API browser at `/api/v1/swagger`. The application serves it unless this is `false` — it publishes the whole API surface without sign-in. Removing the line from `.env` turns it back **on**. | **`false`** |
-| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration, GitLab, the model gateway |
+| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration **and for the two-way Jira sync** (e.g. `your-company.atlassian.net` — listing it also spares the DNS check a proxied network cannot answer), GitLab, the model gateway |
 | `RATE_LIMIT_STORE` | — | `memory` | Where rate-limit counters live. `memory` fits the single-process design; `mongo` survives restarts at one database round trip per throttled request. | `memory` |
 
 ## 13. AI features

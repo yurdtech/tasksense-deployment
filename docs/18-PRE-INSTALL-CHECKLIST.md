@@ -48,6 +48,7 @@ run time**.
 | I5 | Monitoring (Prometheus, blackbox) | Reverse proxy, `/api/v1/metrics`, `/api/v1/health/*` | 443/tcp | Metrics and probes | Recommended |
 | I6 | Reverse proxy host | TaskSense host | 3000/tcp | Only when the proxy is **not** on the TaskSense host (Compose: `BIND_ADDRESS`) | If applicable |
 | I7 | Administrators' jump host | TaskSense host | 22/tcp | Operations | Compose |
+| I8 | Jira Cloud (Atlassian's webhook senders) | Reverse proxy, path `/api/v1/integrations/jira-sync/webhook/*` only | 443/tcp | Jira two-way sync: changes made in Jira arrive in seconds. Without it the sync still works, delayed by its sweep interval | If Jira sync |
 
 MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
 
@@ -69,8 +70,9 @@ MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
 | O12 | Log collector / SIEM | as applicable | Shipping container logs | Recommended |
 | O13 | Internal registry (Harbor / Nexus) | 443/tcp | Image pulls | If mirrored |
 | O14 | `ghcr.io`, `pkg-containers.githubusercontent.com`, `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | 443/tcp | Image pulls — **install and upgrade windows only**; none with a mirror or the offline bundle | If pulling directly |
+| O15 | Your Jira Cloud site (`<site>.atlassian.net`), directly or through the outbound proxy | 443/tcp | Jira two-way sync — reading and writing issues and comments, registering the webhook. Add the host to `EGRESS_ALLOWLIST`; behind a proxy also `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY` ([17](17-ENVIRONMENT.md#2-address-and-network)) | If Jira sync |
 
-On Kubernetes, express O1–O13 as the chart's NetworkPolicy egress CIDRs
+On Kubernetes, express O1–O13 and O15 (the outbound proxy's address, or Atlassian's published ranges) as the chart's NetworkPolicy egress CIDRs
 (default-deny otherwise) and I1/I5 as the ingress-controller and monitoring
 namespaces.
 
@@ -114,7 +116,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at your reverse proxy
 | P6 | Do **not** add CSP, HSTS, X-Frame-Options | The application sets them; two sets contradict |
 | P7 | Access log **without query strings** (log the path only) | Defence in depth for the stream/video tickets |
 | P8 | WAF: do not inspect/buffer P2 and P3 bodies; expect JSON with Markdown and HTML fragments in task descriptions (common false positives) | |
-| P9 | Optional: limit `/api-docs` and `/docs` to an internal segment; I3/I4 paths to the GitLab / mail-relay segment | Public-by-design endpoints |
+| P9 | Optional: limit `/api-docs` and `/docs` to an internal segment; I3/I4 paths to the GitLab / mail-relay segment; the I8 path to Atlassian's published webhook ranges | Public-by-design endpoints |
 
 - [ ] Proxy configuration prepared and reviewed
 - [ ] WAF exceptions for P2/P3 approved
@@ -284,6 +286,7 @@ To agree in the kick-off meeting. The right-hand column is for your values.
 | Attachments | Local volume (default) · S3 / MinIO · WebDAV; size limit; extension allow-list; an internal store's host in `EGRESS_ALLOWLIST` | Volume for the pilot; object storage for production | ☐ volume ☐ store: ______ · allowlisted ☐ · limit __ MB |
 | Jira migration | XML site backup (tested with a 13 GB / 574k-issue site backup), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
 | Integrations | GitLab webhook, inbound mail, outgoing webhooks (SIEM), `EGRESS_ALLOWLIST` | Only what is used; allowlist minimal | GitLab: ______ · mail: ______ · allowlist: ______ |
+| Jira in parallel | Two-way sync with a Jira Cloud site: a sync account and API token, the projects to bind (same keys), security-level mapping, whether Jira may call the webhook path (I8) | A dedicated Jira account; webhook on; sweep 60 s | site: ______ · account: ______ · projects: ______ · webhook ☐ |
 | Monitoring | `METRICS_ENABLED` + `METRICS_TOKEN`; Prometheus; alert rules (`examples/prometheus-alerts.yaml`) | On | scrape: ______ · alert channel: ______ |
 | Logging / SIEM | Container logs → SIEM; audit export or webhook; retention | JSON logs; audit via webhook or periodic export | SIEM: ______ · retention __ days · audit export: ______ |
 | Backup | Nightly `backup.sh` / CronJob, encryption, off-host, quarterly restore test | RPO 24 h / RTO 1 h | schedule: ______ · RPO __ h · RTO __ h · owner: ______ |

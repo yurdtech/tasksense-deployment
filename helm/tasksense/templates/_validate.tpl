@@ -15,6 +15,10 @@ reports the real problem rather than a nil-pointer error further down.
 {{- fail "these values come from chart 1.0 (no config / worker / certs / global block). That is what `helm upgrade --reuse-values` does across chart versions: it drops every default the new chart adds. Upgrade with your own file instead: `helm upgrade ... -f my-values.yaml` (or --reset-then-reuse-values on Helm >= 3.14). docs/02-INSTALL-KUBERNETES.md, \"Upgrade\"." -}}
 {{- end -}}
 
+{{- if not (hasKey $v "jiraSync") -}}
+{{- fail "these values come from an older chart (no jiraSync block). That is what `helm upgrade --reuse-values` does across chart versions: it drops every default the new chart adds. Upgrade with your own file instead: `helm upgrade ... -f my-values.yaml` (or --reset-then-reuse-values on Helm >= 3.14). docs/02-INSTALL-KUBERNETES.md, \"Upgrade\"." -}}
+{{- end -}}
+
 {{- /* ── single active API ─────────────────────────────────────────────── */ -}}
 {{- $as := index $v "autoscaling" | default (dict) -}}
 {{- if and (kindIs "map" $as) (eq (toString (index $as "enabled")) "true") -}}
@@ -54,7 +58,9 @@ reports the real problem rather than a nil-pointer error further down.
 {{- /* ── extraEnv must not shadow what the chart owns ──────────────────── */ -}}
 {{- $owned := dict
       "AGENT_EXECUTOR" "always off, not configurable"
-      "WORKER_ROLE" "set from worker.enabled"
+      "WORKER_ROLE" "set from worker.enabled / jiraSync.enabled"
+      "JIRA_SYNC_RUNNER" "set from jiraSync.enabled"
+      "SYNC_WORKER_PORT" "use jiraSync.port"
       "MIGRATE_ON_BOOT" "set from migrations.enabled"
       "TMPDIR" "fixed to /app/api/data/tmp"
       "NODE_OPTIONS" "use heapMb / worker.heapMb / migrations.heapMb"
@@ -114,6 +120,19 @@ reports the real problem rather than a nil-pointer error further down.
 {{- end -}}
 {{- end -}}
 
+{{- /* ── Jira sync worker ──────────────────────────────────────────────── */ -}}
+{{- if $v.jiraSync.enabled -}}
+{{- if not $v.persistence.enabled -}}
+{{- fail "jiraSync.enabled=true requires persistence.enabled=true: the sync worker writes Jira attachments and user pictures to the same data volume the API serves them from" -}}
+{{- end -}}
+{{- if eq (toString $v.persistence.accessMode) "ReadWriteOncePod" -}}
+{{- fail "jiraSync.enabled=true cannot run with persistence.accessMode=ReadWriteOncePod: only one pod may mount the data volume, and the sync worker writes attachments to it. Use ReadWriteOnce (the worker is then scheduled onto the API's node) or ReadWriteMany." -}}
+{{- end -}}
+{{- if or (lt (int $v.jiraSync.port) 1024) (gt (int $v.jiraSync.port) 65535) (eq (int $v.jiraSync.port) 3000) -}}
+{{- fail (printf "jiraSync.port must be between 1024 and 65535 and not 3000, the API's port (got %v)" $v.jiraSync.port) -}}
+{{- end -}}
+{{- end -}}
+
 {{- /* ── enumerations the application would reject at boot ─────────────── */ -}}
 {{- if not (has (toString $v.persistence.accessMode) (list "ReadWriteOnce" "ReadWriteMany" "ReadWriteOncePod")) -}}
 {{- fail (printf "persistence.accessMode must be ReadWriteOnce, ReadWriteMany or ReadWriteOncePod (got %s)" (toString $v.persistence.accessMode)) -}}
@@ -144,7 +163,7 @@ reports the real problem rather than a nil-pointer error further down.
 {{- end -}}
 
 {{- /* ── heap must fit inside the memory limit ─────────────────────────── */ -}}
-{{- range $w := list (dict "name" "heapMb" "heap" $v.heapMb "res" $v.resources "limitName" "resources.limits.memory") (dict "name" "worker.heapMb" "heap" $v.worker.heapMb "res" $v.worker.resources "limitName" "worker.resources.limits.memory") (dict "name" "migrations.heapMb" "heap" $v.migrations.heapMb "res" $v.migrations.resources "limitName" "migrations.resources.limits.memory") -}}
+{{- range $w := list (dict "name" "heapMb" "heap" $v.heapMb "res" $v.resources "limitName" "resources.limits.memory") (dict "name" "worker.heapMb" "heap" $v.worker.heapMb "res" $v.worker.resources "limitName" "worker.resources.limits.memory") (dict "name" "migrations.heapMb" "heap" $v.migrations.heapMb "res" $v.migrations.resources "limitName" "migrations.resources.limits.memory") (dict "name" "jiraSync.heapMb" "heap" $v.jiraSync.heapMb "res" $v.jiraSync.resources "limitName" "jiraSync.resources.limits.memory") -}}
 {{- $limit := dig "limits" "memory" "" ($w.res | default dict) -}}
 {{- if and $w.heap $limit -}}
 {{- $heapBytes := mul (int64 $w.heap) 1048576 -}}

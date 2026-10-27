@@ -1,0 +1,18 @@
+# CI: the Jira sync worker on a ReadWriteOnce data volume — the worker is
+# scheduled onto the API's node — with metrics scraped and the network policy on.
+appUrl: https://tasksense.corp.internal
+mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin
+storageSecret: ci-storage-secret-0123456789abcdef0123456789
+firstAdminEmail: admin@corp.internal
+jiraSync:
+  enabled: true
+metrics:
+  enabled: true
+  token: ci-metrics-token-0123456789
+  serviceMonitor:
+    enabled: true
+networkPolicy:
+  enabled: true
+config:
+  egressAllowlist:
+    - your-company.atlassian.net

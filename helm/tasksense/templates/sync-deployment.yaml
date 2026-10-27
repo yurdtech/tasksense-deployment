@@ -1,0 +1,136 @@
+{{- include "tasksense.validate" . -}}
+{{- if .Values.jiraSync.enabled }}
+{{- $rwo := ne (toString .Values.persistence.accessMode) "ReadWriteMany" }}
+# The Jira sync worker: the same image, `node dist/sync-worker.js`,
+# WORKER_ROLE=sync. Full Jira migrations and the two-way sync's queue drain
+# run here and nowhere else; the API runs with JIRA_SYNC_RUNNER=external. It
+# serves nothing user-facing — its one port (jiraSync.port) answers /live,
+# /ready and /metrics. A crash exits the process and Kubernetes restarts it;
+# every run's lease expires and the next process resumes at its checkpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "sync") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "sync") | nindent 4 }}
+spec:
+  # Exactly one: runs and queue items are lease-based, a second would only wait.
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "sync") | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "sync") | nindent 8 }}
+        {{- with .Values.jiraSync.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include "tasksense.configChecksum" . }}
+        {{- with .Values.jiraSync.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "tasksense.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ int .Values.jiraSync.terminationGracePeriodSeconds }}
+      {{- with .Values.jiraSync.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" false) | nindent 6 }}
+      {{- include "tasksense.appPodSecurityContext" . | nindent 6 }}
+      initContainers:
+        {{- include "tasksense.prepareDataInitContainer" . | nindent 8 }}
+      containers:
+        - name: sync
+          image: {{ include "tasksense.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # `args`, not `command`: keeps the image's tini as PID 1.
+          args: ["node", "dist/sync-worker.js"]
+          {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: metrics
+              containerPort: {{ int .Values.jiraSync.port }}
+              protocol: TCP
+          env: {{- include "tasksense.processEnv" (dict "root" $ "role" "sync" "heapMb" .Values.jiraSync.heapMb) | nindent 12 }}
+          {{- include "tasksense.envFrom" (dict "root" $ "hook" false) | nindent 10 }}
+          resources: {{- toYaml .Values.jiraSync.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            # The SAME claim as the API: attachments and user pictures the
+            # worker lands are served by the API from it.
+            - name: data
+              mountPath: /app/api/data
+            - name: tmp
+              mountPath: /tmp
+            {{- include "tasksense.certsMount" . | nindent 12 }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "tasksense.dataVolume" . | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- include "tasksense.certsVolume" (dict "root" $ "hook" false) | nindent 8 }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.jiraSync.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jiraSync.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or $rwo .Values.jiraSync.affinity }}
+      affinity:
+        {{- if $rwo }}
+        # ReadWriteOnce: the volume can be mounted by several pods of ONE node,
+        # so the worker goes where the API pod is.
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "tasksense.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: api
+              topologyKey: kubernetes.io/hostname
+        {{- end }}
+        {{- with .Values.jiraSync.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+---
+# Cluster-internal: probes go to the pod directly; this is for Prometheus.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "sync") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "sync") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ int .Values.jiraSync.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "sync") | nindent 4 }}
+{{- end }}

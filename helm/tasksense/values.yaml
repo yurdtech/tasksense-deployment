@@ -162,6 +162,45 @@ worker:
   podAnnotations: {}
   podLabels: {}
 
+jiraSync:
+  # The Jira sync worker: a separate Deployment running `node dist/sync-worker.js`
+  # with WORKER_ROLE=sync, from the same image. Full Jira migrations (projects,
+  # boards, issues with their whole history, comments, worklogs, attachments,
+  # users) and the two-way sync's queue run there, so reading a whole Jira site
+  # never shares a heap with the user-facing API. When on, the API runs with
+  # JIRA_SYNC_RUNNER=external and only takes webhooks and queues work. Exactly
+  # one; runs and queue items are lease-based and resume at their checkpoint
+  # after a restart.
+  #
+  # Storage: the worker writes attachments and avatars. With the local storage
+  # provider it mounts the API's data claim — with ReadWriteMany anywhere, with
+  # ReadWriteOnce it is scheduled onto the API's node (a ReadWriteOnce volume
+  # may be mounted by several pods of ONE node). ReadWriteOncePod is refused.
+  #
+  # Egress: add the Jira site (and, for Jira Cloud user pictures, the avatar
+  # host) to config.egressAllowlist — the worker is the process that calls them.
+  enabled: false
+  heapMb: 2048
+  # The worker's health and metrics port (/live, /ready, /metrics). Cluster-
+  # internal only: probes, and Prometheus when metrics are on.
+  port: 3100
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      # A batch process: throttling it protects the API on the same node.
+      cpu: "1"
+      memory: 3Gi
+  terminationGracePeriodSeconds: 45
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  # Merged after the chart's own co-location rule (ReadWriteOnce only).
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
 # ── Application settings → ConfigMap (non-secret) / Secret (secret) ──────────
 #
 # Rendered explicitly, so `kubectl get configmap <release>-env -o yaml` is an

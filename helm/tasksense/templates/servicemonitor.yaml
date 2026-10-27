@@ -23,4 +23,29 @@ spec:
         credentials:
           name: {{ include "tasksense.secretName" . }}
           key: METRICS_TOKEN
+{{- if .Values.jiraSync.enabled }}
+---
+# The Jira sync worker's own /metrics (queue depth, its heap and event loop).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "sync") }}
+  labels:
+    {{- include "tasksense.labels" (dict "root" $ "component" "sync") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}{{- toYaml . | nindent 4 }}{{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tasksense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sync
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "tasksense.secretName" . }}
+          key: METRICS_TOKEN
+{{- end }}
 {{- end }}

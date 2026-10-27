@@ -463,9 +463,16 @@ Call with (dict "root" $ "role" "api|worker|migrate" "heapMb" <n>).
 {{- if eq .role "api" }}
 - name: WORKER_ROLE
   value: {{ ternary "api" "all" (eq (toString $root.Values.worker.enabled) "true") | quote }}
+- name: JIRA_SYNC_RUNNER
+  value: {{ ternary "external" "inline" (eq (toString $root.Values.jiraSync.enabled) "true") | quote }}
 {{- else if eq .role "worker" }}
 - name: WORKER_ROLE
   value: worker
+{{- else if eq .role "sync" }}
+- name: WORKER_ROLE
+  value: sync
+- name: SYNC_WORKER_PORT
+  value: {{ int $root.Values.jiraSync.port | quote }}
 {{- end }}
 {{- with $root.Values.certs.caBundle }}
 - name: NODE_EXTRA_CA_CERTS

@@ -102,6 +102,61 @@ itself.
 
 ---
 
+## The Jira sync worker
+
+The Jira sync over the API does two kinds of work in the background:
+
+- **Full migrations.** It reads a whole Jira site: every issue with its
+  history, comments, worklogs, attachments and users.
+- **The two-way sync's queue.** It applies Jira's changes to TaskSense and
+  TaskSense's changes to Jira.
+
+The sync worker is a separate process from the **same image**
+(`node dist/sync-worker.js`) that does this work and nothing else. A migration
+reading hundreds of thousands of issues therefore never shares a heap or an
+event loop with the people using the product.
+
+| | API (`JIRA_SYNC_RUNNER=external`) | Sync worker (`WORKER_ROLE=sync`) |
+| --- | --- | --- |
+| Serves users, HTTP, the live feed | yes | no |
+| Jira webhooks, creating an issue in Jira while a user waits | yes, and it queues the rest | no |
+| Full migrations, the two-way sync's queue and sweeps | no | yes |
+| Port | 3000 | 3100: `/live`, `/ready`, `/metrics` only, cluster-internal |
+| Default memory | 2 GB, heap 1536 MB | 3 GB, heap 2048 MB |
+
+How it behaves:
+
+- **Resuming.** Every migration run and queue item is held under a **lease**
+  and checkpointed. If the worker dies, the next sync worker process adopts the
+  work at its last checkpoint, and nothing is landed twice.
+- **Live updates.** The worker's writes reach open browsers within a second.
+  It appends a small row to a capped MongoDB collection, which the API reads
+  with a tailable cursor. This works on a standalone MongoDB; no replica set
+  and no Redis are needed.
+- **Storage.** It writes attachments and user pictures. With the local storage
+  provider it mounts the API's data volume:
+  - with `ReadWriteMany`, it can run on any node;
+  - with `ReadWriteOnce`, the chart schedules it onto the API's node;
+  - `ReadWriteOncePod` is refused.
+- **Egress.** It is the process that calls Jira. Add the Jira site, and for
+  Jira Cloud user pictures the avatar host, to `EGRESS_ALLOWLIST`.
+- **Zero or one.** A second worker would only wait on the leases.
+
+Turning it on:
+
+| | Compose (`compose/.env`) | Helm |
+| --- | --- | --- |
+| Enable | add `jira-sync` to `COMPOSE_PROFILES` | `jiraSync.enabled: true` |
+| API side | `JIRA_SYNC_RUNNER=external` (`preflight.sh` enforces it) | set automatically |
+| Memory | `SYNC_MEMORY_LIMIT`, `SYNC_HEAP_MB` | `jiraSync.resources`, `jiraSync.heapMb` |
+| Metrics | `/metrics` on 3100 inside the compose network | a `ServiceMonitor` when `metrics.serviceMonitor.enabled` |
+
+Without the worker (`JIRA_SYNC_RUNNER=inline`, the default), the API runs the
+Jira sync itself. That suits a small site. For a large migration, turn the
+worker on.
+
+---
+
 ## High availability
 
 ### What fails, and what happens

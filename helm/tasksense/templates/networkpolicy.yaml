@@ -81,6 +81,11 @@ spec:
       ports:
         - port: 3000
           protocol: TCP
+        {{- if .Values.jiraSync.enabled }}
+        # The Jira sync worker's /metrics.
+        - port: {{ int .Values.jiraSync.port }}
+          protocol: TCP
+        {{- end }}
     {{- end }}
 
   egress:

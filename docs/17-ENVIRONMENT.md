@@ -113,7 +113,10 @@ The only optional second process is the import worker.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it |
+| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it |
+| `JIRA_SYNC_RUNNER` | — | `inline` | Where the Jira sync's background work runs: full migrations, and the two-way sync's queue and sweeps. `inline`: in the API process. `external`: in the separate sync worker; the API then only takes webhooks and queues the work. | **`external`** whenever the `jira-sync` profile is on (`preflight.sh` enforces it); Helm sets it from `jiraSync.enabled` |
+| `SYNC_WORKER_PORT` | — | `3100` | The sync worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `jiraSync.port` |
+| `SYNC_HEAP_MB` / `SYNC_CPU_LIMIT` / `SYNC_MEMORY_LIMIT` *(Compose)* | — | `2048` / `1` / `3g` | Heap, CPU and memory of the `sync` container. | |
 | `APP_HEAP_MB` *(Compose)* | — | `1536` | Node.js heap of the API (`--max-old-space-size`). Keep it at about 75 % of `APP_MEMORY_LIMIT`. | |
 | `APP_CPU_LIMIT` *(Compose)* | — | `2` | CPU ceiling of the API container. | |
 | `APP_MEMORY_LIMIT` *(Compose)* | — | `2g` | Memory ceiling of the API container. | |

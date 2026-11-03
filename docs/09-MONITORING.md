@@ -66,13 +66,41 @@ Expected: the target is `UP` on Prometheus's *Targets* page within a minute.
 Only the **API** exports metrics. The import worker has no HTTP listener; watch
 it through its container's restarts and its log.
 
+**Several API processes:** every process exports its own counters, so each one
+must be scraped on its own — a scrape through a load balancer reaches a
+different process each time, and `rate()` over counters from interleaved
+processes is meaningless.
+
+- **Kubernetes:** the ServiceMonitor already targets every API pod behind the
+  Service; nothing to change.
+- **Compose, `replicas` profile:** the replicas publish no port. Run Prometheus
+  (or an agent that forwards to it) attached to the stack's network
+  (`tasksense_default` — `docker network ls`), and let it find the replicas
+  through Docker's DNS:
+
+  ```yaml
+  scrape_configs:
+    - job_name: tasksense
+      metrics_path: /api/v1/metrics
+      authorization:
+        type: Bearer
+        credentials_file: /etc/prometheus/secrets/tasksense-metrics-token
+      dns_sd_configs:
+        - names: [app]          # the compose service: one A record per replica
+          type: A
+          port: 3000
+  ```
+
+  Scraping through the reverse proxy still works for the gauges and the
+  health probes; it is the counters and histograms that need every process.
+
 ### What is exposed
 
 | Metric | Type | |
 | --- | --- | --- |
 | `tasksense_http_requests_total{method,route,status}` | counter | `route` is the pattern (`/tasks/:id`), never the concrete URL — labelling by URL would mint a series per task |
 | `tasksense_http_request_duration_seconds{method,route}` | histogram | Buckets 5 ms – 10 s. The two live-update streams count their whole connection time — exclude them from latency queries |
-| `tasksense_event_loop_lag_p50_seconds`, `…_p99_seconds`, `…_max_seconds` | gauge | Event-loop delay since the previous scrape. High p99 means the one API process is blocked and every user waits |
+| `tasksense_event_loop_lag_p50_seconds`, `…_p99_seconds`, `…_max_seconds` | gauge | Event-loop delay since the previous scrape. High p99 means that API process is blocked and every user it serves waits — with one process, everybody |
 | `tasksense_event_loop_lag_ms` | gauge | Deprecated alias of the p99, in ms |
 | `tasksense_process_rss_bytes`, `tasksense_process_heap_used_bytes` | gauge | Memory of the API process — compare with the container limit and `APP_HEAP_MB` |
 | `tasksense_mongo_up` | gauge | 1 when MongoDB answered the scrape's ping |
@@ -91,6 +119,12 @@ it through its container's restarts and its log.
 | `tasksense_seats_over_limit` | gauge | Seats beyond the licence; **nothing is blocked when it rises** |
 | `tasksense_license_valid`, `…_expired`, `…_invalid`, `…_perpetual` | gauge | The licence state, one 0/1 gauge each |
 | `tasksense_license_expires_in_days` | gauge | −1 when there is no date to count to; the gauges above say why |
+| `tasksense_singleton_job_runs_total{job}` | counter | Passes of an installation-wide job (scheduler or sweep) **this** process ran (with Redis, holding the job's lease in MongoDB). Summed over processes, each pass is counted once. Every topology |
+| `tasksense_singleton_job_leases_lost_total{job}` | counter | Leases this process lost while still running the job — another process may have started the same pass. Should stay 0; rising means a process stalled (event-loop lag, a long GC) or MongoDB was unreachable for longer than the lease. With Redis (no leases without it) |
+| `tasksense_redis_up` | gauge | 1 when Redis answered its last check. **Only where Redis is configured** — absent otherwise, so an installation without Redis never shows 0 |
+| `tasksense_cluster_instances` | gauge | API processes that sent a heartbeat in the last 20 s, as this process sees them; 0 while Redis is down. Only with Redis |
+| `tasksense_cluster_bus_messages_total{direction}` | counter | Messages between the API processes — invalidations and live-update pings: `published`, `received` from the others, `dropped` (not sent because Redis was unreachable). Only with Redis |
+| `tasksense_cluster_bus_lag_seconds` | histogram | Delay from another process publishing a message to this one hearing it. Only with Redis |
 
 Not exported by TaskSense, and used by the alert file: index and schema state
 (from the health endpoint, through blackbox_exporter — below) and backup age
@@ -103,15 +137,21 @@ Not exported by TaskSense, and used by the alert file: index and schema state
 | Path | Answers | Use for |
 | --- | --- | --- |
 | `/api/v1/health/live` | The process is running. Never touches MongoDB | Kubernetes `livenessProbe` |
-| `/api/v1/health/ready` | It can serve: MongoDB reachable (503 if not). Also reports `indexes` and `schema` | `readinessProbe`, uptime checks, load balancers |
+| `/api/v1/health/ready` | It can serve: MongoDB reachable — and Redis, where it is configured (503 if not). Also reports `indexes` and `schema` | `readinessProbe`, uptime checks, load balancers |
 | `/api/v1/health` | Same as `ready` | Compose healthcheck, scripts |
 | `/api/v1/version` | Version, commit, build date | Confirming what is deployed |
+| `/api/v1/cluster` | How the API processes share state: Redis, the live instances, which process holds each scheduled job. On-premise only; needs a signed-in user with `manage_access`. It is what the **Admin → Cluster** card shows | An administrator's look at a multi-process installation |
 
 A healthy answer:
 
 ```json
 {"status":"ok","service":"tasksense-api","timestamp":"…","database":"up","indexes":"ready","schema":{"state":"current"}}
 ```
+
+With Redis configured the answer carries `"redis":"up"`; while Redis is
+unreachable it is a **503**,
+`{"status":"error","service":"tasksense-api","database":"up","redis":"down"}`,
+in every process — there is no fallback to per-process memory.
 
 | Field | Values | Meaning |
 | --- | --- | --- |
@@ -203,8 +243,9 @@ that matter most:
 
 | Alert | Fires when | Works on |
 | --- | --- | --- |
-| **TaskSenseDown** | The metrics scrape fails for 2 min — the whole service, since the API is one process | both |
+| **TaskSenseDown** | The metrics scrape fails for 2 min — with one API process the whole service; with several, the process named by `instance` | both |
 | **TaskSenseMongoDown** | `tasksense_mongo_up == 0` | both |
+| **TaskSenseRedisDown** | `tasksense_redis_up == 0` for 2 min — every API process reports not ready until Redis is back | both, with Redis |
 | **TaskSenseHealthProbeFailing** | Readiness fails, or `indexes` is not `ready`, for 5 min | both (blackbox) |
 | **TaskSenseSchemaAhead** | Running on a database a newer release migrated | both (blackbox) |
 | **TaskSenseErrorRate** | More than 5 % of requests are 5xx | both |
@@ -230,7 +271,7 @@ Validate the rules before loading them:
 promtool check rules tasksense-rules.yaml
 ```
 
-Expected: `SUCCESS: 18 rules found`.
+Expected: `SUCCESS: 19 rules found`.
 
 ---
 
@@ -293,7 +334,8 @@ log (`POST /api/v1/auth/login` → 401) and your proxy's access log —
 
 ## What to watch, in order
 
-1. **`tasksense_mongo_up`** — nothing works without it.
+1. **`tasksense_mongo_up`** — nothing works without it. With several API
+   processes, **`tasksense_redis_up`** too — nor without that.
 2. **Backup age** — the failure that is silent until the day you need it.
 3. **`tasksense_license_expires_in_days`** — silent until it is not.
 4. **Event-loop lag p99 and p95 request duration** — the first sign of an
@@ -303,3 +345,6 @@ log (`POST /api/v1/auth/login` → 401) and your proxy's access log —
    import needs twice the backup's size free.
 6. **Restarts** — steady restarts are usually memory; the log line before each
    one says so.
+7. With several API processes: **`tasksense_cluster_instances`** equal to the
+   number you run, `tasksense_cluster_bus_messages_total{direction="dropped"}`
+   flat, and `tasksense_singleton_job_leases_lost_total` at 0.

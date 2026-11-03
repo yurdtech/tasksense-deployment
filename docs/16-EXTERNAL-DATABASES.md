@@ -1,17 +1,20 @@
-# Using your own MongoDB
+# Using your own MongoDB and Redis
 
 With Docker Compose, TaskSense runs its own MongoDB by default. If your
 organisation already operates MongoDB — a replica set, with its own backups,
 monitoring, disk encryption and DBAs — point TaskSense at it instead. With
-Helm, your own MongoDB is the only option: the chart bundles none.
+Helm, your own MongoDB is the only option: the chart bundles none. Redis is
+needed only to run more than one API process — [Redis](#redis) below.
 
 **You never edit `docker-compose.yml` or the chart templates.** Everything
 below is configuration: `compose/.env`, or Helm values and the Secret. That is
 what keeps upgrades painless.
 
-MongoDB is TaskSense's **only** data store. There is no cache, queue or search
-server beside it, and no fallback: an application that cannot reach it at
-startup exits rather than serve an empty workspace that looks like data loss.
+MongoDB is TaskSense's **only** data store. There is no queue or search server
+beside it, and no fallback: an application that cannot reach it at startup
+exits rather than serve an empty workspace that looks like data loss. Redis,
+where it is configured, holds only short-lived state the API processes share —
+no user data.
 
 ---
 
@@ -304,3 +307,146 @@ With your own database, these become your DBAs' responsibility:
   encrypted storage or MongoDB Enterprise encryption.
 - **MongoDB upgrades**, within the 7.x line until a TaskSense release says
   otherwise.
+
+---
+
+## Redis
+
+Only for running **more than one API process**
+([15-SCALING-AND-HA](15-SCALING-AND-HA.md)). With one process, configure none:
+the API then keeps that state in its own memory, exactly as before. Redis is
+used when one connection setting is present and not at all otherwise — there
+is no switch.
+
+### What TaskSense needs from it
+
+| | |
+| --- | --- |
+| Version | **Redis 6 or newer** recommended (ACL users, native TLS). |
+| Topology | **Sentinel** recommended — a primary, replicas and three sentinels. A single Redis works and is a single point of failure for every API process. Redis Cluster is supported. |
+| Eviction | `maxmemory-policy noeviction`. Nothing TaskSense stores may be evicted; on a Redis shared with applications that need an eviction policy, use a Redis of its own. |
+| Persistence | Not needed — tickets, counters, job status and messages in flight, all short-lived. |
+| Network | TCP from every API pod and the worker to the data nodes (usually 6379) and, with Sentinel, to every sentinel (usually 26379). |
+| Size | Not measured yet; the keys are small and expire on their own. 1 GB of `maxmemory` is a generous start — watch `used_memory`. |
+
+### The connection settings
+
+Exactly **one** of these:
+
+| Setting | Form |
+| --- | --- |
+| `REDIS_URL` | `redis://[user:password@]host:6379[/db]`; `rediss://` for TLS |
+| `REDIS_SENTINELS` + `REDIS_SENTINEL_NAME` | `host:port,host:port,…` of the sentinels, and the name of the master group they watch |
+| `REDIS_CLUSTER_NODES` | `host:port,host:port,…` — seed nodes of a Redis Cluster |
+
+And, as needed:
+
+| Setting | What it does |
+| --- | --- |
+| `REDIS_USERNAME` / `REDIS_PASSWORD` | The ACL user and password for sentinels / cluster nodes; with `REDIS_URL` they override the URL's own |
+| `REDIS_SENTINEL_PASSWORD` | The sentinels' own password, when they have one apart from the data nodes' |
+| `REDIS_TLS=true` | TLS to the sentinels and cluster nodes (a URL says it with `rediss://`). The CA is `NODE_EXTRA_CA_CERTS` — the same bundle MongoDB's TLS trusts |
+| `REDIS_KEY_PREFIX` | Prepended to every key and channel; default `tasksense:`. A test installation on the same Redis needs a different one |
+
+A half-made configuration is refused at startup, by name, before anything
+listens — two connection settings at once; `REDIS_SENTINELS` without
+`REDIS_SENTINEL_NAME`; `REDIS_PASSWORD`, `REDIS_USERNAME` or `REDIS_TLS` with no
+connection; `REDIS_TLS` beside a URL; `RATE_LIMIT_STORE=redis` without Redis.
+An empty value counts as unset.
+
+### The account
+
+A user of its own, limited to TaskSense's prefix. A starting point in Redis 7
+syntax — try it on a staging Redis first; a missing permission shows as a
+`NOPERM` error in the API's log:
+
+```
+ACL SETUSER tasksense on >PASSWORD resetkeys ~tasksense:* resetchannels &tasksense:* +@read +@write +@pubsub +@scripting +@connection -@dangerous +info
+```
+
+Redis Cluster also needs `+cluster|slots` (topology discovery). Generate the
+password with `openssl rand -hex 24` — it may go inside a URL.
+
+### Point TaskSense at it
+
+**Compose** — the `replicas` profile without `bundled-redis`, in
+`compose/.env`:
+
+```dotenv
+COMPOSE_PROFILES=import-worker,replicas          # your own MongoDB and Redis
+BUNDLED_REDIS_PASSWORD=                          # empty: no bundled Redis
+
+# One Redis
+REDIS_URL=rediss://tasksense:<pw>@redis.corp.internal:6380/0
+
+# — or Sentinel —
+#REDIS_SENTINELS=redis-1.corp.internal:26379,redis-2.corp.internal:26379,redis-3.corp.internal:26379
+#REDIS_SENTINEL_NAME=tasksense
+#REDIS_USERNAME=tasksense
+#REDIS_PASSWORD=<pw>
+#REDIS_TLS=true
+
+NODE_EXTRA_CA_CERTS=/certs/corp-ca.pem           # the CA of the Redis certificates
+```
+
+`preflight.sh` checks that exactly one Redis is described: the bundled one,
+or yours.
+
+**Helm** — the URL carries a password, so it goes in a Secret:
+
+```bash
+kubectl -n tasksense create secret generic tasksense-redis \
+  --from-literal=REDIS_URL='rediss://tasksense:<pw>@redis.corp.internal:6380/0'
+```
+
+```yaml
+redis:
+  existingSecret: tasksense-redis    # REDIS_URL from its key REDIS_URL
+```
+
+Sentinel, with the password in the same kind of Secret:
+
+```yaml
+redis:
+  sentinels: [redis-1.corp.internal:26379, redis-2.corp.internal:26379, redis-3.corp.internal:26379]
+  sentinelName: tasksense
+  username: tasksense
+  tls: true
+  existingSecret: tasksense-redis
+  existingSecretKey: ""              # no REDIS_URL — the sentinels are the connection
+  existingSecretPasswordKey: REDIS_PASSWORD
+```
+
+`redis.existingSecret` may be the Secret named by `existingSecret`. With
+`existingSecret` set, the inline `redis.url`, `redis.password` and
+`redis.sentinelPassword` are refused — they would have nowhere to go; a
+sentinel password of its own is then the key `REDIS_SENTINEL_PASSWORD` in that
+Secret. Without `existingSecret`, the inline values are rendered into the
+chart's Secret. Every value: [the values reference](02-INSTALL-KUBERNETES.md#values-reference).
+
+### Verify it
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/health/ready      # Compose; on Kubernetes through the Ingress
+```
+
+Expected: HTTP 200 with `"redis":"up"`. A **503** with `"redis":"down"` means
+the API cannot reach it or authenticate; the log says which:
+
+```bash
+docker compose -f compose/docker-compose.yml -f compose/docker-compose.replicas.yml logs app | grep -i redis
+```
+
+Expected at startup: a line beginning `Redis:` that names the connection
+(password masked) and the key prefix. On Kubernetes:
+`kubectl -n tasksense logs deploy/tasksense | grep -i redis`.
+
+### Things that go wrong
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Startup refused: `REDIS_SENTINELS: cannot be combined with REDIS_URL …` | Two connection settings | Keep exactly one |
+| Startup refused: `REDIS_PASSWORD: has no effect: no Redis is configured …` | A password with nothing to send it to | Add the connection setting, or remove the password |
+| Every API process not ready, `"redis":"down"` | Address, firewall, TLS or credentials | The log names it; with TLS, the CA in `NODE_EXTRA_CA_CERTS`; on Kubernetes with NetworkPolicy, `networkPolicy.redis.*` |
+| `NOPERM` in the log | The ACL user lacks a command, key or channel | Compare with the ACL above; the key prefix must match `REDIS_KEY_PREFIX` |
+| `OOM command not allowed when used memory > 'maxmemory'` | `noeviction` at work: Redis is full | Raise `maxmemory`; find what else uses that Redis |

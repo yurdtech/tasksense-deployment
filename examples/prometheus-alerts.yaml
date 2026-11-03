@@ -10,8 +10,9 @@
 # Where each metric comes from — not all of them are TaskSense's own:
 #
 #   tasksense_*                        TaskSense, GET /api/v1/metrics (Bearer METRICS_TOKEN).
-#                                      Only the API process exports metrics; the import
-#                                      worker has no HTTP listener and exports none.
+#                                      Only the API exports metrics; the import worker has
+#                                      no HTTP listener and exports none. With several API
+#                                      processes scrape each one (docs/09-MONITORING.md).
 #   up                                 Prometheus itself, for the TaskSense scrape job.
 #   probe_success                      blackbox_exporter probing /api/v1/health/ready
 #                                      (index and schema state ride on that response;
@@ -50,9 +51,11 @@ spec:
           annotations:
             summary: TaskSense is not answering its metrics scrape
             description: >-
-              Nothing has answered for 2 minutes. The API is one process by design,
-              so this is the whole service. Check the container or pod, then
-              /api/v1/health/ready — if that fails, the cause is usually MongoDB.
+              Nothing has answered for 2 minutes. With one API process (no Redis)
+              this is the whole service; with several, it is the process named by
+              the instance label and the others keep serving. Check the container
+              or pod, then /api/v1/health/ready — if that fails, the cause is
+              usually MongoDB, or Redis where it is configured.
             runbook: docs/10-TROUBLESHOOTING.md
 
         - alert: TaskSenseMongoDown
@@ -66,6 +69,25 @@ spec:
               MongoDB is the only data store and there is no fallback, so the
               application can serve nothing. /api/v1/health/ready is already
               answering 503.
+
+        - alert: TaskSenseRedisDown
+          # Only where Redis is configured (several API processes): without it
+          # the series does not exist, so this never fires.
+          expr: tasksense_redis_up == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: TaskSense cannot reach Redis
+            description: >-
+              Redis holds what the API processes share — sign-in tickets, lockout
+              and rate-limit counters, cache invalidations, the live-update
+              fan-out. There is no fallback to memory: /api/v1/health/ready
+              answers 503 with "redis":"down" in every process, so the whole
+              service is out of rotation until Redis (or Sentinel's new master)
+              answers. Nothing is restarted. The API log names the cause:
+              address, credentials, TLS or a network policy.
+            runbook: docs/15-SCALING-AND-HA.md
 
         - alert: TaskSenseHealthProbeFailing
           # blackbox_exporter, module tasksense_ready (docs/09-MONITORING.md).
@@ -138,8 +160,8 @@ spec:
               docs/11-SIZING.md.
 
         - alert: TaskSenseEventLoopLag
-          # p99 event-loop delay since the previous scrape. While it is high the
-          # single API process answers nobody — every user feels it at once.
+          # p99 event-loop delay since the previous scrape. While it is high that
+          # API process answers nobody — with one process, every user feels it.
           # If two Prometheus servers scrape the same instance each sees about
           # half the samples; the alert still works.
           expr: tasksense_event_loop_lag_p99_seconds > 0.5

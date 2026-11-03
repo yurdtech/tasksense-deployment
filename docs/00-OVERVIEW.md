@@ -27,8 +27,9 @@ One image, a database, and your reverse proxy.
         ┌────────▼─────────┐          ┌───────────────────┐
         │  tasksense  API  │─────────▶│     MongoDB 7     │
         │  + web interface │          │ bundled container │
-        │  one process     │          │ or your replica   │
-        └───┬──────────┬───┘          │ set               │
+        │  one process, or │          │ or your replica   │
+        │  2–20 with Redis │          │ set               │
+        └───┬──────────┬───┘          │                   │
             │          │              └────────▲──────────┘
    data volume      ┌──▼───────────────┐       │
    (attachments,    │ import worker    │───────┘
@@ -39,11 +40,12 @@ One image, a database, and your reverse proxy.
 
 | Part | What it does |
 | --- | --- |
-| **API** | Serves the web interface and the REST API from one port, so there is one origin, one certificate and no CORS to configure. A **single active process** by design — see [15-SCALING-AND-HA](15-SCALING-AND-HA.md). |
+| **API** | Serves the web interface and the REST API from one port, so there is one origin, one certificate and no CORS to configure. **One process** by default; with Redis configured, 2 to 20 behind a load balancer — see [15-SCALING-AND-HA](15-SCALING-AND-HA.md). |
 | **migrate** | Brings the database schema up to the installed version, then exits. The API starts only after it succeeded. |
 | **Import worker** *(optional)* | The same image running only Jira backup landings, so a multi-gigabyte import never competes with users for memory. For the migration window. |
 | **MongoDB 7** | The only data store. Bundled as a container on Docker Compose, or yours (required on Kubernetes). |
-| **Data volume** | Attachments (unless you use object storage), upload staging, the application's own snapshots. |
+| **Data volume** | Attachments (unless you use object storage), upload staging, the application's own snapshots. Shared by every API process (`ReadWriteMany` on Kubernetes). |
+| **Redis** *(only for several API processes)* | What the processes share: sign-in tickets, lockout and rate-limit counters, cache invalidations, live-update fan-out. Short-lived, no user data. Bundled on Compose (`bundled-redis`), or yours. |
 
 **Optional, and off unless you configure them:**
 
@@ -69,11 +71,13 @@ telemetry, no licence activation, no update check. See
 | up to 50 | 2 vCPU · 4 GB · 40 GB | One VM, everything on it — the defaults |
 | up to 200 | 4 vCPU · 8 GB · 100 GB SSD | One VM; or your MongoDB elsewhere |
 | up to 1 000 | 8 vCPU · 16 GB · 250 GB SSD | Your MongoDB replica set; object storage for attachments |
+| about 1 000 – 10 000 | several API processes — *estimates, not yet measured* | Redis, your MongoDB replica set, Kubernetes for the upper end ([11-SIZING](11-SIZING.md), profiles XL and XXL) |
 | Jira migration | +2 vCPU · +6 GB · 2 × the backup's size free | For the import worker, during the window |
 | more | — | Talk to us |
 
-Growth is **vertical** — memory and CPU for one process, and a well-cached
-database. Disk is dominated by attachments. Detail: [11-SIZING](11-SIZING.md).
+Up to 1 000 users growth is **vertical** — memory and CPU for one process, and
+a well-cached database. Beyond that, more API processes, with Redis. Disk is
+dominated by attachments. Detail: [11-SIZING](11-SIZING.md).
 
 ---
 
@@ -85,10 +89,12 @@ database. Disk is dominated by attachments. Detail: [11-SIZING](11-SIZING.md).
 | **Kubernetes** (Helm) | You have a cluster and a platform team already running things on it. | [02](02-INSTALL-KUBERNETES.md) |
 | **OpenShift** | Same, on Red Hat. The image runs under `restricted-v2` unmodified. | [03](03-INSTALL-OPENSHIFT.md) |
 
-Compose is not the lesser option. TaskSense is one process either way, so a
-cluster adds no capacity — it adds automatic rescheduling and fits your existing
-operations. A single well-backed-up VM is easier to operate, to reason about and
-to restore. Choose Kubernetes because you already run Kubernetes.
+Compose is not the lesser option. Up to about 1 000 users TaskSense is one
+process either way, so a cluster adds no capacity — it adds automatic
+rescheduling and fits your existing operations. A single well-backed-up VM is
+easier to operate, to reason about and to restore. Choose Kubernetes because you
+already run Kubernetes — or because you need several API processes spread over
+several nodes; Compose runs them only on one host.
 
 ## Choosing how to get the software
 
@@ -163,7 +169,10 @@ list, with what each team prepares, is
    [07-BACKUP-DR](07-BACKUP-DR.md).
 7. **Whether you migrate from Jira** — and so need the import worker and the
    disk for it.
-8. **Whether you want the AI features.** They need a model gateway inside your
+8. **One API process or several.** Several need Redis (Sentinel recommended)
+   and shared storage, and change how upgrades and monitoring work
+   ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)).
+9. **Whether you want the AI features.** They need a model gateway inside your
    network. Everything else works without them.
 
 ---

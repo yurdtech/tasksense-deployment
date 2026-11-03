@@ -7,7 +7,7 @@ Registry (`ghcr.io`) and is **private**:
 | --- | --- | --- |
 | `ghcr.io/yurdtech/tasksense:<version>` | The application image (amd64 + arm64) | `docker pull`, or Kubernetes |
 | `ghcr.io/yurdtech/charts/tasksense:<version>` | The Helm chart, as an OCI artifact | `helm install oci://…` |
-| `ghcr.io/yurdtech/tasksense-offline:<version>` | The **offline bundle**: deployment files, the TaskSense and `mongo:7` images (linux/amd64), checksums, signature, SBOM and vulnerability report | `oras pull` |
+| `ghcr.io/yurdtech/tasksense-offline:<version>` | The **offline bundle**: deployment files, the TaskSense and `mongo:7` images and — for the Compose `replicas` profile — `redis:7-alpine` and `caddy:2.10-alpine` (all linux/amd64), checksums, signature, SBOM and vulnerability report | `oras pull` |
 
 One read-only token from us opens all three. What is public — on
 <https://github.com/yurdtech/tasksense-deployment/releases> — is the deployment
@@ -189,7 +189,7 @@ Hosts the proxy must allow, during installation and upgrades only:
 | --- | --- |
 | `ghcr.io` | Registry API, authentication |
 | `pkg-containers.githubusercontent.com` | Where the image layers are actually served |
-| `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | The bundled `mongo:7` image (Docker Hub) |
+| `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | The bundled `mongo:7` image, and with the `replicas` profile `redis:7-alpine` and `caddy:2.10-alpine` (Docker Hub) |
 
 A running installation needs none of them.
 
@@ -209,23 +209,30 @@ docker login harbor.corp.internal
 ```
 
 Expected: one line per image copied —
-`harbor.corp.internal/tasksense/tasksense:1.1.0` and
-`harbor.corp.internal/tasksense/mongo:7` — then the settings to put in `.env`
-(`--update-env` writes them for you). `--mongo-version` picks another MongoDB
-tag.
+`harbor.corp.internal/tasksense/tasksense:1.1.0`,
+`harbor.corp.internal/tasksense/mongo:7`,
+`harbor.corp.internal/tasksense/redis:7-alpine` and
+`harbor.corp.internal/tasksense/caddy:2.10-alpine` — then the settings to put
+in `.env` (`--update-env` writes them for you). `--mongo-version` picks another
+MongoDB tag; `REDIS_VERSION` and `CADDY_VERSION` in `.env` pick the other two.
 
 It uses `skopeo` when it is installed, which keeps the multi-architecture
 index; without it, it falls back to pull/tag/push, which keeps only the
 architecture of the machine running it.
 
 The MongoDB image is mirrored too, even if you use your own database: the
-backup script runs `mongodump` in a throwaway container from that image.
+backup script runs `mongodump` in a throwaway container from that image. Redis
+and Caddy are mirrored always, so turning on the `replicas` profile later
+needs no second trip to the boundary.
 
-**Compose** — in `compose/.env`, both lines:
+**Compose** — in `compose/.env`, these lines (the last two are used by the
+`replicas` profile only):
 
 ```dotenv
 TASKSENSE_IMAGE=harbor.corp.internal/tasksense/tasksense
 MONGO_IMAGE=harbor.corp.internal/tasksense/mongo
+REDIS_IMAGE=harbor.corp.internal/tasksense/redis
+CADDY_IMAGE=harbor.corp.internal/tasksense/caddy
 ```
 
 **Helm** — point the chart at the mirror:
@@ -253,7 +260,8 @@ Repeat the mirror for every upgrade, before running `upgrade.sh` or
 ### Docker Compose: the offline bundle
 
 The bundle is one signed archive: the deployment files, the TaskSense and
-`mongo:7` images for linux/amd64, a `VERSION` file, and the proof that it is
+`mongo:7` images and the `replicas` profile's `redis:7-alpine` and
+`caddy:2.10-alpine`, all for linux/amd64, a `VERSION` file, and the proof that it is
 ours. It holds the private images, so it is **not** on the public releases
 page; it is published privately next to the image and pulled with the **same
 token**, on any machine that has internet:
@@ -317,7 +325,7 @@ ${EDITOR:-vi} compose/.env              # docs/01-INSTALL-COMPOSE.md, step 4
 ./scripts/install.sh --offline
 ```
 
-Expected: `install.sh` loads both images from `images/` (`loading … done`),
+Expected: `install.sh` loads every image from `images/` (`loading … done`),
 then continues exactly as in [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#6-install).
 No registry credentials are needed on that host — nothing there contacts a
 registry. `TASKSENSE_VERSION` in the bundle's `.env.example` is already the

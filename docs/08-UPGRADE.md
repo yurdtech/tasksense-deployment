@@ -18,9 +18,12 @@ rollback really works.
   backup taken just before the upgrade. `upgrade.sh` takes that backup, records
   it, and `rollback.sh` restores it by default.
 
-Expect a short outage: the API is a single process, so the old version stops
-before the new one starts. Typically a minute or two, plus migration time on a
-large database. Tell users, and use a change window.
+Expect a short outage: every API process of the old version stops before the
+new one starts — one process, or all of them with several. Typically a minute
+or two, plus migration time on a large database. Tell users, and use a change
+window. The one exception is Kubernetes with Redis and a release marked
+**rolling-safe**: it can roll pod by pod without an outage
+([Rolling updates](#rolling-updates-kubernetes)).
 
 ---
 
@@ -73,7 +76,8 @@ What it does, in order:
    upgrade before anything has changed.
 2. **Fetches the new image** — pulls it, or loads it with `--offline` — while
    the old version is still serving.
-3. **Stops the application and the import worker**, then takes a **backup**
+3. **Stops the application and the import worker** — with the `replicas`
+   profile, every API container — then takes a **backup**
    (`backups/tasksense-pre-upgrade-<timestamp>.tar.gz`, bundled or external
    MongoDB alike). Nothing writes after it is taken, so it is exact. If the
    backup fails, the previous version is started again and nothing has changed.
@@ -123,6 +127,12 @@ for a few minutes:
 ```bash
 docker compose -f compose/docker-compose.yml logs -f app
 ```
+
+With the `replicas` profile, name both files
+(`-f compose/docker-compose.yml -f compose/docker-compose.replicas.yml`); the
+log then interleaves every replica, each line prefixed with its container.
+Compose has no rolling update: the `replicas` topology upgrades with the same
+stop–backup–migrate–start window as one process.
 
 ### Which versions you can go to
 
@@ -231,8 +241,10 @@ The chart version is the application version. What happens:
 
 1. **Pre-upgrade hook:** with backups enabled, `migrations.backupBeforeUpgrade`
    dumps the database to the backup PVC; then the migration Job runs.
-2. The Deployment is replaced with the **Recreate** strategy — the old pod
-   stops before the new one starts. A short outage, by design.
+2. The Deployment is replaced with the **Recreate** strategy (the default) —
+   every old pod stops before the first new one starts. A short outage, by
+   design. With `strategy.type: RollingUpdate` the pods are replaced one at a
+   time instead — below.
 
 Check:
 
@@ -248,7 +260,50 @@ helm test tasksense -n tasksense --logs
 > pre-upgrade dump, stop the application first:
 > `kubectl -n tasksense scale deploy/tasksense --replicas=0` (and
 > `deploy/tasksense-worker` if the worker is on) — `helm upgrade` brings them
-> back (the chart's `replicaCount: 1` is re-applied).
+> back (the chart's `replicaCount` is re-applied). With `autoscaling.enabled`
+> the Deployment has no replica count of its own: scale it back to
+> `autoscaling.minReplicas` after the upgrade, and the autoscaler takes over.
+
+### Rolling updates (Kubernetes)
+
+With Redis and a `ReadWriteMany` data volume, `strategy.type: RollingUpdate`
+replaces the API pods one at a time (`maxSurge: 1`, `maxUnavailable: 0`): the
+hook Jobs run first as above, then a new pod starts, becomes ready, and an old
+one goes, until none of the old release is left. For that time **two releases
+serve side by side** behind one round-robin Service.
+
+That is safe only for a release whose release notes mark it **rolling-safe**,
+which means both of:
+
+1. **Its migrations are backwards compatible.** The migration Job finishes
+   before the first new pod starts, so the previous release runs against the
+   migrated schema until the rollout ends — it must still read and write it
+   correctly.
+2. **Its API and the previous release's web build work with each other, both
+   ways.** A browser that loaded the previous interface calls new pods, and a
+   browser that loaded the new interface calls old ones.
+
+Rolling-safe is a statement about the release immediately before it. Upgrading
+across several releases, or to a release the notes do not mark rolling-safe,
+uses `Recreate` for that upgrade:
+
+```bash
+helm upgrade tasksense oci://ghcr.io/yurdtech/charts/tasksense \
+  --version 1.2.0 -n tasksense -f my-values.yaml --set strategy.type=Recreate
+```
+
+During a rolling update the chart's `WEB_ASSETS_SHARED_DIR` keeps the
+interface whole: each pod copies its web build's content-hashed files to
+`/app/api/data/web-assets` on the shared volume and serves them after its own,
+so a page from one release finds its scripts on a pod of the other. Each old
+pod gets its preStop sleep and drain time before it stops; open live-update
+streams reconnect to another pod. Watch it with
+`kubectl -n tasksense rollout status deploy/tasksense`.
+
+`helm rollback` with `RollingUpdate` rolls back the same way, pod by pod — the
+older release then runs on the newer schema, which is what a rolling-safe
+release promises. After a release that was not rolling-safe, roll back with
+`Recreate` and the pre-upgrade dump, as below.
 
 **Rolling back on Kubernetes:** `helm rollback tasksense -n tasksense` puts the
 previous chart and image back — **application only**, like `--app-only` above.

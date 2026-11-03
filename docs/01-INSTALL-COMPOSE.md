@@ -7,7 +7,9 @@ of it waiting for downloads and for your reverse proxy change.
 **What you end up with:** on one Linux server, the TaskSense application (API
 and web interface on one port), a one-shot `migrate` service that prepares the
 database before the application starts, and — unless you bring your own — a
-MongoDB container. Optionally, a separate import worker for a Jira migration.
+MongoDB container. Optionally, a separate import worker for a Jira migration,
+and, for a large installation on one large host, several API processes behind
+a bundled load balancer ([the `replicas` profile](#several-api-processes-the-replicas-profile)).
 
 > **Minimum version for this guide: TaskSense 1.1.0.** For a 1.0.x install,
 > upgrade first ([08-UPGRADE](08-UPGRADE.md)); everything here assumes the
@@ -40,9 +42,10 @@ rule, a certificate or a database account that was not ready.
   docker --version
   docker compose version
   ```
-  Expected: two version lines, the second `v2.20.0` or newer. Podman 4+ works
-  too, with `docker-compose` v2.20+ as its compose provider; the scripts
-  detect it.
+  Expected: two version lines, the second `v2.20.0` or newer — **`v2.24.4` or
+  newer** if you will run several API processes (the `replicas` profile).
+  Podman 4+ works too, with `docker-compose` as its compose provider; the
+  scripts detect it. podman-compose cannot run the `replicas` profile.
 - **Resources** for your size — [11-SIZING](11-SIZING.md). The smallest
   supported host is 2 vCPU, 4 GB RAM and 40 GB of disk for Docker's data root.
 - **Disk for a Jira import**, if you will import a Jira site backup: free space
@@ -339,12 +342,27 @@ Whatever the proxy, it must:
 
 | Setting | Why |
 | --- | --- |
-| Send `Host`, `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto` on **every** path | The application trusts one proxy hop for the client address (rate limits, sign-in lockout) and builds links from the scheme. |
+| Send `Host`, `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto` on **every** path, appending to `X-Forwarded-For` | The application trusts `TRUST_PROXY` proxy hops for the client address (rate limits, sign-in lockout) — see below — and builds links from the scheme. |
 | Not buffer `/api/v1/state/stream` and `/api/v1/agents/events/stream`, read timeout 24 h | Live updates are server-sent events. Buffered, the interface looks frozen. |
 | Allow 21 GB bodies, unbuffered, 4 h timeouts on the upload routes; 25 MB elsewhere | Jira site backups and attachments. The routes are listed in `examples/nginx.conf`. |
 | Keep idle upstream connections for less than 65 s | The application closes idle sockets at 65 s; the proxy must close first. |
 | Not add its own CSP / HSTS / frame headers | The application sets them; two sets contradict each other. |
 | Not log query strings | Live updates and video playback authenticate with a short-lived `?ticket=`. |
+
+How many proxies the application believes is `TRUST_PROXY` — every proxy that
+appends to `X-Forwarded-For`, counted from the application outwards:
+
+| In front of the application | `TRUST_PROXY` |
+| --- | --- |
+| This reverse proxy (one API process) | `1` — the default; nothing to set |
+| This reverse proxy, then `tasksense-lb` (the `replicas` profile) | `2` — set by the profile |
+| Another load balancer, then this reverse proxy (one API process) | `2` in `.env` |
+| Another load balancer, then this reverse proxy, then `tasksense-lb` | `3` in `.env` |
+
+Too low, and every user looks like the proxy: one rate-limit bucket for the
+whole installation, and sign-ins fail with 429 in the morning rush. Too high,
+and a client can pick its own address with a header.
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe)
 
 Install and reload (nginx):
 
@@ -478,7 +496,80 @@ shared by both processes — keep **twice the backup's size** free there.
 
 When the migration is done, remove `import-worker` from `COMPOSE_PROFILES`,
 set `WORKER_ROLE=all` (or delete the line) and `up -d` again. Sizing and the
-reasoning: [15-SCALING-AND-HA](15-SCALING-AND-HA.md).
+reasoning: [15-SCALING-AND-HA](15-SCALING-AND-HA.md). With the `replicas`
+profile the worker stays on — below.
+
+---
+
+## Several API processes: the replicas profile
+
+One API process serves up to profile L ([11-SIZING](11-SIZING.md)). Beyond
+that, on one large host, the `replicas` profile runs `APP_REPLICAS` API
+processes behind a load balancer, with Redis for the state they share. All of
+them are on this host: it adds capacity and survives one process crashing,
+not the loss of the host. Read [15-SCALING-AND-HA](15-SCALING-AND-HA.md) first.
+
+It needs:
+
+- **Docker Compose v2.24.4 or newer** — the override file uses Compose's
+  `!reset` tag. Not podman-compose. `preflight.sh` refuses both.
+- **The import worker** (`import-worker`, `WORKER_ROLE=api`): with several API
+  processes, none of them should run a multi-hour Jira landing.
+- **A Redis**: the bundled one (`bundled-redis`), or your own
+  ([16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md#redis)) — exactly one.
+- **Memory** for every replica: `APP_REPLICAS × APP_MEMORY_LIMIT`, plus the
+  worker, MongoDB, Redis (`REDIS_MEMORY_LIMIT`, 512m) and the load balancer
+  (`LB_MEMORY_LIMIT`, 512m).
+
+In `compose/.env`:
+
+```dotenv
+COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+WORKER_ROLE=api
+APP_REPLICAS=3                  # 1–20
+BUNDLED_REDIS_PASSWORD=         # openssl rand -hex 24  (hex: it goes inside a URL)
+```
+
+```bash
+./scripts/preflight.sh
+./scripts/install.sh
+```
+
+The scripts add `compose/docker-compose.replicas.yml` to every Compose command
+when `replicas` is in `COMPOSE_PROFILES`. What then runs:
+
+| Service | Container | |
+| --- | --- | --- |
+| `app` | `tasksense-app-1` … `tasksense-app-3` | No host port of their own; `WORKER_ROLE=api`, `TRUST_PROXY=2`, `REDIS_URL` pointing at the bundled Redis (or yours) |
+| `lb` | `tasksense-lb` | Caddy on `BIND_ADDRESS:HTTP_PORT` — where `tasksense-app` was. Round robin over the healthy replicas, found through Docker's DNS; checks `/api/v1/health/ready`; streams flushed immediately; appends to `X-Forwarded-For`. Plain HTTP: your reverse proxy (step 8) stays as it is |
+| `redis` | `tasksense-redis` | Password from `BUNDLED_REDIS_PASSWORD`, no persistence, no published port |
+| `worker`, `migrate`, `mongo` | as before | |
+
+Check it:
+
+```bash
+docker compose -f compose/docker-compose.yml -f compose/docker-compose.replicas.yml ps -a
+curl -s http://127.0.0.1:3000/api/v1/health/ready
+```
+
+Expected: every `tasksense-app-N`, `tasksense-redis` and `tasksense-lb`
+**running (healthy)**, `tasksense-worker` running, `tasksense-migrate`
+**Exited (0)**; the health answer with `"redis":"up"`. Admin → Cluster lists
+the live API processes and which of them holds each scheduled job.
+
+**Commands by hand need both files**:
+`docker compose -f compose/docker-compose.yml -f compose/docker-compose.replicas.yml …`.
+Without the second, Compose sees one `app` with a host port and no load
+balancer. `logs app` then shows every replica, each line prefixed with its
+container name.
+
+**Upgrades, backups and restores** stop every replica first and start them all
+again — the same window as one process ([08-UPGRADE](08-UPGRADE.md)).
+
+**Back to one process:** remove `replicas` and `bundled-redis` from
+`COMPOSE_PROFILES`, then `./scripts/install.sh`. It stops `tasksense-lb` and
+`tasksense-redis`, which would otherwise keep the port, and starts the single
+`tasksense-app`. Nothing in Redis needs to be kept.
 
 ---
 
@@ -486,7 +577,7 @@ reasoning: [15-SCALING-AND-HA](15-SCALING-AND-HA.md).
 
 ```bash
 ./tasksense status                                         # health, version, containers
-docker compose -f compose/docker-compose.yml logs -f app   # follow the log
+docker compose -f compose/docker-compose.yml logs -f app   # follow the log (replicas: add -f compose/docker-compose.replicas.yml)
 ./scripts/upgrade.sh 1.2.0                                 # backup, migrate, restart, verify
 ./scripts/rollback.sh                                      # back to the previous version and its data
 ./scripts/backup.sh                                        # database + files + configuration
@@ -512,6 +603,9 @@ deployment archive) first.
 docker compose -f compose/docker-compose.yml stop      # pause everything, keep containers and data
 docker compose -f compose/docker-compose.yml down      # remove containers; DATA is kept
 ```
+
+With the `replicas` profile, add `-f compose/docker-compose.replicas.yml` to
+every Compose command in this section, `down -v` below included.
 
 Remove it completely, data included:
 

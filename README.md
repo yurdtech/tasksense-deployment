@@ -35,13 +35,13 @@ feature set; pick the one that fits your infrastructure.
 | Configuration | `compose/.env` — the only file you edit | `my-values.yaml` + a Kubernetes Secret |
 | Database | bundled MongoDB 7 (profile `bundled-mongo`), or yours via `MONGODB_URI` | yours — the chart bundles none |
 | Exposure / TLS | loopback port + your reverse proxy ([examples/](examples/)) | Ingress or OpenShift Route |
-| Scaling | **vertical**: one active API process, sized with CPU/memory limits; optional import worker (0 or 1) for Jira migrations | the same: `replicaCount` is fixed at 1 (the chart refuses more), `Recreate` upgrades; optional `worker.enabled` |
-| High availability | Docker restarts the process; VM-level HA; MongoDB replica set | Kubernetes restarts / reschedules the pod; MongoDB replica set |
-| Upgrades | `scripts/upgrade.sh` — backup, migrate, verify; `rollback.sh` restores the pre-upgrade backup | `helm upgrade` — pre-upgrade dump + migration Job |
+| Scaling | **vertical** by default: one API process, sized with CPU/memory limits; with Redis, 2–20 API processes on one host (profile `replicas`, Compose v2.24.4+); optional import worker (0 or 1) | one API pod by default; with `redis.*` and `ReadWriteMany` storage, `replicaCount` up to 20, or an HPA, and a PodDisruptionBudget; optional `worker.enabled` |
+| High availability | Docker restarts the process; VM-level HA; MongoDB replica set | Kubernetes restarts / reschedules the pod; with Redis, several pods over several nodes; MongoDB replica set |
+| Upgrades | `scripts/upgrade.sh` — backup, migrate, verify; `rollback.sh` restores the pre-upgrade backup | `helm upgrade` — pre-upgrade dump + migration Job; `Recreate`, or rolling for releases marked rolling-safe |
 | Air-gapped installs | offline bundle + `install.sh --offline` | `scripts/helm-airgap-bundle.sh` / `helm-airgap-load.sh` |
 
-Why one API process, and what "HA" honestly means here:
-[docs/15-SCALING-AND-HA.md](docs/15-SCALING-AND-HA.md).
+One API process or several, what they share through Redis, and what "HA"
+honestly means here: [docs/15-SCALING-AND-HA.md](docs/15-SCALING-AND-HA.md).
 
 Before installing, start with [docs/18-PRE-INSTALL-CHECKLIST.md](docs/18-PRE-INSTALL-CHECKLIST.md)
 — firewall matrix, certificates, directory, database and who does what.
@@ -142,8 +142,10 @@ kubectl -n tasksense logs job/tasksense-migrate
 helm test tasksense -n tasksense --logs  # → Phase: Succeeded
 ```
 
-The API runs as exactly one pod by design; the chart refuses `replicaCount`
-above 1, autoscaling, and the import worker without `ReadWriteMany` storage.
+The API runs as one pod by default. More than one — `replicaCount` up to 20,
+autoscaling, a disruption budget — needs Redis (`redis.*`) and `ReadWriteMany`
+storage, and the chart refuses it without them, as it refuses the import worker
+without `ReadWriteMany` ([docs/15-SCALING-AND-HA.md](docs/15-SCALING-AND-HA.md)).
 Expose it with an Ingress or, on OpenShift, a Route —
 [docs/03-INSTALL-OPENSHIFT.md](docs/03-INSTALL-OPENSHIFT.md).
 

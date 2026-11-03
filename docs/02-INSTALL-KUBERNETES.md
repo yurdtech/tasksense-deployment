@@ -11,7 +11,8 @@ for what differs.
 | Kubernetes | 1.25 or newer (OpenShift 4.12+) |
 | Helm | 3.14 or newer (3.8 is the floor for OCI charts; 3.14 adds `--reset-then-reuse-values`) |
 | MongoDB | 6.0 or newer, **external**, a replica set recommended — [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md) |
-| Storage | A storage class for the data volume (ReadWriteOnce; **ReadWriteMany** for the import worker) |
+| Storage | A storage class for the data volume (ReadWriteOnce; **ReadWriteMany** for the import worker and for more than one API pod) |
+| Redis | Only for more than one API pod: 6 or newer recommended, Sentinel recommended, **external** — [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md#redis) |
 | Ingress | An ingress controller (ingress-nginx or F5 NGINX get their annotations automatically) |
 | Registry | A read-only registry token from us, or your own mirror — [13-REGISTRY-ACCESS](13-REGISTRY-ACCESS.md) |
 | TaskSense | 1.1.0 or newer (chart 1.1.0) |
@@ -20,18 +21,23 @@ for what differs.
 
 ## What the chart installs
 
-TaskSense is **one active API process**, plus an optional import worker. That
-is a property of the application, not a chart limitation: its schedulers and the
-live-update feed run in-process, without a distributed lock, so two API
-replicas would run every scheduled job twice. The chart therefore refuses
-`replicaCount` above 1, deploys with `strategy: Recreate` (never two overlapping,
-not even during an upgrade), and ships no HPA and no PodDisruptionBudget.
-Availability comes from Kubernetes restarting the pod and from your MongoDB
-replica set — [15-SCALING-AND-HA](15-SCALING-AND-HA.md) explains the numbers.
+By default TaskSense is **one API pod**, plus an optional import worker. Without
+Redis that is the only layout: sign-in tickets, lockout and rate-limit counters,
+cache invalidations and the live-update fan-out live in the process, so the
+chart refuses `replicaCount` above 1, autoscaling and a PodDisruptionBudget,
+and deploys with `strategy: Recreate`. Availability then comes from Kubernetes
+restarting the pod and from your MongoDB replica set.
+
+**With Redis** (`redis.*`) and a `ReadWriteMany` data volume, the API runs as
+2 to 20 pods behind the Service, with an optional HorizontalPodAutoscaler and
+PodDisruptionBudget; scheduled jobs still run once, under job leases in MongoDB.
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md) explains both layouts and the numbers.
 
 | Object | What it is |
 |---|---|
-| Deployment `<release>` | The API (port 3000), 1 replica, `WORKER_ROLE=all` (or `api` with the worker) |
+| Deployment `<release>` | The API (port 3000), `replicaCount` pods (1 by default), `WORKER_ROLE=all` (or `api` with the worker) |
+| HorizontalPodAutoscaler `<release>` *(opt-in, needs Redis)* | `autoscaling.*`, `autoscaling/v2` |
+| PodDisruptionBudget `<release>` *(opt-in, needs Redis)* | `maxUnavailable: 1` for the API pods |
 | Deployment `<release>-worker` *(opt-in)* | The import worker, `node dist/worker.js`, `WORKER_ROLE=worker` — lands Jira site backups |
 | Job `<release>-migrate` (hook) | Schema migrations, **before** the new pod starts, on install and upgrade |
 | Job `<release>-pre-upgrade-backup` (hook, opt-in) | `mongodump` before the migrations of every upgrade |
@@ -184,7 +190,21 @@ backup:
 networkPolicy:
   enabled: true
   egressCIDRs: [10.20.0.0/16]      # MongoDB, directory, mail relay, IdP
+
+# More than one API pod: Redis, ReadWriteMany storage (above), the worker.
+replicaCount: 3
+redis:
+  sentinels: [redis-0.redis.svc:26379, redis-1.redis.svc:26379, redis-2.redis.svc:26379]
+  sentinelName: mymaster
+  existingSecret: tasksense-redis   # holds REDIS_PASSWORD
+  existingSecretKey: ""             # no REDIS_URL — the sentinels are the connection
+  existingSecretPasswordKey: REDIS_PASSWORD
+podDisruptionBudget:
+  enabled: true
 ```
+
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#several-api-processes-on-kubernetes)
+covers autoscaling, spreading the pods over nodes and rolling updates.
 
 The full list is in [the values reference](#values-reference) below and, with
 explanations, in `helm/tasksense/values.yaml`.
@@ -201,9 +221,21 @@ something broken, and names the value to change:
 
 | You set | The render fails with |
 |---|---|
-| `replicaCount: 2` | `replicaCount=2 is not supported: the TaskSense API must run as exactly one active process …` |
-| `autoscaling.enabled: true` | `autoscaling.enabled=true is not supported (the HPA was removed in chart 1.1.0) …` |
-| `podDisruptionBudget.enabled: true` | `… blocks every node drain forever …` |
+| `replicaCount: 2` without `redis.*` | `replicaCount=2 is not supported without Redis: …` |
+| `autoscaling.enabled: true` without `redis.*` | `autoscaling.enabled=true is not supported without Redis: …` |
+| `podDisruptionBudget.enabled: true` without `redis.*` | `podDisruptionBudget.enabled=true is not supported without Redis: …` |
+| `strategy.type: RollingUpdate` without `redis.*` | `strategy.type=RollingUpdate is not supported without Redis: …` |
+| `replicaCount: 3` with Redis on ReadWriteOnce | `replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce): …` (the same for autoscaling, the PDB and `RollingUpdate`; `… needs persistence.enabled=true` with persistence off) |
+| `replicaCount: 21` | `replicaCount=21 is above the supported maximum of 20` |
+| `autoscaling.maxReplicas: 21` | `autoscaling.maxReplicas=21 is above the supported maximum of 20` |
+| `redis.url` and `redis.sentinels` (or `clusterNodes`) together | `redis: set exactly one connection — …` |
+| `redis.sentinels` without `redis.sentinelName` | `redis.sentinels needs redis.sentinelName` |
+| `redis.url: redis-0:6379` | `redis.url must start with redis:// or rediss://` |
+| `redis.tls: true` with `redis.url` | `redis.tls does not apply to redis.url — use a rediss:// URL` |
+| `redis.url`, `redis.password` or `redis.sentinelPassword` beside `existingSecret` | the render names the value: put the key in a Secret and set `redis.existingSecret` (it may be the same Secret) |
+| `config.rateLimitStore: memory` with more than one API pod | `config.rateLimitStore=memory with more than one API process: …` |
+| `config.rateLimitStore: redis` without `redis.*` | `config.rateLimitStore=redis needs Redis …` |
+| `terminationGracePeriodSeconds` below `preStopSleepSeconds` + 20 | `terminationGracePeriodSeconds (…) must be at least preStopSleepSeconds + 20 …` |
 | `worker.enabled` on ReadWriteOnce | `worker.enabled=true needs persistence.accessMode=ReadWriteMany …` |
 | a short `storageSecret` | `storageSecret must be at least 32 characters …` |
 | `config.agentExecutor: on` | `… this chart always renders AGENT_EXECUTOR=off …` |
@@ -236,8 +268,13 @@ TaskSense 1.1.0 — chart 1.1.0, release tasksense (revision 1) in tasksense.
 
   image        ghcr.io/yurdtech/tasksense:1.1.0
   api          1 replica, strategy Recreate, WORKER_ROLE=all, heap 1536 MB
+  redis        off — the API runs as one process
   ...
 ```
+
+With more than one API pod and `worker.enabled: false`, NOTES ends with a
+WARNING: every pod then runs `WORKER_ROLE=all` and any of them can adopt a
+Jira landing that takes hours. Turn the worker on.
 
 ### Step 6 — Verify
 
@@ -377,6 +414,12 @@ bounds them. Namespaces are detected (`ingress-nginx`, `monitoring`,
 OpenShift) and can be set explicitly. An in-cluster MongoDB in another namespace
 goes in `networkPolicy.extraEgress`.
 
+With Redis configured the policy also allows egress to
+`networkPolicy.redis.ports` (6379 and 26379 — the data nodes and the
+sentinels). With `networkPolicy.redis.cidrs` and
+`networkPolicy.redis.namespaceSelector` both empty, those ports are open to any
+destination; set one of them to narrow the rule to where your Redis runs.
+
 ---
 
 ## Backups and restore
@@ -421,6 +464,10 @@ writes during it:
 kubectl -n tasksense scale deploy/tasksense --replicas=0
 kubectl -n tasksense scale deploy/tasksense-worker --replicas=0   # if enabled
 ```
+
+This stops every API pod, however many run. With `autoscaling.enabled` the
+HorizontalPodAutoscaler leaves a Deployment at 0 alone; scale it back to
+`autoscaling.minReplicas` afterwards and the HPA takes over again.
 
 Then run a one-off Job (set `DUMP` to the file, and the Secret / database names
 to yours):
@@ -506,13 +553,30 @@ curl -s https://tasksense.corp.internal/api/v1/version                 # the new
 ```
 
 The order inside `helm upgrade` is fixed by hook weights: hook copies of the
-configuration (-10) → pre-upgrade dump (-8) → migrations (-5) → the old pod is
-stopped and the new one started (`Recreate`). The old version keeps serving
+configuration (-10) → pre-upgrade dump (-8) → migrations (-5) → the old pods are
+stopped and the new ones started (`Recreate`). The old version keeps serving
 while the dump and the migrations run; for a dump of exactly the last state,
-scale the API to 0 before upgrading. Expect a short interruption while the pod
-is replaced — live views reconnect on their own.
+scale the API to 0 before upgrading. Expect a short interruption while the pods
+are replaced — live views reconnect on their own.
 
-**Upgrading from chart 1.0.** Removed: `autoscaling`, `podDisruptionBudget`,
+With Redis and `strategy.type: RollingUpdate` the pods are replaced one at a
+time instead, with no interruption — **only for a release whose notes mark it
+rolling-safe**; any other release is upgraded with
+`--set strategy.type=Recreate` ([08-UPGRADE](08-UPGRADE.md#rolling-updates-kubernetes)).
+
+**Upgrading from an earlier 1.x chart.** This chart adds the top-level blocks
+`redis`, `autoscaling`, `podDisruptionBudget` and `strategy`. Values reused
+from the earlier chart do not have them, and the render stops with `these
+values come from an earlier chart (no redis / autoscaling / podDisruptionBudget
+/ strategy block) …` — upgrade with `-f my-values.yaml` (or
+`--reset-then-reuse-values`). `config.rateLimitStore` and
+`config.mongodbMaxPoolSize` now default to empty — the API's own choice and a
+pool sized for the replica count. One pod without Redis behaves as before: no
+`RATE_LIMIT_STORE` is rendered, which the API reads as `memory`, and the pool
+stays 100.
+
+**Upgrading from chart 1.0.** Removed in 1.1.0: `autoscaling`, `podDisruptionBudget`
+(both back in this chart with a different meaning — they need Redis),
 `migrations.onBoot`, `migrations.hook.*` (now `migrations.enabled`),
 `storageMaxFileMb` (now `config.storageMaxFileMb`); `backup.image` is now
 `{repository, tag}`. The render names each one still in your file. The
@@ -614,11 +678,15 @@ leave `global.imageRegistry` empty and name the repositories instead:
 | Upload of a Jira backup fails at once with 413 | The ingress rejects the body | Check `kubectl get ingress tasksense-upload -o yaml` exists and its controller honours the annotations; `ingress.uploadMaxBody` ≥ `config.jiraBackupMaxGb` |
 | Live updates arrive late or the UI says "reconnecting" | The stream is buffered or cut | `tasksense-stream` Ingress present? Another proxy (WAF, F5) in front also needs buffering off and a 24h timeout |
 | Worker never starts: `Multi-Attach error` / pod `Pending` | Volume is not really ReadWriteMany | Use an RWX storage class |
-| `kubectl drain` hangs on the TaskSense pod | A PodDisruptionBudget someone added outside the chart | Remove it — one replica cannot satisfy `minAvailable: 1` |
+| `kubectl drain` hangs on the TaskSense pod | One pod: a PodDisruptionBudget someone added outside the chart. Several: the chart's budget is exhausted — another API pod is not ready yet (its replacement is starting), or, on Kubernetes 1.25–1.26, every pod is unready | One pod: remove it — one replica cannot satisfy `minAvailable: 1`. Several: find the unready pod (`kubectl get pods`); while Redis is down every pod is unready. From 1.27 the chart sets `unhealthyPodEvictionPolicy: AlwaysAllow`, so unready pods do not hold a drain |
+| Every API pod `0/1 Ready`, `/api/v1/health/ready` answers 503 with `"redis":"down"` | Redis unreachable: address, password, TLS, or the NetworkPolicy | `kubectl logs deploy/tasksense \| grep -i redis`; the connection settings in `redis.*`; with NetworkPolicy, `networkPolicy.redis.*` |
+| A blank page or the error screen during a rolling update | Chunk requests reaching a pod of the other release without shared web assets | Use `RollingUpdate` only through the chart (it sets `WEB_ASSETS_SHARED_DIR`) and only for rolling-safe releases; otherwise `Recreate` |
+| Many users get 429 at sign-in from the same moment | `TRUST_PROXY` too low: every client looks like the proxy, one bucket for everyone | `config.trustProxy` = the number of proxies that append to `X-Forwarded-For` ([15](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe)) |
 | Sign-in loops or CORS errors | `appUrl` differs from the URL in the browser | Set `appUrl` to exactly that URL; the ingress host follows it |
 | `pre-upgrade-backup` Job `Pending` | The backups claim cannot be bound | `kubectl describe pvc tasksense-backups`; storage class, quota |
 
-Collecting logs for support: `kubectl -n tasksense logs deploy/tasksense --since=1h`,
+Collecting logs for support: `kubectl -n tasksense logs deploy/tasksense --since=1h`
+(one pod; with several, `kubectl -n tasksense logs -l app.kubernetes.io/instance=tasksense,app.kubernetes.io/component=api --prefix --since=1h`),
 `kubectl -n tasksense get events --sort-by=.lastTimestamp`, `helm get values tasksense -n tasksense`
 (remove secrets before sending). More in [10-TROUBLESHOOTING](10-TROUBLESHOOTING.md).
 
@@ -637,17 +705,32 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `firstAdminEmail` | `""` | `FIRST_ADMIN_EMAIL` (first install) |
 | `licenseKey` | `""` | `LICENSE_KEY` **(S)** |
 | `existingSecret` | `""` | Secret with the **(S)** keys |
-| `replicaCount` | `1` | Must be 0 or 1 |
+| `replicaCount` | `1` | API pods: 0 or 1 without Redis; up to 20 with `redis.*` and `ReadWriteMany` |
+| `strategy.type` | `Recreate` | `RollingUpdate` needs Redis and `ReadWriteMany`; then `WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets` |
+| `strategy.rollingUpdate.maxSurge` / `maxUnavailable` | `1` / `0` | With `RollingUpdate` |
+| `autoscaling.enabled` / `minReplicas` / `maxReplicas` | `false` / `2` / `10` | HorizontalPodAutoscaler (`autoscaling/v2`); needs Redis and `ReadWriteMany`; at most 20 |
+| `autoscaling.targetCPUUtilizationPercentage` / `targetMemoryUtilizationPercentage` | `70` / `""` | Of `resources.requests`; empty = that metric is not used |
+| `podDisruptionBudget.enabled` | `false` | `maxUnavailable: 1`; needs Redis and `ReadWriteMany` |
+| `preStopSleepSeconds` | `10` | preStop `sleep` with more than one API pod or `RollingUpdate`; `0` = none |
+| `topologySpreadConstraints` | `[]` | API pods; an entry without `labelSelector` gets the API's |
 | `heapMb` | `1536` | API `NODE_OPTIONS=--max-old-space-size=1536` |
 | `resources` | req 500m / 1Gi, limit 2Gi | API pod |
-| `terminationGracePeriodSeconds` | `45` | API drain time |
+| `terminationGracePeriodSeconds` | `45` | API drain time; at least `preStopSleepSeconds` + 20 when the sleep applies |
+| `redis.url` | `""` | `REDIS_URL` **(S)** — `redis://[user:password@]host:6379[/db]`, `rediss://` for TLS |
+| `redis.existingSecret` / `existingSecretKey` / `existingSecretPasswordKey` | `""` / `REDIS_URL` / `""` | `REDIS_URL` / `REDIS_PASSWORD` from your Secret (may be the `existingSecret` one) |
+| `redis.password` | `""` | `REDIS_PASSWORD` **(S)** |
+| `redis.sentinels` / `sentinelName` | `[]` / `""` | `REDIS_SENTINELS` (list or CSV of `host:port`) / `REDIS_SENTINEL_NAME` |
+| `redis.sentinelPassword` | `""` | `REDIS_SENTINEL_PASSWORD` **(S)** |
+| `redis.clusterNodes` | `[]` | `REDIS_CLUSTER_NODES` |
+| `redis.username` / `tls` / `keyPrefix` | `""` / `false` / `""` | `REDIS_USERNAME` / `REDIS_TLS` (sentinels and cluster only) / `REDIS_KEY_PREFIX` (empty = `tasksense:`) |
+| — | — | Exactly one connection: `url` (or `existingSecret` with `existingSecretKey`), `sentinels` or `clusterNodes`. `REDIS_*` reach the API, the worker and the migration Job, never as empty values |
 | `worker.enabled` | `false` | Import worker; API gets `WORKER_ROLE=api` |
 | `worker.heapMb` | `4096` | Worker `NODE_OPTIONS` |
 | `worker.resources` | req 500m / 2Gi, limit 2 CPU / 6Gi | Worker pod |
 | `config.mongodbDatabase` | `tasksense` | `MONGODB_DB` (also what the backups dump) |
 | `config.mongodbTimeoutMs` | `15000` | `MONGODB_TIMEOUT_MS` (app default 5000) |
 | `config.mongodbOpTimeoutMs` | `30000` | `MONGODB_OP_TIMEOUT_MS` |
-| `config.mongodbMinPoolSize` / `MaxPoolSize` | `10` / `100` | `MONGODB_MIN_POOL_SIZE` / `MONGODB_MAX_POOL_SIZE` |
+| `config.mongodbMinPoolSize` / `MaxPoolSize` | `10` / `""` | `MONGODB_MIN_POOL_SIZE` / `MONGODB_MAX_POOL_SIZE` — empty: 100 with one API pod, 50 with more or with autoscaling ([budget](11-SIZING.md#the-mongodb-connection-budget)) |
 | `config.mongodbCompressors` | `zlib` | `MONGODB_COMPRESSORS` (`zlib` \| `none`) |
 | `config.sessionTtlHours` | `12` | `SESSION_TTL_HOURS` (app default 720; 0 = never) |
 | `config.swaggerEnabled` | `false` | `SWAGGER_ENABLED` (app default on) |
@@ -655,7 +738,8 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `config.agentDispatcher` | `"off"` | `AGENT_DISPATCHER` |
 | — | — | `AGENT_EXECUTOR` is always `off`; setting `config.agentExecutor` fails |
 | `config.egressAllowlist` | `[]` | `EGRESS_ALLOWLIST` (list or CSV) |
-| `config.rateLimitStore` | `memory` | `RATE_LIMIT_STORE` |
+| `config.rateLimitStore` | `""` | `RATE_LIMIT_STORE`, only when set — empty: the API decides (`redis` with Redis, `memory` without). `memory` with more than one API pod is refused |
+| `config.trustProxy` | `""` | `TRUST_PROXY`, only when set (the API's default is 1, the ingress controller or router) |
 | `config.storageMaxFileMb` | `25` | `STORAGE_MAX_FILE_MB` |
 | `config.storageMaxVideoFileMb` | `200` | `STORAGE_MAX_VIDEO_FILE_MB` |
 | `config.jiraBackupMaxGb` | `20` | `JIRA_BACKUP_MAX_GB` |
@@ -692,6 +776,7 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `ingress.annotations` / `streamAnnotations` / `uploadAnnotations` | `{}` | |
 | `route.enabled` / `host` / `tls` / `annotations` | `false` / appUrl's host / edge + Redirect / `{}` | OpenShift |
 | `networkPolicy.enabled` / `egressCIDRs` / `extraEgress` / `ingressNamespaceSelectors` | `false` / `[]` / `[]` / `[]` | |
+| `networkPolicy.redis.ports` / `cidrs` / `namespaceSelector` | `[6379, 26379]` / `[]` / `{}` | Redis egress, rendered with Redis configured; both empty = those ports to any destination |
 | `global.imageRegistry` | `""` | Mirror host for every image |
 | `image.repository` / `tag` / `digest` | `ghcr.io/yurdtech/tasksense` / appVersion / `""` | |
 | `imagePullSecrets` | `[ghcr]` | |

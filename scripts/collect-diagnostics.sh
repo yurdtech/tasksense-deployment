@@ -5,8 +5,9 @@
 #   ./scripts/collect-diagnostics.sh
 #
 # Collects: versions, container status, resource usage, recent logs of every
-# service (app, worker, migrate, mongo), the migration status, the preflight
-# report, and your configuration with every secret replaced by <redacted>.
+# service (app — every copy —, worker, migrate, mongo, lb, redis), the
+# migration status, the preflight report, and your configuration with every
+# secret replaced by <redacted>.
 # Review the archive before sending it — it is a plain tarball you can open.
 #
 # It does NOT include your database, uploaded files, or any task content.
@@ -31,6 +32,7 @@ step "Collecting"
   echo "compose:   $("${COMPOSE[@]}" version 2>&1 | head -n1)"
   echo "profiles:  $(env_profiles 2>/dev/null)"
   echo "database:  $(if bundled_mongo_enabled; then echo bundled; else uri_redacted "$(env_value MONGODB_URI)"; fi)"
+  echo "redis:     $(if ! replicas_enabled && ! external_redis; then echo none; elif replicas_enabled && bundled_redis_enabled; then echo bundled; elif [ -n "$(env_value REDIS_URL)" ]; then uri_redacted "$(env_value REDIS_URL)"; else echo "sentinels/cluster: $(env_value REDIS_SENTINELS)$(env_value REDIS_CLUSTER_NODES)"; fi)"
   echo
   echo "== running version =="
   running_version || echo "(unreachable)"
@@ -47,10 +49,14 @@ compose ps > "${STAGE}/containers.txt" 2>&1 || true
 "${RUNTIME}" stats --no-stream >> "${STAGE}/containers.txt" 2>&1 || true
 ok "container status"
 
+# With the replicas profile `logs app` interleaves every copy, each line
+# prefixed with the container it came from (tasksense-app-1, -2 …).
 compose logs --tail 2000 app > "${STAGE}/app.log" 2>&1 || true
 compose logs --tail 200 migrate > "${STAGE}/migrate.log" 2>&1 || true
 import_worker_enabled && { compose logs --tail 2000 worker > "${STAGE}/worker.log" 2>&1 || true; }
 bundled_mongo_enabled && { compose logs --tail 500 mongo > "${STAGE}/mongo.log" 2>&1 || true; }
+replicas_enabled && { compose logs --tail 500 lb > "${STAGE}/lb.log" 2>&1 || true; }
+replicas_enabled && bundled_redis_enabled && { compose logs --tail 500 redis > "${STAGE}/redis.log" 2>&1 || true; }
 ok "logs (last 2000 lines per service)"
 
 # Which migrations are applied and pending — the first question on any

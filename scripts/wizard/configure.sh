@@ -558,7 +558,7 @@ section_operations() {
 
 section_resources() {
   ui_step 9 9 "Resource limits"
-  ui_text "From docs/11-SIZING.md. \"Users\" means people with accounts — about a fifth of a team is active at once, and concurrency is what actually costs resources. The API is one process by design: it grows by getting more memory and cores, not more copies."
+  ui_text "From docs/11-SIZING.md. \"Users\" means people with accounts — about a fifth of a team is active at once, and concurrency is what actually costs resources. Up to these sizes the API is one process that grows by getting more memory and cores. Beyond them it runs as several copies sharing Redis — the replicas profile, set in .env (docs/15-SCALING-AND-HA.md)."
 
   ui_menu "How many people will have accounts?" \
     "Up to 50|host: 2 cores, 4 GB, 20 GB disk" \

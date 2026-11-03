@@ -1,0 +1,37 @@
+{{- include "tasksense.validate" . -}}
+{{- if include "tasksense.autoscaling" . }}
+{{- $as := .Values.autoscaling }}
+# Scales the API Deployment between minReplicas and maxReplicas on the pods'
+# CPU (and memory) use against their requests. Only with Redis and a
+# ReadWriteMany data volume — the chart refuses it otherwise — and never past
+# 20. The import worker is not scaled: one is enough, landings are leased.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "tasksense.fullname" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "tasksense.fullname" . }}
+  minReplicas: {{ int $as.minReplicas }}
+  maxReplicas: {{ int $as.maxReplicas }}
+  metrics:
+    {{- with include "tasksense.str" $as.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with include "tasksense.str" $as.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}

@@ -5,17 +5,33 @@ metadata:
   name: {{ include "tasksense.fullname" . }}
   labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
 spec:
-  # One active API process — never more (see replicaCount in values.yaml).
+  {{- if not (include "tasksense.autoscaling" .) }}
+  # One without Redis; up to 20 with it (see replicaCount in values.yaml).
   replicas: {{ int .Values.replicaCount }}
+  {{- else }}
+  # No `replicas:` — the HorizontalPodAutoscaler owns the count, and a value
+  # here would reset it on every `helm upgrade`.
+  {{- end }}
   revisionHistoryLimit: 5
   selector:
     matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
   strategy:
-    # Never two API processes at once, not even for the seconds of a rollout:
-    # the in-process schedulers would both fire. Recreate stops the old pod
-    # before the new one starts (and a ReadWriteOnce volume could not be
+    {{- if include "tasksense.rollingUpdate" . }}
+    # Opt-in (Redis and a ReadWriteMany volume are required): new pods start
+    # while the old ones serve, so two releases answer side by side for the
+    # length of the rollout. Only for a release whose notes mark it
+    # rolling-safe — docs/08-UPGRADE.md.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ include "tasksense.str" (dig "rollingUpdate" "maxSurge" 1 .Values.strategy) }}
+      maxUnavailable: {{ include "tasksense.str" (dig "rollingUpdate" "maxUnavailable" 0 .Values.strategy) }}
+    {{- else }}
+    # The default: the old pods stop before the new ones start, so two
+    # releases never serve at once — the migrations that ran first may have
+    # changed what the old one reads (and a ReadWriteOnce volume could not be
     # mounted by both anyway).
     type: Recreate
+    {{- end }}
   template:
     metadata:
       labels:
@@ -46,6 +62,17 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # No command/args: the image's tini + `node dist/main.js`.
           {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
+          {{- if include "tasksense.preStop" . }}
+          # A stopping pod is removed from the Service's endpoints at the same
+          # moment it gets SIGTERM, and the ingress learns of it a few seconds
+          # later. The sleep keeps it serving until then, so the requests and
+          # live-update streams still routed to it are not cut; its peers take
+          # the new ones. Counted inside terminationGracePeriodSeconds.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ int .Values.preStopSleepSeconds }}"]
+          {{- end }}
           ports:
             - name: http
               containerPort: 3000
@@ -67,7 +94,8 @@ spec:
 
           # Readiness must. MongoDB is the only data store, so an instance that
           # cannot reach it can serve nothing and should be taken out of the
-          # Service until it can.
+          # Service until it can. With redis.* configured the same holds for
+          # Redis: unreachable is 503 here, never a quiet fallback to memory.
           readinessProbe:
             httpGet:
               path: /api/v1/health/ready
@@ -116,4 +144,17 @@ spec:
       {{- end }}
       {{- with .Values.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      {{- $selector := include "tasksense.selectorLabels" $ | fromYaml }}
+      {{- $_ := set $selector "app.kubernetes.io/component" "api" }}
+      {{- $spread := list }}
+      {{- range . }}
+      {{- $c := deepCopy . }}
+      {{- if not (hasKey $c "labelSelector") }}
+      {{- $_ := set $c "labelSelector" (dict "matchLabels" $selector) }}
+      {{- end }}
+      {{- $spread = append $spread $c }}
+      {{- end }}
+      topologySpreadConstraints: {{- toYaml $spread | nindent 8 }}
       {{- end }}

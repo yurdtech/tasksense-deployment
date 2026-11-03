@@ -22,12 +22,43 @@ and in practice about a fifth of a team is active at once.
 | **XXL** *(estimate)* | about 5 000 – 10 000 | Kubernetes | 6 – 12 API pods, each as in XL; autoscaling up to 20; the import worker; Redis | Your own replica set: three members of 16 vCPU · 64 GB |
 | more | — | — | — | Talk to us |
 
-**XL and XXL are estimates, not measurements.** They are extrapolated from
-profile L and from the per-process rules below. The load test that will
-measure them — k6, 10 000 users, about 6 000 open live-update streams, against
-1, 3, 5 and 10 API pods — is planned and **has not been run**. Size a pilot
-from these rows, watch the metrics under [When to grow](#when-to-grow), and
-adjust; we will replace the rows with measured ones once the test has run.
+**XL and XXL are estimates.** They are extrapolated from profile L, the
+per-process rules below and the single-process load test that follows. Size a
+pilot from these rows, watch the metrics under [When to grow](#when-to-grow),
+and adjust.
+
+### What one API process carried (k6, 2026-11-04)
+
+**Setup:**
+- one workspace of 10 011 members and 4 033 tasks;
+- MongoDB 8.2 and Redis 8 on the same machine as the API;
+- one native API process, Node 22 on one core of a shared 18-core
+  workstation.
+
+**Load:** each active user reads its board and updates one of its tasks every
+5–15 s, and keeps three live-update streams open. Alongside, people open the
+app (`GET /state`, 3 MB, 295 KB gzipped) and sign in, both in proportion to
+the active users.
+
+| Active users | Requests/s | Board p50 / p95 | Task update p50 / p95 | `/state` p50 / p95 | Errors |
+| --- | --- | --- | --- | --- | --- |
+| 100 | 15 | 8 ms / 54 ms | 11 ms / 54 ms | 167 ms / 380 ms | 0 |
+| 300 | 44 | 10 ms / 244 ms | 16 ms / 0.7 s | 156 ms / 0.9 s | 0 |
+| 400 | 52 | 14 ms / 2.1 s | 24 ms / 8.5 s | 206 ms / 4.9 s | 0 |
+
+At 300 active users the p95 of a task update varied from 0.7 s to 2.5 s
+between runs.
+
+**What this gives for 10 000 users.** About 2 000 of them are active at
+once, and one process serves about 300 of them with p95 under a second. That
+is 7 API processes. Add headroom for losing a node and for the morning wave of
+app opens: **8–10 processes**, inside the XXL row.
+
+**Not measured yet: several processes at the full load.** On the test
+machine, 5 and 10 processes shared the cores with the load generator and other
+workloads, and each process got about a third of a core. Those runs measured
+the machine, not TaskSense. The XL and XXL rows stay estimates until the full
+test runs with the load generator on machines of its own.
 
 What XL and XXL need besides the API processes:
 

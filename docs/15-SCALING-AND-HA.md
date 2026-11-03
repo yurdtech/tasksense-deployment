@@ -57,6 +57,16 @@ several processes. There is nothing to configure, and
 `tasksense_singleton_job_runs_total{job}` shows which process ran what
 ([09-MONITORING](09-MONITORING.md)).
 
+Behind the lease, what a repeated pass would show twice is taken once: a
+due-date reminder, a filter digest, a scheduled request, an agent
+decomposition and a workspace's backup of the day are each claimed in MongoDB
+(collection `jobClaims`, or a stamp on the schedule or subscription) before
+the work starts, so even a process that lost its lease mid-pass — a long pause,
+a node that came back — sends, raises or writes nothing the first one already
+did. Another process takes a claim over only when its holder has dropped off
+the heartbeat list. A process that stopped mid-job therefore holds nothing up
+for longer than the heartbeat window.
+
 `RATE_LIMIT_STORE=memory` beside Redis is allowed but wrong for several
 processes: each counts only what reached it, so every limit is N times higher.
 The application logs a warning; the chart and `preflight.sh` refuse it with

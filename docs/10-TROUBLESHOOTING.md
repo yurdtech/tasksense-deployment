@@ -80,6 +80,25 @@ available.
 
 **Fix:** `AGENT_EXECUTOR=off`.
 
+### `preflight.sh` refuses the `replicas` profile
+
+**Cause**, one of:
+
+- Docker Compose older than 2.24.4, or podman-compose — the override file uses
+  Compose's `!reset` tag, which they do not understand;
+- `import-worker` missing from `COMPOSE_PROFILES` (or `WORKER_ROLE` not `api`);
+- no Redis — neither `bundled-redis` with `BUNDLED_REDIS_PASSWORD`, nor
+  `REDIS_URL` / `REDIS_SENTINELS` / `REDIS_CLUSTER_NODES` — or both at once;
+- `bundled-redis` without `replicas`;
+- `BUNDLED_REDIS_PASSWORD` left set beside your own Redis, or holding
+  characters a URL would have to encode (use `openssl rand -hex 24`);
+- `APP_REPLICAS` outside 1–20, or above 1 without the `replicas` profile;
+- `TRUST_PROXY` below 2: behind the host proxy and `tasksense-lb`, one hop would
+  make every user look like the load balancer;
+- `RATE_LIMIT_STORE=memory` with more than one replica.
+
+**Fix:** the line names which. [01-INSTALL-COMPOSE › Several API processes](01-INSTALL-COMPOSE.md#several-api-processes-the-replicas-profile).
+
 ---
 
 ## It will not start
@@ -191,7 +210,25 @@ run the import worker so the landing has its own memory.
 ss -ltnp | grep 3000
 ```
 
-Change `HTTP_PORT`, or stop what is holding the port.
+Change `HTTP_PORT`, or stop what is holding the port. After removing the
+`replicas` profile by hand, it is often `tasksense-lb` still running:
+`./scripts/install.sh` stops it, or `docker stop tasksense-lb`.
+
+### Every API process runs but none is ready: `"redis":"down"`
+
+```bash
+curl -s http://127.0.0.1:3000/api/v1/health/ready
+docker compose -f compose/docker-compose.yml -f compose/docker-compose.replicas.yml logs app | grep -i redis
+```
+
+**Cause:** Redis is configured and unreachable — stopped, wrong address or
+password, TLS without the CA, or a firewall. There is deliberately no fallback
+to memory, so every process reports not ready (HTTP 503) until Redis answers;
+nothing is restarted.
+
+**Fix:** what the log names. The bundled Redis: `docker ps -a | grep
+tasksense-redis` and its log; your own: [16-EXTERNAL-DATABASES › Redis](16-EXTERNAL-DATABASES.md#redis).
+Readiness passes again on its own once Redis is back.
 
 ---
 
@@ -210,6 +247,11 @@ curl -fsS http://127.0.0.1:3000/api/v1/health
 
 If that works and the proxy does not, set `BIND_ADDRESS` to the interface the
 proxy reaches and allow only the proxy in the firewall — or fix the proxy.
+
+With the `replicas` profile the port belongs to `tasksense-lb`, which answers
+502 or 503 itself while no replica is ready — `curl` above then shows the
+cause (`"redis":"down"`, `"database":"down"`), or `docker compose … ps` shows
+replicas still starting.
 
 ### The interface loads, but nothing updates until you refresh
 
@@ -309,9 +351,21 @@ the filter result and the resolved role.
 
 **Cause:** ten failed attempts for that identifier within 15 minutes.
 
-**Fix:** wait for the window to pass, or restart the application to clear the
-counters (they are in memory). Repeated occurrences for one account are worth
-a look in the proxy log — that is what the lock is for.
+**Fix:** wait for the window to pass. With one API process and no Redis, a
+restart also clears the counters (they are in memory); with Redis they are
+shared by every process and survive a restart. Repeated occurrences for one
+account are worth a look in the proxy log — that is what the lock is for.
+
+### Many people get 429 at sign-in at the same time
+
+**Cause:** `TRUST_PROXY` is lower than the number of proxies in front of the
+application, so every client looks like the nearest proxy and they all share
+one rate-limit bucket. Typical after adding the `replicas` profile, or a load
+balancer in front of the reverse proxy.
+
+**Fix:** set `TRUST_PROXY` to the number of proxies that append to
+`X-Forwarded-For` (Helm: `config.trustProxy`) —
+[15-SCALING-AND-HA › TRUST_PROXY](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe).
 
 ### SSO returns "redirect_uri mismatch"
 
@@ -414,7 +468,9 @@ docker compose -f compose/docker-compose.yml logs app | grep '(slow)'
 `MONGO_CACHE_GB`; the API pinned at its CPU limit → raise `APP_CPU_LIMIT` (up to
 about 4); everybody stalls at once → event-loop lag, usually a landing or a huge
 report in the API process — [11-SIZING › When to grow](11-SIZING.md#when-to-grow).
-More API replicas is not an option ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)).
+Past about 4 cores for one process, more API processes help — with Redis
+([15-SCALING-AND-HA](15-SCALING-AND-HA.md)); without Redis the API stays one
+process.
 
 ### Disk filling up
 

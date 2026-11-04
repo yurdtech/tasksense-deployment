@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The three shapes the compose file has to take, checked against what compose
+# The shapes the compose files have to take, checked against what compose
 # would actually hand the daemon.
 #
 #   tests/compose-topologies.sh
@@ -8,6 +8,8 @@
 #   bundled    COMPOSE_PROFILES=bundled-mongo                (the default)
 #   external   COMPOSE_PROFILES=  + MONGODB_URI              (your own MongoDB)
 #   worker     COMPOSE_PROFILES=bundled-mongo,import-worker  (+ WORKER_ROLE=api)
+#   replicas   COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+#              with docker-compose.replicas.yml — and with your own Redis
 #
 # `docker compose config` needs the CLI and its compose plugin, not a daemon,
 # and pulls nothing — so this runs offline. The configuration lives in a
@@ -30,6 +32,11 @@ COMPOSE_FILE_PATH="${ROOT}/compose/docker-compose.yml"
 
 render() {  # render <env-file> → JSON on stdout, exit code of compose
   TASKSENSE_ENV_FILE="$1" docker compose -f "${COMPOSE_FILE_PATH}" --env-file "$1" config --format json 2>"${WORK}/err"
+}
+# The replicas profile: the same, with the override the scripts add for it.
+render_replicas() {
+  TASKSENSE_ENV_FILE="$1" docker compose -f "${COMPOSE_FILE_PATH}" -f "${ROOT}/compose/docker-compose.replicas.yml" \
+    --env-file "$1" config --format json 2>"${WORK}/err"
 }
 
 # q <json-file> <python expression over `c`, the rendered project>
@@ -125,6 +132,57 @@ render "${WORK}/mirror.env" > "${WORK}/mirror.json"
 check "mirror: app, migrate and mongo all come from it" \
   "harbor.acme.internal/tasksense/tasksense:$(example_version) harbor.acme.internal/tasksense/tasksense:$(example_version) harbor.acme.internal/tasksense/mongo:7.0.14" \
   "$(q "${WORK}/mirror.json" '[s["app"]["image"], s["migrate"]["image"], s["mongo"]["image"]]')"
+
+# ── replicas: several API processes, a load balancer, Redis ─────────────────
+RPW="0123456789abcdef0123456789abcdef0123456789abcdef"
+REPLICAS_PROFILES="COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis"
+fixture_env "${WORK}/replicas.env" "${REPLICAS_PROFILES}" "WORKER_ROLE=api" "BUNDLED_REDIS_PASSWORD=${RPW}" "APP_REPLICAS=4"
+fixture_env "${WORK}/replicas-default.env" "${REPLICAS_PROFILES}" "WORKER_ROLE=api" "BUNDLED_REDIS_PASSWORD=${RPW}"
+THEIR_REDIS="rediss://tasksense:pw@redis.acme.internal:6380/0"
+fixture_env "${WORK}/replicas-own-redis.env" "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api" \
+  "REDIS_URL=${THEIR_REDIS}" "TRUST_PROXY=3" "MONGODB_MAX_POOL_SIZE=40"
+fixture_env "${WORK}/replicas-sentinel.env" "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api" \
+  "REDIS_SENTINELS=redis-0.acme.internal:26379,redis-1.acme.internal:26379" "REDIS_SENTINEL_NAME=mymaster"
+for t in replicas replicas-default replicas-own-redis replicas-sentinel; do
+  render_replicas "${WORK}/${t}.env" > "${WORK}/${t}.json"
+  check "${t}: docker compose config accepts it" "0" "$?"
+  [ -s "${WORK}/err" ] && sed 's/^/      /' "${WORK}/err"
+done
+
+check "replicas: plus the load balancer and Redis" "app lb migrate mongo redis worker" "$(q "${WORK}/replicas.json" 'sorted(s)')"
+check "replicas: APP_REPLICAS copies of the app" "4" "$(q "${WORK}/replicas.json" 's["app"]["deploy"]["replicas"]')"
+check "replicas: three without APP_REPLICAS" "3" "$(q "${WORK}/replicas-default.json" 's["app"]["deploy"]["replicas"]')"
+check "replicas: the copies have no fixed name (Compose names them)" "None" "$(q "${WORK}/replicas.json" 's["app"].get("container_name")')"
+check "replicas: and no host port — the load balancer holds it" "None" "$(q "${WORK}/replicas.json" 's["app"].get("ports")')"
+check "replicas: the API never lands imports itself" "api" "$(q "${WORK}/replicas.json" 'env("app","WORKER_ROLE")')"
+check "replicas: two proxy hops (the host's and lb)" "2" "$(q "${WORK}/replicas.json" 'env("app","TRUST_PROXY")')"
+check "replicas: a smaller pool per copy" "50" "$(q "${WORK}/replicas.json" 'env("app","MONGODB_MAX_POOL_SIZE")')"
+check "replicas: the bundled Redis, with its password" "redis://:${RPW}@redis:6379" "$(q "${WORK}/replicas.json" 'env("app","REDIS_URL")')"
+check "replicas: the worker publishes through the same Redis" "redis://:${RPW}@redis:6379" "$(q "${WORK}/replicas.json" 'env("worker","REDIS_URL")')"
+check "replicas: the app waits for a healthy bundled Redis, if there is one" "service_healthy False" \
+  "$(q "${WORK}/replicas.json" '[s["app"]["depends_on"]["redis"]["condition"], s["app"]["depends_on"]["redis"]["required"]]')"
+check "replicas: and still for migrate" "service_completed_successfully" "$(q "${WORK}/replicas.json" 's["app"]["depends_on"]["migrate"]["condition"]')"
+check "lb: published where the app was, loopback only" "127.0.0.1 39317 8080" \
+  "$(q "${WORK}/replicas.json" '[s["lb"]["ports"][0]["host_ip"], s["lb"]["ports"][0]["published"], s["lb"]["ports"][0]["target"]]')"
+check "lb: Caddy at a pinned tag" "caddy:2.10-alpine tasksense-lb" "$(q "${WORK}/replicas.json" '[s["lb"]["image"], s["lb"]["container_name"]]')"
+check "lb: its configuration, read-only" "/etc/caddy/Caddyfile True" \
+  "$(q "${WORK}/replicas.json" '[[v["target"], v.get("read_only")] for v in s["lb"]["volumes"]][0]')"
+check "lb: read-only root, every capability dropped but the one its binary carries" "True ALL NET_BIND_SERVICE" \
+  "$(q "${WORK}/replicas.json" '[s["lb"]["read_only"], s["lb"]["cap_drop"][0], s["lb"]["cap_add"][0]]')"
+check "redis: pinned like the other images, no port, no volume" "redis:7-alpine None None" \
+  "$(q "${WORK}/replicas.json" '[s["redis"]["image"], s["redis"].get("ports"), s["redis"].get("volumes")]')"
+contains "redis: no snapshots, no AOF" "--save '' --appendonly no" "$(q "${WORK}/replicas.json" 's["redis"]["command"][0]')"
+lacks "redis: the password is on no command line" "${RPW}" "$(q "${WORK}/replicas.json" '[s["redis"]["command"], s["redis"]["entrypoint"], s["redis"]["healthcheck"]["test"]]')"
+check "redis: it travels in the environment instead" "${RPW}" "$(q "${WORK}/replicas.json" 'env("redis","REDISCLI_AUTH")')"
+check "own Redis: no Redis container" "app lb migrate mongo worker" "$(q "${WORK}/replicas-own-redis.json" 'sorted(s)')"
+check "own Redis: your URL wins" "${THEIR_REDIS}" "$(q "${WORK}/replicas-own-redis.json" 'env("app","REDIS_URL")')"
+check "own Redis: and your hop count and pool size" "3 40" \
+  "$(q "${WORK}/replicas-own-redis.json" '[env("app","TRUST_PROXY"), env("app","MONGODB_MAX_POOL_SIZE")]')"
+check "sentinels: REDIS_URL is empty, which the application reads as unset" "" "$(q "${WORK}/replicas-sentinel.json" 'env("app","REDIS_URL")')"
+check "sentinels: and they arrive from .env" "redis-0.acme.internal:26379,redis-1.acme.internal:26379 mymaster" \
+  "$(q "${WORK}/replicas-sentinel.json" '[env("app","REDIS_SENTINELS"), env("app","REDIS_SENTINEL_NAME")]')"
+check "without the override nothing of this exists" "None None" \
+  "$(q "${WORK}/worker.json" '[s.get("lb"), env("app","REDIS_URL")]')"
 
 # ── refusals ─────────────────────────────────────────────────────────────────
 fixture_env "${WORK}/noversion.env" "TASKSENSE_VERSION="

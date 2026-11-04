@@ -194,6 +194,11 @@ route:
 TaskSense does not terminate — use `edge`. To manage the Route yourself, set
 `route.enabled: false` and keep the 24h timeout annotation on yours.
 
+With several API pods (Redis configured — [15-SCALING-AND-HA](15-SCALING-AND-HA.md))
+the same Route spreads requests over them. TaskSense needs no session affinity;
+the router's own affinity cookie does no harm. The router is the one proxy in
+front of the pods, so `TRUST_PROXY` stays at its default of 1.
+
 ---
 
 ## NetworkPolicy
@@ -212,16 +217,19 @@ A policy naming the wrong namespaces blocks the router and all name resolution
 the moment it is applied; override any of them with
 `networkPolicy.ingressControllerNamespace`, `monitoringNamespace` and
 `dns.namespace` / `dns.port` if your cluster differs. An in-cluster MongoDB in
-another project goes in `networkPolicy.extraEgress`.
+another project goes in `networkPolicy.extraEgress`. With Redis configured the
+policy also allows egress on `networkPolicy.redis.ports` (6379, 26379) — narrow
+it to the Redis project with `networkPolicy.redis.namespaceSelector`.
 
 ---
 
 ## Storage
 
 `ReadWriteOnce` (e.g. `ocs-storagecluster-ceph-rbd`, `thin-csi`) is right for
-the API alone. The import worker needs `ReadWriteMany` —
-`ocs-storagecluster-cephfs` with OpenShift Data Foundation, or an NFS class. The
-chart refuses `worker.enabled` on anything else. The backups volume
+one API pod alone. The import worker and more than one API pod need
+`ReadWriteMany` — `ocs-storagecluster-cephfs` with OpenShift Data Foundation, or
+an NFS class. The chart refuses `worker.enabled`, `replicaCount` above 1,
+autoscaling and `RollingUpdate` on anything else. The backups volume
 (`backup.persistence`) can stay ReadWriteOnce.
 
 ```bash

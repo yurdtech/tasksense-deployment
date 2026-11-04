@@ -23,11 +23,18 @@ case "${ENV_FILE}" in /*) ;; *) ENV_FILE="${PWD}/${ENV_FILE}" ;; esac
 # Fixed names from docker-compose.yml. Containers are addressed by name where
 # compose's profile handling would get in the way (stopping a worker whose
 # profile has just been switched off, for instance).
+#
+# The one exception is the API with the replicas profile: its copies have no
+# fixed name (Compose calls them tasksense-app-1, -2 …), so app_running and
+# stop_app also ask Compose for every container of the app service.
 APP_CONTAINER=tasksense-app
 WORKER_CONTAINER=tasksense-worker
 MONGO_CONTAINER=tasksense-mongo
 # shellcheck disable=SC2034  # read by preflight.sh
 MIGRATE_CONTAINER=tasksense-migrate
+# From docker-compose.replicas.yml.
+LB_CONTAINER=tasksense-lb
+REDIS_CONTAINER=tasksense-redis
 # `name:` in docker-compose.yml — what Compose labels its containers with.
 # shellcheck disable=SC2034  # read by preflight.sh
 COMPOSE_PROJECT=tasksense
@@ -45,6 +52,11 @@ BACKUPS_DIR="${ROOT_DIR}/backups"
 # `depends_on: required: false` — what makes the bundled database optional —
 # arrived in Docker Compose 2.20.
 COMPOSE_MIN_VERSION=2.20.0
+# The replicas override resets the app's container_name and ports with the
+# `!reset` YAML tag, which older Compose does not know — and podman-compose
+# does not implement at all.
+# shellcheck disable=SC2034  # read by preflight.sh
+COMPOSE_REPLICAS_MIN_VERSION=2.24.4
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
@@ -177,13 +189,28 @@ compose_version() {
   printf '%s' "${out}" | grep -Eo '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1
 }
 
+# The compose files for the configured topology, as -f arguments: none — the
+# default docker-compose.yml (plus docker-compose.override.yml, which Compose
+# finds itself) — or, with the replicas profile, the base file and its
+# override, named explicitly. Naming files stops Compose finding the
+# .override.yml on its own, so one that exists is named too.
+compose_files() {
+  replicas_enabled || return 0
+  printf '%s\n' -f docker-compose.yml -f docker-compose.replicas.yml
+  [ -f "${COMPOSE_DIR}/docker-compose.override.yml" ] && printf '%s\n' -f docker-compose.override.yml
+  return 0
+}
+
 # Run compose against this repo's stack, from any working directory, with the
 # configuration the scripts read — including when TASKSENSE_ENV_FILE moved it.
 compose() {
+  local -a files=()
+  local f
+  while IFS= read -r f; do files+=("${f}"); done < <(compose_files)
   if [ -f "${ENV_FILE}" ]; then
-    ( cd "${COMPOSE_DIR}" && TASKSENSE_ENV_FILE="${ENV_FILE}" "${COMPOSE[@]}" --env-file "${ENV_FILE}" "$@" )
+    ( cd "${COMPOSE_DIR}" && TASKSENSE_ENV_FILE="${ENV_FILE}" "${COMPOSE[@]}" ${files[@]+"${files[@]}"} --env-file "${ENV_FILE}" "$@" )
   else
-    ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" "$@" )
+    ( cd "${COMPOSE_DIR}" && "${COMPOSE[@]}" ${files[@]+"${files[@]}"} "$@" )
   fi
 }
 
@@ -210,12 +237,36 @@ stop_container() {
   "${RUNTIME}" stop -t 45 "${name}" >/dev/null
 }
 
+# The running API containers Compose knows as the app service, by id: the
+# copies of the replicas profile, which have no fixed name — or are left over
+# from it after the profile was switched off. Empty when there are none.
+app_replica_ids() {
+  compose ps -q --status running app 2>/dev/null || true
+}
+
+# Is any API process running? The one named tasksense-app, or any copy.
+app_running() {
+  container_running "${APP_CONTAINER}" && return 0
+  [ -n "$(app_replica_ids)" ]
+}
+
+# Stop every API process: by its fixed name, then every copy Compose knows.
+# Stopping by name alone would stop nothing under the replicas profile, and a
+# backup or restore would then run beside live copies.
+stop_app() {
+  local reason="${1:-}"
+  stop_container "${APP_CONTAINER}" "${reason}"
+  [ -n "$(app_replica_ids)" ] || return 0
+  [ -n "${reason}" ] && note "stopping the API copies — ${reason}"
+  compose stop -t 45 app >/dev/null
+}
+
 # The application tier: everything that writes to the database except the
 # database. Stopped before a consistent backup or a restore, worker first so no
 # landing is mid-write when the API goes.
 stop_app_tier() {
   stop_container "${WORKER_CONTAINER}"
-  stop_container "${APP_CONTAINER}"
+  stop_app
 }
 
 # Bring the stack up as COMPOSE_PROFILES describes it.
@@ -226,12 +277,22 @@ stop_app_tier() {
 # that now does the same; a bundled MongoDB left running after the move to an
 # external one is a database nobody backs up. So those two are stopped here,
 # by name, before anything starts.
+#
+# The same for the replicas profile's load balancer, which would otherwise keep
+# holding HTTP_PORT and stop the single app from publishing it, and for its
+# bundled Redis.
 compose_up() {
   if ! import_worker_enabled; then
     stop_container "${WORKER_CONTAINER}" "the import-worker profile is not in COMPOSE_PROFILES"
   fi
   if ! bundled_mongo_enabled; then
     stop_container "${MONGO_CONTAINER}" "the bundled-mongo profile is not in COMPOSE_PROFILES"
+  fi
+  if ! replicas_enabled; then
+    stop_container "${LB_CONTAINER}" "the replicas profile is not in COMPOSE_PROFILES"
+  fi
+  if ! replicas_enabled || ! bundled_redis_enabled; then
+    stop_container "${REDIS_CONTAINER}" "the bundled-redis profile is not in use"
   fi
   # `up -d` waits for `migrate` to finish before it starts app and worker, and
   # fails — naming the service — if a migration fails.
@@ -386,6 +447,22 @@ import_worker_enabled() {
   profile_enabled import-worker
 }
 
+# Several API processes behind a load balancer (docker-compose.replicas.yml).
+replicas_enabled() {
+  [ -f "${ENV_FILE}" ] || return 1
+  profile_enabled replicas
+}
+
+bundled_redis_enabled() {
+  [ -f "${ENV_FILE}" ] || return 1
+  profile_enabled bundled-redis
+}
+
+# Is Redis the operator's own? One of the application's connection settings.
+external_redis() {
+  [ -n "$(env_value REDIS_URL)" ] || [ -n "$(env_value REDIS_SENTINELS)" ] || [ -n "$(env_value REDIS_CLUSTER_NODES)" ]
+}
+
 mongo_db_name() {
   local db; db="$(env_value MONGODB_DB)"
   printf '%s' "${db:-tasksense}"
@@ -405,6 +482,21 @@ mongo_image() {
   local image version
   image="$(env_value MONGO_IMAGE)"; version="$(env_value MONGO_VERSION)"
   printf '%s:%s' "${image:-mongo}" "${version:-7}"
+}
+
+# image:tag of the replicas profile's bundled Redis and load balancer — the
+# defaults docker-compose.replicas.yml names.
+REDIS_DEFAULT_TAG=7-alpine
+CADDY_DEFAULT_TAG=2.10-alpine
+redis_image() {
+  local image version
+  image="$(env_value REDIS_IMAGE)"; version="$(env_value REDIS_VERSION)"
+  printf '%s:%s' "${image:-redis}" "${version:-${REDIS_DEFAULT_TAG}}"
+}
+caddy_image() {
+  local image version
+  image="$(env_value CADDY_IMAGE)"; version="$(env_value CADDY_VERSION)"
+  printf '%s:%s' "${image:-caddy}" "${version:-${CADDY_DEFAULT_TAG}}"
 }
 
 # ── Carrying a 1.0 configuration forward ─────────────────────────────────────

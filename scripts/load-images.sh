@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #
-# Gets the container images — TaskSense and MongoDB — onto a host, or into
-# your own registry, when this host cannot pull from ghcr.io.
+# Gets the container images — TaskSense and MongoDB, and the Redis and Caddy
+# of the replicas profile — onto a host, or into your own registry, when this
+# host cannot pull from ghcr.io.
 #
 #   ./scripts/load-images.sh --offline
 #       Load ./images/*.tar from the offline bundle into this host's runtime.
 #
 #   ./scripts/load-images.sh --offline --registry harbor.corp.internal/tasksense
-#       Load them, then push both into your registry — for an air-gapped site
+#       Load them, then push them into your registry — for an air-gapped site
 #       with a Harbor, Nexus or Quay inside.
 #
 #   ./scripts/load-images.sh --registry harbor.corp.internal/tasksense [--version 1.1.0]
-#       Copy both straight from ghcr.io and Docker Hub into your registry. Run it
+#       Copy them straight from ghcr.io and Docker Hub into your registry. Run it
 #       from a machine that reaches both; it needs no compose/.env.
 #
 # Options:
@@ -19,11 +20,14 @@
 #                       version this bundle was released with)
 #   --mongo-version M   the MongoDB tag (default: MONGO_VERSION in .env, else 7)
 #   --dir DIR           where the image archives are (default ./images)
-#   --update-env        also write TASKSENSE_IMAGE and MONGO_IMAGE into compose/.env
+#   --update-env        also write TASKSENSE_IMAGE, MONGO_IMAGE, REDIS_IMAGE and
+#                       CADDY_IMAGE into compose/.env
 #
-# The images land as <registry>/tasksense:<version> and <registry>/mongo:<tag>,
-# which is what TASKSENSE_IMAGE=<registry>/tasksense and
-# MONGO_IMAGE=<registry>/mongo point at. See docs/13-REGISTRY-ACCESS.md.
+# The images land as <registry>/tasksense:<version>, <registry>/mongo:<tag>,
+# <registry>/redis:<tag> and <registry>/caddy:<tag> — what TASKSENSE_IMAGE,
+# MONGO_IMAGE, REDIS_IMAGE and CADDY_IMAGE=<registry>/<name> point at. The
+# Redis and Caddy tags are REDIS_VERSION and CADDY_VERSION in .env, else the
+# ones docker-compose.replicas.yml defaults to. See docs/13-REGISTRY-ACCESS.md.
 
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -42,7 +46,7 @@ while [ $# -gt 0 ]; do
     --mongo-version) MONGO_TAG="${2:?--mongo-version needs a tag}"; shift 2 ;;
     --dir)           IMAGE_DIR="${2:?--dir needs a directory}"; shift 2 ;;
     --update-env)    UPDATE_ENV=1; shift ;;
-    -h|--help)       sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)       sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)               die "unknown option: $1" "Run with --help." ;;
   esac
 done
@@ -58,9 +62,21 @@ detect_runtime
 [ -n "${VERSION}" ] || VERSION="$(env_value TASKSENSE_VERSION "${EXAMPLE_FILE}")"
 [ -n "${MONGO_TAG}" ] || MONGO_TAG="$(env_value MONGO_VERSION)"
 MONGO_TAG="${MONGO_TAG:-7}"
+REDIS_TAG="$(env_value REDIS_VERSION)"; REDIS_TAG="${REDIS_TAG:-${REDIS_DEFAULT_TAG}}"
+CADDY_TAG="$(env_value CADDY_VERSION)"; CADDY_TAG="${CADDY_TAG:-${CADDY_DEFAULT_TAG}}"
 
 APP_SRC="${DEFAULT_IMAGE}:${VERSION}"
 MONGO_SRC="docker.io/library/mongo:${MONGO_TAG}"
+# Pulled only by the replicas profile, mirrored always: a mirror missing them is
+# found out the day someone turns that profile on.
+REDIS_SRC="docker.io/library/redis:${REDIS_TAG}"
+CADDY_SRC="docker.io/library/caddy:${CADDY_TAG}"
+MIRROR_PAIRS=(
+  "${APP_SRC}|${MIRROR}/tasksense:${VERSION}"
+  "${MONGO_SRC}|${MIRROR}/mongo:${MONGO_TAG}"
+  "${REDIS_SRC}|${MIRROR}/redis:${REDIS_TAG}"
+  "${CADDY_SRC}|${MIRROR}/caddy:${CADDY_TAG}"
+)
 
 push_pair() {  # push_pair <local-ref> <destination-ref>
   printf '  %s → %s\n' "$1" "$2"
@@ -119,24 +135,24 @@ if [ "${OFFLINE}" = "1" ]; then
     PUSHED=0
     [ "${#LOADED[@]}" -gt 0 ] || die "the archives named no image to push"
     for ref in "${LOADED[@]}"; do
-      name="${ref##*/}"            # tasksense:1.1.0, mongo:7
+      name="${ref##*/}"            # tasksense:1.1.0, mongo:7, redis:7-alpine, caddy:2.10-alpine
       case "${name%%:*}" in
-        tasksense|mongo) push_pair "${ref}" "${MIRROR}/${name}"; PUSHED=$((PUSHED + 1)) ;;
+        tasksense|mongo|redis|caddy) push_pair "${ref}" "${MIRROR}/${name}"; PUSHED=$((PUSHED + 1)) ;;
       esac
     done
-    [ "${PUSHED}" -gt 0 ] || die "nothing to push — the archives named no tasksense or mongo image"
+    [ "${PUSHED}" -gt 0 ] || die "nothing to push — the archives named no tasksense, mongo, redis or caddy image"
     ok "${PUSHED} image(s) pushed"
   fi
 else
   # ── Straight from the public registries into the mirror ──────────────────
   [ -n "${VERSION}" ] || die "which version? Pass --version, e.g. --version 1.1.0"
-  step "Mirroring TaskSense ${VERSION} and MongoDB ${MONGO_TAG} into ${MIRROR}"
+  step "Mirroring TaskSense ${VERSION}, MongoDB ${MONGO_TAG}, Redis ${REDIS_TAG} and Caddy ${CADDY_TAG} into ${MIRROR}"
 
   # skopeo copies registry to registry without a local daemon and keeps the
   # multi-architecture index; pull/tag/push would flatten it to whichever
   # architecture this machine happens to be.
   if command -v skopeo >/dev/null 2>&1; then
-    for pair in "${APP_SRC}|${MIRROR}/tasksense:${VERSION}" "${MONGO_SRC}|${MIRROR}/mongo:${MONGO_TAG}"; do
+    for pair in "${MIRROR_PAIRS[@]}"; do
       src="${pair%%|*}"; dst="${pair##*|}"
       printf '  %s → %s\n' "${src}" "${dst}"
       skopeo copy --all "docker://${src}" "docker://${dst}" \
@@ -146,7 +162,7 @@ else
   else
     warn "skopeo not found — falling back to pull/tag/push (this machine's architecture only)"
     ensure_registry_login ghcr.io
-    for pair in "${APP_SRC}|${MIRROR}/tasksense:${VERSION}" "${MONGO_SRC}|${MIRROR}/mongo:${MONGO_TAG}"; do
+    for pair in "${MIRROR_PAIRS[@]}"; do
       src="${pair%%|*}"; dst="${pair##*|}"
       "${RUNTIME}" pull "${src}" >/dev/null || die "could not pull ${src}"
       push_pair "${src}" "${dst}"
@@ -159,17 +175,23 @@ if [ -n "${MIRROR}" ]; then
     require_env_file
     env_set "${ENV_FILE}" TASKSENSE_IMAGE "${MIRROR}/tasksense"
     env_set "${ENV_FILE}" MONGO_IMAGE "${MIRROR}/mongo"
+    env_set "${ENV_FILE}" REDIS_IMAGE "${MIRROR}/redis"
+    env_set "${ENV_FILE}" CADDY_IMAGE "${MIRROR}/caddy"
     [ "${MONGO_TAG}" != "7" ] && env_set "${ENV_FILE}" MONGO_VERSION "${MONGO_TAG}"
-    ok "${ENV_FILE}: TASKSENSE_IMAGE=${MIRROR}/tasksense, MONGO_IMAGE=${MIRROR}/mongo"
+    ok "${ENV_FILE}: TASKSENSE_IMAGE=${MIRROR}/tasksense, MONGO_IMAGE=${MIRROR}/mongo, REDIS_IMAGE=${MIRROR}/redis, CADDY_IMAGE=${MIRROR}/caddy"
   else
     step "Mirrored"
     cat <<EOF
 
-  Point the installation at your mirror — BOTH lines, in compose/.env:
+  Point the installation at your mirror — these lines, in compose/.env (the
+  last two matter with the replicas profile only):
 
     TASKSENSE_IMAGE=${MIRROR}/tasksense
     MONGO_IMAGE=${MIRROR}/mongo
 $([ "${MONGO_TAG}" != "7" ] && printf '    MONGO_VERSION=%s\n' "${MONGO_TAG}")
+    REDIS_IMAGE=${MIRROR}/redis
+    CADDY_IMAGE=${MIRROR}/caddy
+
   (or run this again with --update-env). Then:  ./scripts/install.sh
 EOF
   fi

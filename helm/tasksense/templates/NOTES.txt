@@ -4,10 +4,12 @@
 {{- $preBackup := include "tasksense.suffixedName" (dict "root" $ "suffix" "pre-upgrade-backup") -}}
 {{- $ns := .Release.Namespace -}}
 {{- $v := .Values -}}
+{{- $replicas := int $v.replicaCount -}}
 TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }}, release {{ .Release.Name }} (revision {{ .Release.Revision }}) in {{ $ns }}.
 
   image        {{ include "tasksense.image" . }}
-  api          1 replica, strategy Recreate, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
+  api          {{ if include "tasksense.autoscaling" . }}autoscaled {{ int $v.autoscaling.minReplicas }}–{{ int $v.autoscaling.maxReplicas }} replicas (HPA){{ else }}{{ $replicas }} replica{{ if ne $replicas 1 }}s{{ end }}{{ end }}, strategy {{ $v.strategy.type }}, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
+  redis        {{ include "tasksense.redisSummary" . }}
   worker       {{ if $v.worker.enabled }}on — {{ $worker }}, heap {{ $v.worker.heapMb }} MB{{ else }}off (the API runs Jira landings itself; worker.enabled=true for a migration){{ end }}
   migrations   {{ if $v.migrations.enabled }}pre-install/pre-upgrade Job, MIGRATE_ON_BOOT=manual{{ else }}at boot (MIGRATE_ON_BOOT=auto){{ end }}
   backups      {{ if $v.backup.enabled }}nightly "{{ $v.backup.schedule }}"{{ if $v.backup.suspend }} (suspended){{ end }} -> PVC {{ include "tasksense.backupClaimName" . }}, kept {{ $v.backup.retentionDays }} days{{ if and $v.migrations.enabled $v.migrations.backupBeforeUpgrade }}; dump before every upgrade{{ end }}{{ else }}off{{ end }}
@@ -72,6 +74,20 @@ TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }},
    one. No default credential ships with the product.
 {{- end }}
 {{- /* ── warnings ── */}}
+{{- if and (include "tasksense.multiApi" .) (not $v.worker.enabled) }}
+
+WARNING: more than one API pod, and worker.enabled=false. Every pod runs
+  WORKER_ROLE=all, so any of them can adopt a Jira backup landing — hours of
+  parsing in a pod that also serves users, and a landing that resumes in
+  another pod whenever this one is replaced. Set worker.enabled=true: the
+  ReadWriteMany volume it needs is already in place.
+{{- end }}
+{{- if include "tasksense.rollingUpdate" . }}
+
+NOTE: strategy RollingUpdate — two releases serve side by side during an
+  upgrade. Use it only for a release whose notes mark it rolling-safe;
+  otherwise upgrade with --set strategy.type=Recreate. docs/08-UPGRADE.md
+{{- end }}
 {{- if and $v.existingSecret (not $v.appUrl) }}
 
 WARNING: appUrl is empty, so APP_URL and CORS_ALLOWED_ORIGINS must be keys of

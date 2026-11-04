@@ -59,15 +59,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: compose file — bundled, external MongoDB, import worker
+      - name: compose file — bundled, external MongoDB, import worker, replicas
         run: ./tests/compose-topologies.sh
 
       - uses: azure/setup-helm@v4
       # Every scenario lints and renders as an install AND as an upgrade; the
       # two security postures are audited on the rendered output; and every
-      # guard that protects the single-active-API rule (and the rest) must
-      # still refuse with its own message — a guard that silently stops
-      # firing is worse than none.
+      # guard — one API process without Redis, at most 20 with it, shared
+      # storage, never half a Redis configuration, and the rest — must still
+      # refuse with its own message: a guard that silently stops firing is
+      # worse than none.
       - name: chart — scenarios, security posture, refusals
         run: |
           set -euo pipefail
@@ -84,6 +85,22 @@ jobs:
           [ "$(helm template t "$chart" -f "$base" --api-versions route.openshift.io/v1 | grep -c 'runAsUser:')" -eq 0 ]
           [ "$(helm template t "$chart" -f "$chart/values-openshift.yaml" -f "$base" | grep -c 'runAsUser:')" -eq 0 ]
           helm template t "$chart" -f "$chart/ci/full-values.yaml" | grep -A1 'name: AGENT_EXECUTOR' | grep -q '"off"'
+          # One pod keeps its pool and leaves the rate-limit store to the
+          # application; five halve the pool, drain before SIGTERM and share
+          # the web assets for a rolling update.
+          single="$(helm template t "$chart" -f "$base")"
+          grep -q 'MONGODB_MAX_POOL_SIZE: "100"' <<<"$single"
+          if grep -qE 'RATE_LIMIT_STORE|REDIS_|preStop|WEB_ASSETS_SHARED_DIR' <<<"$single"; then echo "one pod renders multi-pod settings"; exit 1; fi
+          multi="$(helm template t "$chart" -f "$chart/ci/multi-replica-values.yaml")"
+          grep -q 'MONGODB_MAX_POOL_SIZE: "50"' <<<"$multi"
+          grep -q 'replicas: 5' <<<"$multi"
+          grep -q 'command: \["sleep", "10"\]' <<<"$multi"
+          grep -q 'name: WEB_ASSETS_SHARED_DIR' <<<"$multi"
+          grep -q 'kind: PodDisruptionBudget' <<<"$multi"
+          hpa="$(helm template t "$chart" -f "$chart/ci/autoscaling-sentinel-values.yaml")"
+          grep -q 'kind: HorizontalPodAutoscaler' <<<"$hpa"
+          api="$(helm template t "$chart" -f "$chart/ci/autoscaling-sentinel-values.yaml" -s templates/deployment.yaml)"
+          if grep -qE '^  replicas:' <<<"$api"; then echo "the API Deployment under an HPA still sets replicas"; exit 1; fi
           while IFS='|' read -r expect args; do
             [ -n "$expect" ] || continue
             # shellcheck disable=SC2086
@@ -105,6 +122,19 @@ jobs:
           no certificate is mounted|--set certs.caBundle=corp-ca.pem
           leaves too little|--set heapMb=2000
           these values come from chart 1.0|--set config=null
+          these values come from an earlier chart (no redis block)|--set redis=null
+          replicaCount=3 is not supported without Redis|--set replicaCount=3 --set persistence.accessMode=ReadWriteMany
+          strategy.type=RollingUpdate is not supported without Redis|--set strategy.type=RollingUpdate
+          replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce)|--set replicaCount=3 --set redis.url=redis://redis:6379
+          replicaCount=21 is above the supported maximum of 20|--set replicaCount=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany
+          autoscaling.maxReplicas=21 is above the supported maximum of 20|--set autoscaling.enabled=true --set autoscaling.maxReplicas=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany
+          redis: set exactly one connection|--set redis.url=redis://redis:6379 --set redis.sentinels=redis-0:26379 --set redis.sentinelName=mymaster
+          config.rateLimitStore=memory with more than one API process|--set replicaCount=3 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany --set config.rateLimitStore=memory
+          config.rateLimitStore=redis needs Redis|--set config.rateLimitStore=redis
+          redis.sentinels needs redis.sentinelName|--set redis.sentinels=redis-0:26379
+          redis.password has no effect without a Redis connection|--set redis.password=secret
+          redis.url is a secret|--set existingSecret=corp --set redis.url=redis://redis:6379
+          must be at least preStopSleepSeconds + 20|--set replicaCount=2 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany --set terminationGracePeriodSeconds=20
           CASES
           for s in scripts/helm-airgap-bundle.sh scripts/helm-airgap-load.sh scripts/wizard/platform-helm.sh; do bash -n "$s"; done
 

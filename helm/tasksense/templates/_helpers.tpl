@@ -362,11 +362,71 @@ booleans pass through as "true"/"false" here and onOff below maps them back.
 {{- regexReplaceAll ":[0-9]+$" (regexReplaceAll "^[^:]+://" $o "") "" -}}
 {{- end -}}
 
+{{/* ── Topology ──────────────────────────────────────────────────────────── */}}
+
+{{/*
+Redis is configured: one of its connection settings is set. The application's
+own rule — Redis is used when one is set and not at all otherwise; there is no
+mode switch. "true" or "".
+*/}}
+{{- define "tasksense.redisConfigured" -}}
+{{- $r := .Values.redis | default dict -}}
+{{- if or $r.url (and $r.existingSecret $r.existingSecretKey) (include "tasksense.csv" $r.sentinels) (include "tasksense.csv" $r.clusterNodes) -}}true{{- end -}}
+{{- end -}}
+
+{{/* More than one API process at a time, by count or by HPA. "true" or "". */}}
+{{- define "tasksense.multiApi" -}}
+{{- $as := .Values.autoscaling | default dict -}}
+{{- if or (gt (int (.Values.replicaCount | default 0)) 1) (and (kindIs "map" $as) (eq (toString (index $as "enabled")) "true")) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "tasksense.autoscaling" -}}
+{{- $as := .Values.autoscaling | default dict -}}
+{{- if and (kindIs "map" $as) (eq (toString (index $as "enabled")) "true") -}}true{{- end -}}
+{{- end -}}
+
+{{- define "tasksense.rollingUpdate" -}}
+{{- if eq (toString (dig "type" "Recreate" (.Values.strategy | default dict))) "RollingUpdate" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The preStop drain: whenever a stopping API pod has a peer that keeps serving —
+more than one pod, or a rolling update. "true" or "".
+*/}}
+{{- define "tasksense.preStop" -}}
+{{- if and (or (include "tasksense.multiApi" .) (include "tasksense.rollingUpdate" .)) (gt (int (.Values.preStopSleepSeconds | default 0)) 0) -}}true{{- end -}}
+{{- end -}}
+
+{{/* For NOTES: what Redis is, in one line. */}}
+{{- define "tasksense.redisSummary" -}}
+{{- $r := .Values.redis | default dict -}}
+{{- $out := "" -}}
+{{- if $r.url -}}
+{{- $out = "REDIS_URL (chart Secret)" -}}
+{{- else if and $r.existingSecret $r.existingSecretKey -}}
+{{- $out = printf "REDIS_URL from Secret %s" $r.existingSecret -}}
+{{- else if include "tasksense.csv" $r.sentinels -}}
+{{- $out = printf "sentinels %s, master %s" (include "tasksense.csv" $r.sentinels) (toString $r.sentinelName) -}}
+{{- else if include "tasksense.csv" $r.clusterNodes -}}
+{{- $out = printf "cluster %s" (include "tasksense.csv" $r.clusterNodes) -}}
+{{- end -}}
+{{- if $out -}}
+{{- if eq (toString $r.tls) "true" }}{{ $out = printf "%s, TLS" $out }}{{ end -}}
+{{- printf "%s, key prefix %s" $out ($r.keyPrefix | default "tasksense:") -}}
+{{- else -}}
+off — the API runs as one process
+{{- end -}}
+{{- end -}}
+
 {{/* ── Environment ───────────────────────────────────────────────────────── */}}
 
 {{/*
 The non-secret configuration, as a map rendered into the ConfigMap and its
 hook copy. Sorted by toYaml, so the checksum only moves when a value does.
+A setting the application treats as "unset" when empty (RATE_LIMIT_STORE,
+TRUST_PROXY, every REDIS_*) is left out rather than rendered empty: an empty
+REDIS_SENTINEL_NAME is still a half-made Redis configuration to the
+application's validation, which refuses to boot on one.
 */}}
 {{- define "tasksense.configData" -}}
 {{- $c := .Values.config -}}
@@ -393,14 +453,27 @@ hook copy. Sorted by toYaml, so the checksum only moves when a value does.
 {{- $_ := set $d "MONGODB_TIMEOUT_MS" (include "tasksense.str" $c.mongodbTimeoutMs) -}}
 {{- $_ := set $d "MONGODB_OP_TIMEOUT_MS" (include "tasksense.str" $c.mongodbOpTimeoutMs) -}}
 {{- $_ := set $d "MONGODB_MIN_POOL_SIZE" (include "tasksense.str" $c.mongodbMinPoolSize) -}}
-{{- $_ := set $d "MONGODB_MAX_POOL_SIZE" (include "tasksense.str" $c.mongodbMaxPoolSize) -}}
+{{- /* Per process; the default halves with more than one API pod, so 20 pods
+       hold 1000 connections rather than 2000 (values.yaml). */ -}}
+{{- $pool := include "tasksense.str" $c.mongodbMaxPoolSize -}}
+{{- if not $pool -}}{{- $pool = ternary "50" "100" (eq (include "tasksense.multiApi" .) "true") -}}{{- end -}}
+{{- $_ := set $d "MONGODB_MAX_POOL_SIZE" $pool -}}
 {{- $_ := set $d "MONGODB_COMPRESSORS" (include "tasksense.str" $c.mongodbCompressors) -}}
 {{- $_ := set $d "SESSION_TTL_HOURS" (include "tasksense.str" $c.sessionTtlHours) -}}
 {{- $_ := set $d "SWAGGER_ENABLED" (ternary "true" "false" (eq (toString $c.swaggerEnabled) "true")) -}}
 {{- $_ := set $d "OWNER_EMAILS" (include "tasksense.csv" $c.ownerEmails) -}}
 {{- $_ := set $d "AGENT_DISPATCHER" (include "tasksense.onOff" $c.agentDispatcher) -}}
 {{- $_ := set $d "EGRESS_ALLOWLIST" (include "tasksense.csv" $c.egressAllowlist) -}}
-{{- $_ := set $d "RATE_LIMIT_STORE" (include "tasksense.str" $c.rateLimitStore) -}}
+{{- with include "tasksense.str" $c.rateLimitStore }}{{ $_ := set $d "RATE_LIMIT_STORE" . }}{{ end -}}
+{{- with include "tasksense.str" $c.trustProxy }}{{ $_ := set $d "TRUST_PROXY" . }}{{ end -}}
+{{- with .Values.redis -}}
+{{- with include "tasksense.csv" .sentinels }}{{ $_ := set $d "REDIS_SENTINELS" . }}{{ end -}}
+{{- with .sentinelName }}{{ $_ := set $d "REDIS_SENTINEL_NAME" (toString .) }}{{ end -}}
+{{- with include "tasksense.csv" .clusterNodes }}{{ $_ := set $d "REDIS_CLUSTER_NODES" . }}{{ end -}}
+{{- with .username }}{{ $_ := set $d "REDIS_USERNAME" (toString .) }}{{ end -}}
+{{- if eq (toString .tls) "true" }}{{ $_ := set $d "REDIS_TLS" "true" }}{{ end -}}
+{{- with .keyPrefix }}{{ $_ := set $d "REDIS_KEY_PREFIX" (toString .) }}{{ end -}}
+{{- end -}}
 {{- $_ := set $d "STORAGE_MAX_FILE_MB" (include "tasksense.str" $c.storageMaxFileMb) -}}
 {{- $_ := set $d "STORAGE_MAX_VIDEO_FILE_MB" (include "tasksense.str" $c.storageMaxVideoFileMb) -}}
 {{- $_ := set $d "JIRA_BACKUP_MAX_GB" (include "tasksense.str" $c.jiraBackupMaxGb) -}}
@@ -436,6 +509,11 @@ hook copy. Sorted by toYaml, so the checksum only moves when a value does.
 {{- if and .Values.metrics.enabled .Values.metrics.token }}{{ $_ := set $d "METRICS_TOKEN" (toString .Values.metrics.token) }}{{ end -}}
 {{- if and $c.oidc $c.oidc.clientSecret }}{{ $_ := set $d "OIDC_CLIENT_SECRET" (toString $c.oidc.clientSecret) }}{{ end -}}
 {{- if and $c.smtp $c.smtp.pass }}{{ $_ := set $d "SMTP_PASS" (toString $c.smtp.pass) }}{{ end -}}
+{{- with .Values.redis -}}
+{{- with .url }}{{ $_ := set $d "REDIS_URL" (toString .) }}{{ end -}}
+{{- with .password }}{{ $_ := set $d "REDIS_PASSWORD" (toString .) }}{{ end -}}
+{{- with .sentinelPassword }}{{ $_ := set $d "REDIS_SENTINEL_PASSWORD" (toString .) }}{{ end -}}
+{{- end -}}
 {{- toYaml $d -}}
 {{- end -}}
 
@@ -466,6 +544,34 @@ Call with (dict "root" $ "role" "api|worker|migrate" "heapMb" <n>).
 {{- else if eq .role "worker" }}
 - name: WORKER_ROLE
   value: worker
+{{- end }}
+{{- /* Redis from a Secret the operator manages: for every role, the migration
+       Job included. It validates the same configuration, the rest of which
+       (REDIS_USERNAME, REDIS_SENTINELS …) reaches it through the ConfigMap —
+       and half of a Redis configuration is one it refuses to start on. */}}
+{{- $redis := $root.Values.redis | default dict }}
+{{- if $redis.existingSecret }}
+{{- if $redis.existingSecretKey }}
+- name: REDIS_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redis.existingSecret }}
+      key: {{ $redis.existingSecretKey }}
+{{- end }}
+{{- if $redis.existingSecretPasswordKey }}
+- name: REDIS_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ $redis.existingSecret }}
+      key: {{ $redis.existingSecretPasswordKey }}
+{{- end }}
+{{- end }}
+{{- if and (eq .role "api") (include "tasksense.rollingUpdate" $root) }}
+- name: WEB_ASSETS_SHARED_DIR
+  # A rolling update runs two releases side by side. Each pod copies its
+  # build's content-hashed scripts here and serves them after its own, so a
+  # page loaded from one release finds its chunks on a pod of the other.
+  value: /app/api/data/web-assets
 {{- end }}
 {{- with $root.Values.certs.caBundle }}
 - name: NODE_EXTRA_CA_CERTS

@@ -1,0 +1,23 @@
+{{- include "tasksense.validate" . -}}
+{{- if eq (toString .Values.podDisruptionBudget.enabled) "true" }}
+# A node drain evicts the API pods one at a time, waiting for each
+# replacement to be ready before the next. Only with Redis and a ReadWriteMany
+# data volume — the chart refuses it otherwise.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "tasksense.fullname" . }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "api") | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  {{- if semverCompare ">=1.27-0" .Capabilities.KubeVersion.Version }}
+  # A pod that is not ready serves nobody, so evicting it costs nothing. Without
+  # this a drain during an outage (Redis or MongoDB down: every pod unready)
+  # would wait for pods that cannot become ready. Kubernetes 1.27 and later.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "tasksense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

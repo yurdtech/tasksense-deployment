@@ -15,8 +15,9 @@
 # docs/17-ENVIRONMENT.md describes each one, docs/02-INSTALL-KUBERNETES.md has
 # the reference table.
 #
-# Do not upgrade with --reuse-values from chart 1.0: it drops every default
-# this version adds. Use `-f my-values.yaml` (or --reset-then-reuse-values).
+# Do not upgrade with --reuse-values from an earlier chart: it drops every
+# default this version adds. Use `-f my-values.yaml` (or
+# --reset-then-reuse-values).
 
 global:
   # Air-gap / internal mirror. Replaces the registry HOST of every image and
@@ -98,14 +99,59 @@ existingSecret: ""
 
 # ── The application process (API) ────────────────────────────────────────────
 
-# Must be 1 (0 to stop it). The API is a single active process by design: its
-# schedulers and the live-update feed are in-process, with no distributed lock,
-# so a second replica runs every scheduled job twice. The chart refuses more,
-# deploys with strategy Recreate (never two overlapping during an upgrade), and
-# has no HPA and no PodDisruptionBudget. Availability = Kubernetes restarting the
-# pod + a MongoDB replica set; heavy imports = worker.enabled.
+# API pods. 1 without Redis — one process, as before: sign-in tickets, lockout
+# and rate-limit counters, cache invalidations and the live-update fan-out live
+# in its memory, and the chart refuses more. 2 to 20 with redis.* configured
+# AND persistence.accessMode: ReadWriteMany (every pod mounts the data volume):
+# that state is then shared through Redis, and every scheduler and sweep runs
+# under a MongoDB job lease, so each runs once whatever the count. 0 stops it.
+# With autoscaling.enabled the HPA owns the count and this is ignored.
 # docs/15-SCALING-AND-HA.md
 replicaCount: 1
+
+# How a `helm upgrade` replaces the pods.
+#   Recreate       (default) the old pods stop before the new ones start: a short
+#                  outage, and never two releases side by side.
+#   RollingUpdate  new pods start while the old ones serve. Needs Redis and a
+#                  ReadWriteMany volume, and only for a release whose notes mark
+#                  it rolling-safe (migrations backwards compatible, API and the
+#                  previous web build compatible both ways). The chart then sets
+#                  WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets, so a page from
+#                  either release finds its scripts on any pod. docs/08-UPGRADE.md
+strategy:
+  type: Recreate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# A HorizontalPodAutoscaler (autoscaling/v2) for the API. Same requirements as
+# replicaCount > 1; maxReplicas is at most 20. A target needs the matching
+# resources.requests entry.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: ""    # e.g. 80; empty = CPU only
+
+# A PodDisruptionBudget (policy/v1) for the API: maxUnavailable: 1, so a node
+# drain takes the pods one at a time. Same requirements as replicaCount > 1.
+podDisruptionBudget:
+  enabled: false
+
+# With more than one API pod (or RollingUpdate): seconds a stopping pod keeps
+# serving after it is taken out of the Service, before SIGTERM — the time the
+# ingress needs to stop routing to it, so requests and live-update streams are
+# not cut mid-flight. terminationGracePeriodSeconds must be at least this + 20.
+# 0 turns it off.
+preStopSleepSeconds: 10
+
+# Spread the API pods across nodes / zones. Rendered verbatim; an entry without
+# a labelSelector gets the API pods' own.
+topologySpreadConstraints: []
+#  - maxSkew: 1
+#    topologyKey: kubernetes.io/hostname
+#    whenUnsatisfiable: ScheduleAnyway
 
 # V8 old-space ceiling, rendered as NODE_OPTIONS=--max-old-space-size=<MB>.
 # Node sizes its heap from the NODE's memory, not the container limit, so
@@ -122,7 +168,8 @@ resources:
     # nobody can explain. The request reserves the capacity.
     memory: 2Gi
 
-# SIGTERM → drain. Matches the compose stop_grace_period.
+# SIGTERM → drain. Matches the compose stop_grace_period. Includes the preStop
+# sleep when there is one.
 terminationGracePeriodSeconds: 45
 
 priorityClassName: ""
@@ -139,7 +186,8 @@ worker:
   # it lands Jira site backups (lease-based, resumes from checkpoints) so a
   # multi-gigabyte migration can never take the user-facing API down with it.
   # When on, the API runs with WORKER_ROLE=api. Exactly one; turn it on for a
-  # Jira migration.
+  # Jira migration — and always with more than one API pod, or every pod runs
+  # WORKER_ROLE=all and any of them may adopt a landing that takes hours.
   #
   # Needs persistence.accessMode: ReadWriteMany — uploads are staged on the data
   # volume by the API and landed from the same files by the worker, usually on
@@ -162,6 +210,51 @@ worker:
   podAnnotations: {}
   podLabels: {}
 
+# ── Redis (more than one API pod) ────────────────────────────────────────────
+#
+# Not bundled: your Redis (6 or newer recommended; Sentinel for availability).
+# Used when configured, not at all otherwise — there is no mode switch. With
+# it the API pods share sign-in tickets, lockout and rate-limit counters and
+# job status, and hear each other's cache invalidations and live-update pings.
+# Configured but unreachable is an outage, never a fallback: readiness answers
+# 503 until it is back. Keep these keys from eviction (maxmemory-policy
+# noeviction, or a Redis of its own). docs/16-EXTERNAL-DATABASES.md
+#
+# Exactly ONE connection: url (or existingSecret), sentinels, or clusterNodes.
+# Every value below reaches the API, the worker and the migration Job, and
+# only when set — the application refuses a half-made Redis configuration.
+redis:
+  # REDIS_URL (Secret): redis://[user:password@]host:6379[/db], rediss:// for
+  # TLS. Percent-encode / : @ ? # [ ] % in the password.
+  url: ""
+  # Or a Secret you manage: REDIS_URL from existingSecretKey (empty when the
+  # Secret only holds the password for sentinels / cluster), REDIS_PASSWORD
+  # from existingSecretPasswordKey. It may be the same Secret as
+  # existingSecret above. With existingSecret set, url / password /
+  # sentinelPassword must come from a Secret like this — the chart refuses them
+  # inline.
+  existingSecret: ""
+  existingSecretKey: REDIS_URL
+  existingSecretPasswordKey: ""
+  # REDIS_PASSWORD (Secret) — for sentinels / cluster, or to override the
+  # URL's own.
+  password: ""
+  # REDIS_SENTINELS + REDIS_SENTINEL_NAME (+ REDIS_SENTINEL_PASSWORD, Secret,
+  # when the sentinels have their own). List or comma-separated host:port.
+  sentinels: []
+  sentinelName: ""
+  sentinelPassword: ""
+  # REDIS_CLUSTER_NODES — Redis Cluster seed nodes, host:port.
+  clusterNodes: []
+  # REDIS_USERNAME — ACL user for sentinels / cluster (a URL carries its own).
+  username: ""
+  # REDIS_TLS — TLS to sentinels / cluster nodes (a URL says it with
+  # rediss://). The CA is certs.caBundle, the same one MongoDB's TLS uses.
+  tls: false
+  # REDIS_KEY_PREFIX — prepended to every key and channel; empty = tasksense:.
+  # Give each installation sharing one Redis its own.
+  keyPrefix: ""
+
 # ── Application settings → ConfigMap (non-secret) / Secret (secret) ──────────
 #
 # Rendered explicitly, so `kubectl get configmap <release>-env -o yaml` is an
@@ -178,10 +271,13 @@ config:
   # MONGODB_OP_TIMEOUT_MS — deadline of one operation; 0 disables. Long jobs
   # (imports, exports, backups, migrations) run without it.
   mongodbOpTimeoutMs: 30000
-  # MONGODB_MIN_POOL_SIZE / MONGODB_MAX_POOL_SIZE — one API process holds the
-  # whole pool; the worker opens its own.
+  # MONGODB_MIN_POOL_SIZE / MONGODB_MAX_POOL_SIZE — per process: every API pod
+  # and the worker open their own pool. Empty max = 100 for one API pod, 50 with
+  # replicaCount > 1 or autoscaling — the budget is (API pods at most + 1 worker)
+  # x the pool: 20 x 50 = 1000 connections, + 50 for the worker. An explicit
+  # value wins; check it against MongoDB's connection limit. docs/11-SIZING.md
   mongodbMinPoolSize: 10
-  mongodbMaxPoolSize: 100
+  mongodbMaxPoolSize: ""
   # MONGODB_COMPRESSORS — zlib | none. zlib pays off across a network; `none`
   # only when MongoDB shares the host.
   mongodbCompressors: zlib
@@ -210,10 +306,17 @@ config:
   # internal object store must be listed or Admin → Storage will not save it.
   egressAllowlist: []
 
-  # RATE_LIMIT_STORE — memory | mongo. memory is right for the single API
-  # process; mongo keeps counters across restarts at one round trip per
-  # throttled request.
-  rateLimitStore: memory
+  # RATE_LIMIT_STORE — memory | mongo | redis. Empty (the default) leaves it to
+  # the application: redis when Redis is configured, memory otherwise. memory
+  # is refused with more than one API pod (each would count only what reached
+  # it: N times every limit); mongo keeps counters across restarts at one round
+  # trip per throttled request.
+  rateLimitStore: ""
+
+  # TRUST_PROXY — reverse-proxy hops in front of the API whose X-Forwarded-For
+  # is believed. Empty = the application's 1: the ingress controller / router.
+  # One more for every load balancer in front of it that appends to the header.
+  trustProxy: ""
 
   # Upload ceilings. Attachments and the Jira/archive uploads travel through
   # the upload ingress rule (ingress.uploadMaxBody), not the 25m default.
@@ -340,8 +443,10 @@ persistence:
   # is staged here in full and kept for config.jiraBackupRetentionDays. Size it
   # for at least 2 x config.jiraBackupMaxGb on top of your attachments.
   #
-  # ReadWriteOnce is right for the API alone. worker.enabled needs
-  # ReadWriteMany. Disabled = an emptyDir: files vanish with the pod (trials only).
+  # ReadWriteOnce is right for one API pod alone. worker.enabled, more than one
+  # API pod, autoscaling and RollingUpdate need ReadWriteMany: attachments,
+  # BACKUP_DIR and the staged uploads must be the same files on every pod.
+  # Disabled = an emptyDir: files vanish with the pod (trials only).
   enabled: true
   accessMode: ReadWriteOnce
   size: 50Gi
@@ -430,6 +535,14 @@ networkPolicy:
   #            kubernetes.io/metadata.name: mongodb
   #    ports:
   #      - port: 27017
+  # Redis (only when redis.* is configured): egress on these ports — 6379 for
+  # the data nodes, 26379 for sentinels. Empty cidrs and namespaceSelector =
+  # these ports to any address; set one to narrow it.
+  redis:
+    ports: [6379, 26379]
+    cidrs: []
+    namespaceSelector: {}
+    #  kubernetes.io/metadata.name: redis
   # Namespaces (label selectors) allowed to reach the API beyond the ingress
   # controller.
   ingressNamespaceSelectors: []

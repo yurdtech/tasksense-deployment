@@ -38,7 +38,7 @@ fresh() {  # fresh [fixture overrides…] — a new sandbox with a configured .e
   sandbox "${WORK}/case-${CASE}"
   printf '#!/usr/bin/env bash\nexit 0\n' > "${SANDBOX}/scripts/preflight.sh"
   fixture_env "${SANDBOX}/compose/.env" "$@"
-  unset FAKE_RUNNING FAKE_PENDING FAKE_BAD_VERSION FAKE_BAD_STAGE FAKE_DUMP_FAIL FAKE_IMAGE_RC FAKE_SCHEMA
+  unset FAKE_RUNNING FAKE_PENDING FAKE_BAD_VERSION FAKE_BAD_STAGE FAKE_DUMP_FAIL FAKE_IMAGE_RC FAKE_SCHEMA FAKE_APP_REPLICAS
 }
 envv() { sed -n "s/^$1=//p" "${SANDBOX}/compose/.env" | tail -n1; }
 # $1 is a glob on purpose (tasksense-*Z.tar.gz) — quoting it would match nothing.
@@ -109,6 +109,26 @@ contains "--stop-app: consistent" "\"consistent\": true" "$(manifest "${A}")"
 before "--stop-app: the worker is stopped before the dump" "^stop -t 45 tasksense-worker" "mongodump"
 before "--stop-app: and the app" "^stop -t 45 tasksense-app" "mongodump"
 before "--stop-app: and both started again after" "mongodump" " up -d$"
+
+# The replicas profile: the copies have no fixed name, so stopping
+# `tasksense-app` alone would stop nothing and dump beside live writers.
+REPLICAS_ENV="COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis"
+fresh "${REPLICAS_ENV}" "WORKER_ROLE=api" "BUNDLED_REDIS_PASSWORD=${PASSWORD}"
+export FAKE_RUNNING="tasksense-worker tasksense-mongo" FAKE_APP_REPLICAS="c0ffee01 c0ffee02 c0ffee03"
+"${SANDBOX}/scripts/backup.sh" >/dev/null 2>&1
+A="$(newest 'tasksense-[0-9]*Z.tar.gz')"
+contains "replicas: running copies make a live backup say so" "\"consistent\": false" "$(manifest "${A}")"
+fresh "${REPLICAS_ENV}" "WORKER_ROLE=api" "BUNDLED_REDIS_PASSWORD=${PASSWORD}"
+export FAKE_RUNNING="tasksense-worker tasksense-mongo" FAKE_APP_REPLICAS="c0ffee01 c0ffee02 c0ffee03"
+"${SANDBOX}/scripts/backup.sh" --stop-app >/dev/null 2>&1
+A="$(newest 'tasksense-[0-9]*Z.tar.gz')"
+contains "replicas --stop-app: consistent" "\"consistent\": true" "$(manifest "${A}")"
+before "replicas --stop-app: every copy is stopped before the dump" \
+  "^compose -f docker-compose.yml -f docker-compose.replicas.yml --env-file .* stop -t 45 app$" "mongodump"
+before "replicas --stop-app: the worker before them" "^stop -t 45 tasksense-worker" " stop -t 45 app$"
+before "replicas --stop-app: and the stack started again with the override" "mongodump" \
+  "^compose -f docker-compose.yml -f docker-compose.replicas.yml --env-file .* up -d$"
+lacks "replicas: the Redis password is in no command line" "${PASSWORD}" "$(docker_calls)"
 
 fresh "COMPOSE_PROFILES=" "MONGO_USER=" "MONGO_PASSWORD=" "MONGODB_DB=tasks_prod" \
   "MONGODB_URI=mongodb://ts:Sup3rS3cret@db.acme.invalid:27017/admin?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem"

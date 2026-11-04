@@ -12,6 +12,10 @@
 #   FAKE_COMPOSE_VERSION   what `compose version --short` reports (2.29.7)
 #   FAKE_RUNNING           space-separated container names that are running —
 #                          until a `stop` names them; `compose up` starts them again
+#   FAKE_APP_REPLICAS      space-separated ids of running copies of the app
+#                          service (the replicas profile), which have no fixed
+#                          name: what `compose ps -q … app` prints — until a
+#                          `compose stop … app`; `compose up` starts them again
 #   FAKE_DUMP_FAIL=1       mongodump fails
 #   FAKE_PENDING           what `migrate … status` reports pending (0)
 #   FAKE_BAD_VERSION       TASKSENSE_VERSION whose `migrate` / `up` fail
@@ -62,6 +66,16 @@ compose_cmd() {
     up)
       [ "${bad}" = "1" ] && [ "${FAKE_BAD_STAGE:-up}" = "up" ] && { echo 'service "app" exited (1)' >&2; return 1; }
       : > "${STOPPED}"
+      rm -f "${STOPPED}.app"
+      return 0 ;;
+    ps)
+      if [ -n "${FAKE_APP_REPLICAS:-}" ] && [ ! -f "${STOPPED}.app" ]; then
+        # shellcheck disable=SC2086  # one id per word, on purpose
+        case " $* " in *" app "*) printf '%s\n' ${FAKE_APP_REPLICAS} ;; esac
+      fi
+      return 0 ;;
+    stop)
+      case " $* " in *" app "*) : > "${STOPPED}.app" ;; esac
       return 0 ;;
     exec)
       case "$*" in

@@ -312,6 +312,24 @@ Compose's `!reset` tag and needs **Docker Compose 2.24.4 or newer**;
 stop every replica, back up, migrate and start them again — the same window
 as one process.
 
+**Changing the number of replicas.** Set `APP_REPLICAS` in `compose/.env`,
+then run:
+
+```bash
+docker compose --env-file compose/.env -f compose/docker-compose.yml \
+  -f compose/docker-compose.replicas.yml up -d --no-recreate app
+```
+
+The running replicas keep serving. Compose starts the new ones, or stops the
+extra ones, and `tasksense-lb` routes to a new replica once it reports ready.
+
+Leave out `--no-recreate`, as `./tasksense configure` does, and every replica is
+recreated at once: `APP_REPLICAS` is part of every container's environment.
+That is a short outage.
+
+Measured on 2026-11-04: 3 → 5 → 2 replicas, with one replica killed in
+between, under steady traffic. Not one request failed.
+
 ---
 
 ## TRUST_PROXY: how many proxies to believe

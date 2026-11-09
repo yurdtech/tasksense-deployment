@@ -11,7 +11,8 @@ does, what we recommend for production — is [17-ENVIRONMENT](17-ENVIRONMENT.md
 | Kind | Docker Compose | Helm | Restart to apply |
 | --- | --- | --- | --- |
 | Deployment settings — address, database, secrets, OIDC, limits, logging | `compose/.env` | `my-values.yaml` (`config.*` and friends) | yes |
-| Secrets — `STORAGE_SECRET`, `MONGODB_URI`, `OIDC_CLIENT_SECRET`, `SMTP_PASS`, `METRICS_TOKEN`, `LICENSE_KEY` | `compose/.env` (mode `600`) | a Kubernetes Secret (yours, or the chart's) | yes |
+| Secrets — `STORAGE_SECRET`, `MONGODB_URI`, `OIDC_CLIENT_SECRET`, `SMTP_PASS`, `METRICS_TOKEN`, `LICENSE_KEY`, `REDIS_URL` / `REDIS_PASSWORD` | `compose/.env` (mode `600`) | a Kubernetes Secret (yours, or the chart's) | yes |
+| Several API processes — Redis, replica count | `COMPOSE_PROFILES` (`replicas`, `bundled-redis`), `APP_REPLICAS`, `REDIS_*` | `replicaCount`, `autoscaling.*`, `redis.*` | yes |
 | CA certificates for outbound TLS | `compose/certs/` → `/certs` | `certs.*` values → `/certs` | yes |
 | Directory sign-in (LDAP / AD), self-registration | **in the application** — Admin → Authentication | same | no |
 | Session lifetime, password minimum | `SESSION_TTL_HOURS`; overridable in Admin → Security | same | no (Admin) |
@@ -32,13 +33,17 @@ Three layers, each before the next can fail more confusingly:
 1. **`./scripts/preflight.sh`** (Compose) reads `.env` and the host:
    placeholders left in, duplicate keys, permissions, `STORAGE_SECRET` length,
    `COMPOSE_PROFILES` against `MONGODB_URI`, the import worker without
-   `WORKER_ROLE=api`, an external MongoDB that does not answer, CA files
-   missing from `certs/`, `AGENT_EXECUTOR` other than `off`, Swagger on, a
-   session lifetime of `0`, free disk, the port, and whether Compose accepts
-   the file. Exit 0 = ready, 1 = blocking problem; warnings do not fail.
+   `WORKER_ROLE=api`, the `replicas` profile without the import worker or
+   without exactly one Redis (or on a Compose older than 2.24.4),
+   `TRUST_PROXY` below 2 behind its load balancer, an external MongoDB that
+   does not answer, CA files missing from `certs/`, `AGENT_EXECUTOR` other
+   than `off`, Swagger on, a session lifetime of `0`, free disk, the port, and
+   whether Compose accepts the file. Exit 0 = ready, 1 = blocking problem;
+   warnings do not fail.
 2. **Helm** refuses to render an unsupported values file: more than one API
-   replica, autoscaling, the worker without a `ReadWriteMany` volume, a short
-   `storageSecret`.
+   replica, autoscaling or a disruption budget without Redis and a
+   `ReadWriteMany` volume, more than 20 replicas, two Redis connections at
+   once, the worker without a `ReadWriteMany` volume, a short `storageSecret`.
 3. **The application** validates its whole environment at startup and refuses
    to run on an invalid one, listing every problem at once:
 
@@ -83,10 +88,18 @@ Compose decides which optional services run from `COMPOSE_PROFILES` in `.env`:
 | --- | --- | --- |
 | `bundled-mongo` | MongoDB 7 beside the application | You do not bring your own database. The default in `.env.example`. |
 | `import-worker` | The Jira import worker | You are landing a large Jira site backup. Requires `WORKER_ROLE=api`. |
+| `replicas` | `APP_REPLICAS` API containers behind a load balancer, `tasksense-lb` (`compose/docker-compose.replicas.yml`) | One process is not enough ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)). Requires `import-worker`, a Redis, and Docker Compose 2.24.4 or newer. |
+| `bundled-redis` | Redis 7 beside them | With `replicas`, when you do not bring your own Redis. Requires `BUNDLED_REDIS_PASSWORD`. |
 
 Comma-separated, e.g. `COMPOSE_PROFILES=bundled-mongo,import-worker`; empty runs
-neither. The `migrate` service always runs, once, before the application. On
-Helm the same choices are `worker.enabled` and — always — your own MongoDB.
+none of them. The `migrate` service always runs, once, before the application.
+On Helm the same choices are `worker.enabled`, `replicaCount` with `redis.*`,
+and — always — your own MongoDB and Redis.
+
+With `replicas`, the scripts run Compose with both files —
+`docker compose -f docker-compose.yml -f docker-compose.replicas.yml`. Do the
+same by hand: without the second `-f`, Compose sees one `app` container with a
+host port and none of the load balancer or Redis.
 
 ---
 
@@ -158,7 +171,7 @@ provider. Your firewall or NetworkPolicy still has to let them through
 ```bash
 ${EDITOR:-vi} compose/.env
 ./scripts/preflight.sh
-docker compose -f compose/docker-compose.yml up -d
+docker compose -f compose/docker-compose.yml up -d     # with replicas: add -f compose/docker-compose.replicas.yml
 curl -fsS http://127.0.0.1:3000/api/v1/health
 ```
 
@@ -183,6 +196,11 @@ Settings that deserve care:
 - **`COMPOSE_PROFILES` / `MONGODB_URI`** — switching between the bundled and an
   external database does not move the data; restore a backup
   ([16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md#moving-from-the-bundled-database-to-yours)).
+- **`replicas` and Redis** — adding or removing the `replicas` profile changes
+  which container holds the port. Apply it with `./scripts/install.sh` rather
+  than a bare `docker compose up`: when the profile goes, the scripts stop the
+  load balancer and the bundled Redis, which would otherwise keep the port.
+  Nothing in Redis needs to be carried across.
 
 ---
 

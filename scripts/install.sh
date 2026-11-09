@@ -8,8 +8,9 @@
 #
 # What runs is COMPOSE_PROFILES: bundled-mongo for the database beside the app,
 # nothing for your own MongoDB (MONGODB_URI), import-worker for a separate
-# Jira-import process. The migrate step runs first, every time; the app starts
-# only once it has succeeded.
+# Jira-import process, replicas (with bundled-redis or your own Redis) for
+# several API processes behind a load balancer. The migrate step runs first,
+# every time; the app starts only once it has succeeded.
 #
 # Safe to re-run: it starts what is not running and leaves existing data alone.
 
@@ -39,6 +40,11 @@ if bundled_mongo_enabled; then
 else
   require_env_values TASKSENSE_VERSION APP_URL STORAGE_SECRET MONGODB_URI
 fi
+# The same for the replicas profile's bundled Redis: without its password the
+# copies would start with no Redis at all, each on its own.
+if replicas_enabled && bundled_redis_enabled; then
+  require_env_values BUNDLED_REDIS_PASSWORD
+fi
 
 VERSION="$(env_value TASKSENSE_VERSION)"
 
@@ -52,6 +58,11 @@ else
   note "database: your own — $(uri_redacted "$(env_value MONGODB_URI)")"
 fi
 if import_worker_enabled; then note "import worker: on — Jira landings run in their own process"; fi
+if replicas_enabled; then
+  if bundled_redis_enabled; then RDESC="bundled Redis ($(redis_image))"; else RDESC="your own Redis"; fi
+  REPS="$(env_value APP_REPLICAS)"
+  note "API: ${REPS:-3} processes behind ${LB_CONTAINER} ($(caddy_image)), sharing ${RDESC}"
+fi
 
 if [ "${SKIP_PREFLIGHT}" = "0" ]; then
   if [ "${OFFLINE}" = "1" ]; then "${SCRIPT_DIR}/preflight.sh" --offline
@@ -65,7 +76,8 @@ if [ "${OFFLINE}" = "1" ]; then
 else
   ensure_registry_login
   # Pulls what the enabled profiles use: the application image (app, migrate,
-  # worker) and, with bundled-mongo, the database.
+  # worker), with bundled-mongo the database, and with replicas the load
+  # balancer (and, with bundled-redis, Redis).
   compose pull || die "could not pull the images" \
     "If this host has no route to ghcr.io, install from the offline bundle:" \
     "  ./scripts/install.sh --offline" \
@@ -109,6 +121,8 @@ step "Installed"
 running_version | sed 's/^/  /'
 ADMIN="$(env_value FIRST_ADMIN_EMAIL)"
 URL="$(env_value APP_URL)"
+FILES="-f compose/docker-compose.yml"
+replicas_enabled && FILES="${FILES} -f compose/docker-compose.replicas.yml"
 cat <<EOF
 
   TaskSense is running.
@@ -124,6 +138,6 @@ cat <<EOF
        use your identity provider, or claim it with "Create account".
     3. Schedule backups:  ./scripts/backup.sh from cron — docs/07-BACKUP-DR.md
 
-  Logs:    ${COMPOSE[*]} -f compose/docker-compose.yml logs -f app
+  Logs:    ${COMPOSE[*]} ${FILES} logs -f app
   Health:  curl $(health_url)
 EOF

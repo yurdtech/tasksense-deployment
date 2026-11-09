@@ -2,7 +2,8 @@
 
 Everything your teams need to prepare **before** the installation window,
 in one place: network, DNS and certificates, the reverse proxy, directory and
-SSO, mail, the database, sizing, backups, registry access, and who does what.
+SSO, mail, the database, Redis for several API processes, sizing, backups,
+registry access, and who does what.
 
 Almost every failed first install is one of these not being ready on the day —
 a firewall rule, a certificate chain, a database account. Work through this
@@ -22,12 +23,14 @@ Applies to TaskSense **1.1.0** or later.
 | --- | --- | --- |
 | Platform | **Docker Compose** on one Linux VM · **Helm** on Kubernetes 1.27+ / OpenShift 4.12+ | Same image, same features. Compose is simpler to operate and restore; choose Helm because you already run a cluster ([00-OVERVIEW](00-OVERVIEW.md#choosing-a-platform)). |
 | Database | Bundled MongoDB 7 (Compose only) · your own MongoDB 7 | For production, your own replica set ([16](16-EXTERNAL-DATABASES.md)). Bundled is fine for a pilot. |
+| API processes | One (no Redis) · several, 2–20 (Redis; Helm: `ReadWriteMany` storage) | One up to profile L; several from profile XL ([11-SIZING](11-SIZING.md), [15](15-SCALING-AND-HA.md)). Several needs section 7a. |
 | Software delivery | Pull from `ghcr.io` · mirror into Harbor/Nexus · offline bundle | [13-REGISTRY-ACCESS](13-REGISTRY-ACCESS.md) |
 | Jira migration | XML site backup import · Jira API import · none | A backup import needs the import worker and disk (section 8). |
 | AI features | Off · internal model gateway | Off unless a pilot is approved. Tool-using execution is not available in any case. |
 
 - [ ] Platform agreed
 - [ ] Database option agreed
+- [ ] One API process or several agreed
 - [ ] Delivery path agreed
 
 ---
@@ -51,6 +54,8 @@ run time**.
 | I8 | Jira Cloud (Atlassian's webhook senders) | Reverse proxy, path `/api/v1/integrations/jira-sync/webhook/*` only | 443/tcp | Jira two-way sync: changes made in Jira arrive in seconds. Without it the sync still works, delayed by its sweep interval | If Jira sync |
 
 MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
+The bundled Redis of the Compose `replicas` profile publishes no port either;
+its load balancer takes the place of the application on `BIND_ADDRESS:HTTP_PORT`.
 
 ### Outbound, from the TaskSense host (or pods)
 
@@ -59,6 +64,7 @@ MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
 | O1 | Domain controllers (every domain configured) | 636/tcp (LDAPS) | Directory sign-in | If LDAP |
 | O2 | OIDC identity provider | 443/tcp | Discovery, token, userinfo (server-to-server) | If OIDC |
 | O3 | **Every** MongoDB replica-set member | 27017/tcp (or yours) | The database | Own MongoDB |
+| O3a | **Every** Redis node, and every sentinel | 6379/tcp, 26379/tcp (or yours) | Shared state of several API processes | Several API processes, own Redis |
 | O4 | SMTP relay | 25, 587 or 465/tcp | Notifications, invitations, password reset | If mail |
 | O5 | Object storage (S3 / MinIO / WebDAV) | 443/tcp | Attachments, if not on the volume | If used |
 | O6 | Internal model gateway | 443/tcp (or its port) | AI features | If AI pilot |
@@ -74,7 +80,7 @@ MongoDB (bundled) publishes **no** port. The import worker listens on nothing.
 
 On Kubernetes, express O1–O13 and O15 (the outbound proxy's address, or Atlassian's published ranges) as the chart's NetworkPolicy egress CIDRs
 (default-deny otherwise) and I1/I5 as the ingress-controller and monitoring
-namespaces.
+namespaces; O3a is `networkPolicy.redis.*`.
 
 - [ ] Inbound rules raised
 - [ ] Outbound rules raised, including **every** MongoDB member
@@ -108,7 +114,7 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at your reverse proxy
 
 | # | Requirement | Why |
 | --- | --- | --- |
-| P1 | Forward `Host`, `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto` on **every** path | One proxy hop is trusted for the client address (rate limits, sign-in lockout) and the scheme |
+| P1 | Forward `Host`, `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto` on **every** path; append to `X-Forwarded-For`, do not replace it | `TRUST_PROXY` proxy hops are trusted for the client address (rate limits, sign-in lockout) and the scheme — 1 by default, 2 with the Compose `replicas` load balancer; count every further load balancer that appends ([15](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe)) |
 | P2 | `/api/v1/state/stream` and `/api/v1/agents/events/stream`: response buffering **off**, read timeout **24 h**, query string passed unchanged | Live updates (server-sent events); the query carries a short-lived ticket |
 | P3 | Upload routes — `/api/v1/integrations/{jira,confluence,csv}/…`, `/api/v1/import/…`, `/api/v1/{tasks,docs}/<id>/attachments`, `/rest/api/{2,3}/issue/<key>/attachments`: body limit **21 GB**, request buffering **off**, send/read timeouts **4 h** | Jira site backups (up to `JIRA_BACKUP_MAX_GB`, 20 GB) and attachments; the application enforces the real per-route limits |
 | P4 | Everything else: body limit **25 MB**, read timeout 300 s | |
@@ -186,6 +192,32 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at your reverse proxy
 
 - [ ] Account created and URI handed over through the vault
 - [ ] TLS tested from the TaskSense host (`mongosh "<uri>" --eval 'db.runCommand({ping:1})'`)
+- [ ] Connection limit covers the [budget](11-SIZING.md#the-mongodb-connection-budget): API processes at most × pool size + worker
+
+---
+
+## 7a. Redis (several API processes only)
+
+Skip with one API process. With several, Redis holds the state they share —
+short-lived, no user data — and while it is unreachable **every** API process
+reports not ready ([15](15-SCALING-AND-HA.md#when-redis-is-down)). The Compose
+`replicas` profile can bring its own (`bundled-redis`, one container on the
+same host); for production, your own.
+
+| Item | Requirement / question |
+| --- | --- |
+| Version | 6 or newer recommended (ACL users, TLS) — which version, which distribution? |
+| HA mode | Sentinel recommended (a primary, replicas, three sentinels: master group name and every sentinel's host:port) · single instance · Redis Cluster (every seed node) |
+| TLS | On across a network? Server certificates from your internal CA (covered by the CA bundle, `NODE_EXTRA_CA_CERTS`); sentinels on TLS too? |
+| ACL user | A user of its own, limited to the key prefix and its channels ([16 › The account](16-EXTERNAL-DATABASES.md#the-account)); password delivered through the vault. Separate sentinel password? |
+| Eviction and memory | `maxmemory-policy noeviction`; `maxmemory` agreed (start at 1 GB — not measured); dedicated to TaskSense, or shared with what? |
+| Persistence | Not required by TaskSense — your standard applies |
+| Network path | From every API pod / the TaskSense host and the worker to every node and sentinel (O3a); latency within the data centre |
+| Key prefix | `REDIS_KEY_PREFIX`, default `tasksense:`; a different one for a test installation on the same Redis |
+| Monitoring | Your usual tooling; TaskSense exports `tasksense_redis_up` and the bus metrics |
+
+- [ ] Redis provisioned, account created, connection details handed over through the vault
+- [ ] Reached from the TaskSense host or a pod (`redis-cli --tls --cacert corp-ca.pem -h <host> -p <port> --user <user> --askpass ping` → `PONG`)
 
 ---
 
@@ -194,8 +226,10 @@ TaskSense speaks plain HTTP on port 3000; TLS terminates at your reverse proxy
 | Item | Value |
 | --- | --- |
 | Users (accounts / concurrently active) | ____ / ____ |
-| Profile | S / M / L — [11-SIZING](11-SIZING.md) |
+| Profile | S / M / L / XL / XXL — [11-SIZING](11-SIZING.md) (XL and XXL are estimates) |
 | TaskSense host | vCPU ____ · RAM ____ GB · OS ____ |
+| API processes | ____ (Helm: `replicaCount` or autoscaling min / max ____; Compose: `APP_REPLICAS`) |
+| Data volume (Kubernetes, several API pods) | `ReadWriteMany` storage class ______ |
 | Docker data root (`/var/lib/docker`) on its own volume | ____ GB = images (~3 GB) + attachments + **2 × the Jira backup** + MongoDB (bundled) |
 | Jira site backup size | ____ GB (e.g. a 13 GB backup needs 26 GB free for the import) |
 | Migration window extra | +2 vCPU, +6 GB RAM for the import worker |
@@ -251,6 +285,7 @@ In every case:
 | LDAP service account, groups | | | | **R** | | | C | |
 | OIDC client, MFA policy | | | | **R** | | A | | |
 | MongoDB account, TLS, backups | | | | | **R** | | | advises |
+| Redis (several API processes) — HA, account, TLS | **R** | R | | | R | A | | advises |
 | Registry token, licence key | | | | | | | C | **R** |
 | `.env` / values, install, first admin | C | | | | | | **R** | supports |
 | Backups, restore rehearsal | **R** | | | | R | A | C | supports |
@@ -291,7 +326,8 @@ To agree in the kick-off meeting. The right-hand column is for your values.
 | Logging / SIEM | Container logs → SIEM; audit export or webhook; retention | JSON logs; audit via webhook or periodic export | SIEM: ______ · retention __ days · audit export: ______ |
 | Backup | Nightly `backup.sh` / CronJob, encryption, off-host, quarterly restore test | RPO 24 h / RTO 1 h | schedule: ______ · RPO __ h · RTO __ h · owner: ______ |
 | Network | Ingress 443; egress per section 2; Helm NetworkPolicy | Default-deny egress | egress list approved ☐ · NetworkPolicy ☐ |
-| API replicas | 1 (enforced — single active process) | 1 | 1 |
+| API processes | 1 without Redis (enforced) · 2–20 with Redis (Helm: `ReadWriteMany`; Compose: one host, `replicas` profile) | 1 up to profile L; several from XL | ☐ 1 ☐ ____ · Redis: ______ · HA ☐ Sentinel ☐ Cluster |
+| Upgrades | Stop–migrate–start (default) · rolling, Helm only, for releases marked rolling-safe | Stop–migrate–start in a change window | ☐ change window ☐ rolling where safe |
 | Registry / air-gap | `ghcr.io` read-only token · Harbor mirror · offline bundle; cosign | Harbor mirror | ☐ ghcr.io ☐ Harbor: ______ ☐ offline · cosign ☐ |
 | Licence | `LICENSE_KEY`: organisation, seats, expiry | | seats __ · expiry ______ |
 | Support and SLA | Channel, response times (critical / high / medium), release cadence, vulnerability notice | | channel: ______ · SLA: ______ |
@@ -323,13 +359,17 @@ To agree in the kick-off meeting. The right-hand column is for your values.
 8. **Sessions and passwords.** Your standard for session lifetime and local
    password policy; must directory deactivation cut existing sessions
    immediately (today: at session expiry)?
-9. **Backup and DR.** Who owns backups and restores (infrastructure vs DBA), the
+9. **Redis**, if more than one API process. Who runs it, which version and HA
+   mode (Sentinel?), TLS, the ACL user, `noeviction` and its memory, the network
+   path from every pod and the key prefix — section 7a.
+10. **Backup and DR.** Who owns backups and restores (infrastructure vs DBA), the
    archive encryption key, and whether RPO 24 h / RTO 1 h meet your
    classification for this system.
-10. **Reverse proxy and WAF.** Which product fronts TaskSense, and can it meet
+11. **Reverse proxy and WAF.** Which product fronts TaskSense, and can it meet
     P2–P5 (unbuffered streams, 21 GB unbuffered uploads, 4 h timeouts) — or do
-    the upload routes need a separate path?
-11. **Delivery.** Harbor mirror or offline bundle; the image scanning policy and
+    the upload routes need a separate path? How many proxies append to
+    `X-Forwarded-For` before TaskSense (`TRUST_PROXY`)?
+12. **Delivery.** Harbor mirror or offline bundle; the image scanning policy and
     who signs off findings; the cosign fingerprint exchange.
-12. **Incidents.** Contact and escalation channels on both sides; aligning
+13. **Incidents.** Contact and escalation channels on both sides; aligning
     vendor patch releases with your change windows.

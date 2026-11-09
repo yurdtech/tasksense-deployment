@@ -232,7 +232,7 @@ EOF
   compose down --remove-orphans
   # A service whose profile was switched off since it was created is not part
   # of the project any more as far as `down` is concerned.
-  "${RUNTIME}" rm -f "${APP_CONTAINER}" "${WORKER_CONTAINER}" tasksense-migrate "${MONGO_CONTAINER}" >/dev/null 2>&1 || true
+  "${RUNTIME}" rm -f "${APP_CONTAINER}" "${WORKER_CONTAINER}" tasksense-migrate "${MONGO_CONTAINER}" "${LB_CONTAINER}" "${REDIS_CONTAINER}" >/dev/null 2>&1 || true
   ok "containers removed"
 
   printf '\n'

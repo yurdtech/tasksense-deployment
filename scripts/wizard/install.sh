@@ -434,7 +434,7 @@ if ENV_FILE="${CANDIDATE}" mongo_volume_exists; then
         # holding the volumes are then removed by their fixed names regardless —
         # a service whose profile is off is not in the project `down` sees.
         ENV_FILE="${CANDIDATE}" compose down >/dev/null 2>&1 || true
-        "${RUNTIME}" rm -f tasksense-app tasksense-worker tasksense-migrate tasksense-mongo >/dev/null 2>&1 || true
+        "${RUNTIME}" rm -f tasksense-app tasksense-worker tasksense-migrate tasksense-mongo tasksense-lb tasksense-redis >/dev/null 2>&1 || true
         "${RUNTIME}" volume rm tasksense-app-data >/dev/null 2>&1 || true
         if "${RUNTIME}" volume rm "${MONGO_VOLUME}" >/dev/null 2>&1; then
           ok "removed"

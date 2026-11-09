@@ -132,14 +132,17 @@ Behaviours worth knowing:
 ### Brute force
 
 - Sign-in routes are rate-limited to **10 requests a minute per client
-  address** (the proxy's `X-Forwarded-For`, one hop trusted).
+  address** (the proxy's `X-Forwarded-For`, `TRUST_PROXY` hops trusted — 1 by
+  default, 2 behind the Compose `replicas` load balancer).
 - Independently, **10 failed sign-ins for one identifier within 15 minutes**
   lock that identifier for the rest of the window (HTTP 429) — counted whether
   or not the account exists, so the lock does not reveal which accounts do. A
   successful sign-in clears it.
-- Both counters are in the API's memory (`RATE_LIMIT_STORE=memory`, the single
-  process by design); a restart resets them. Directory accounts are also
-  subject to your AD lockout policy.
+- With one API process (no Redis) both counters are in its memory
+  (`RATE_LIMIT_STORE=memory`); a restart resets them. With Redis they are
+  shared by every API process (`RATE_LIMIT_STORE=redis`) and survive a
+  restart of any of them. Directory accounts are also subject to your AD
+  lockout policy.
 
 ---
 
@@ -169,8 +172,10 @@ one use:
 | `stream` | `/api/v1/state/stream`, `/api/v1/agents/events/stream` | 60 seconds (one connect; a reconnect mints a new one) |
 | `media` | attachment playback | 1 hour |
 
-Tickets are held in the API's memory, by hash; they cannot mint further
-tickets, and signing out, suspension or a password change kills every ticket
+Tickets are held in the API's memory, by hash (with Redis: in Redis, the
+credential encrypted with AES-256-GCM under a key derived from the ticket
+itself, so the contents of Redis alone yield no usable credential). They
+cannot mint further tickets, and signing out, suspension or a password change kills every ticket
 the session minted. What reaches a proxy log or a `Referer` is therefore a
 value that expires within the hour and opens only those routes — and the
 example proxy configurations do not log query strings at all.
@@ -394,7 +399,8 @@ Before going live:
 - [ ] `LOG_FORMAT=json`, logs shipped to the SIEM; audit export or webhook in place
 - [ ] `METRICS_TOKEN` generated; metrics scraped from the monitoring segment only
 - [ ] Backups scheduled off-host, encrypted, *and a restore rehearsed* ([07-BACKUP-DR](07-BACKUP-DR.md))
-- [ ] Helm: `networkPolicy.enabled: true`; one replica (enforced)
+- [ ] Helm: `networkPolicy.enabled: true`; one replica, or several with Redis and `networkPolicy.redis.*` narrowed to where it runs
+- [ ] With Redis: TLS, an ACL user limited to the key prefix, `noeviction`, no network path from anything but TaskSense ([16](16-EXTERNAL-DATABASES.md#redis))
 
 ---
 
@@ -425,9 +431,11 @@ Stated plainly, so they are not discovered during an audit:
    the stored credentials.
 8. **DNS rebinding is not fully closed** in the SSRF guard, and the SMTP, LDAP,
    OIDC and model SDK clients are outside it. Enforce egress at the network.
-9. **Single active process.** Availability comes from restart and a MongoDB
-   replica set, not redundancy of the API ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)).
-   Rate-limit and lockout counters reset when it restarts.
+9. **One API process without Redis.** Availability then comes from restart
+   and a MongoDB replica set, not redundancy of the API, and rate-limit and
+   lockout counters reset when it restarts. Several API processes need Redis,
+   which becomes a dependency of every one of them: while it is unreachable the
+   whole service is unavailable ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)).
 10. **No IP allowlist inside the application.** Enforce at the proxy or
     firewall.
 11. **Uploaded files are not virus-scanned.** Restrict extensions in

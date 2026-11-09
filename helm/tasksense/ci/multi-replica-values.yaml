@@ -1,0 +1,37 @@
+# CI: five API pods — Redis by URL (inline, into the chart Secret), the data
+# volume ReadWriteMany, the import worker, a PodDisruptionBudget, rolling
+# updates with the shared web assets, the preStop drain, spread over nodes,
+# NetworkPolicy with the Redis egress rule narrowed to Redis's namespace.
+appUrl: https://tasksense.corp.internal
+mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin
+storageSecret: ci-storage-secret-0123456789abcdef0123456789
+firstAdminEmail: admin@corp.internal
+replicaCount: 5
+strategy:
+  type: RollingUpdate
+podDisruptionBudget:
+  enabled: true
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+redis:
+  url: redis://:ci-redis-password-0123456789@redis-master.redis.svc:6379/0
+  keyPrefix: "tasksense-prod:"
+worker:
+  enabled: true
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: nfs-rwx
+  size: 200Gi
+networkPolicy:
+  enabled: true
+  egressCIDRs: [10.20.0.0/16]
+  redis:
+    namespaceSelector:
+      kubernetes.io/metadata.name: redis
+ingress:
+  enabled: true
+  tls:
+    - secretName: tasksense-tls
+      hosts: [tasksense.corp.internal]

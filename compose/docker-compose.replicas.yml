@@ -1,0 +1,177 @@
+# TaskSense — several API processes on one host (Docker Compose ≥ 2.24.4).
+#
+# An override of docker-compose.yml, never used on its own. You do not name it
+# yourself: put `replicas` in COMPOSE_PROFILES and the scripts add it —
+#
+#   COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+#
+# — the same as `docker compose -f docker-compose.yml -f docker-compose.replicas.yml`
+# when you run compose by hand.
+#
+# What changes:
+#
+#   app      APP_REPLICAS copies (default 3, at most 20), named by Compose
+#            (tasksense-app-1, -2 …), with no host port of their own. They
+#            share sign-in tickets, lockout and rate-limit counters and job
+#            status through Redis and hear each other's cache invalidations and
+#            live-update pings there; every scheduler runs under a MongoDB job
+#            lease, so each job runs once however many copies there are.
+#   lb       (new) a load balancer on BIND_ADDRESS:HTTP_PORT, where the app
+#            used to be, so the reverse proxy in front needs no change.
+#   redis    (new, profile bundled-redis) the shared state. Or your own:
+#            leave bundled-redis out and set REDIS_URL (or REDIS_SENTINELS /
+#            REDIS_CLUSTER_NODES) in .env.
+#   worker   unchanged, and required: preflight refuses this topology without
+#            the import-worker profile, because every copy runs WORKER_ROLE=api
+#            and a Jira landing must not run inside a process serving users.
+#
+# Redis configured but unreachable is an outage, not a fallback: the copies
+# report not-ready and the load balancer stops sending them traffic until it is
+# back. See docs/15-SCALING-AND-HA.md.
+
+# The base file's anchors do not reach into this one.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+# REDIS_URL from .env when you run your own; otherwise the bundled one, when
+# BUNDLED_REDIS_PASSWORD says it is in use; otherwise empty, which the
+# application reads as unset — the case of REDIS_SENTINELS or
+# REDIS_CLUSTER_NODES in .env. `environment` outranks `env_file`, so the
+# first case has to be spelled out or it would be replaced.
+x-redis-env: &redis-env
+  REDIS_URL: ${REDIS_URL:-${BUNDLED_REDIS_PASSWORD:+redis://:${BUNDLED_REDIS_PASSWORD}@redis:6379}}
+
+# As for MongoDB in the base file: wait for the bundled Redis if it is part of
+# this deployment, and for nothing when it is not.
+x-redis-ready: &redis-ready
+  redis:
+    condition: service_healthy
+    required: false
+
+services:
+  app:
+    # A fixed name allows one container; Compose names the copies instead.
+    container_name: !reset null
+    # The load balancer holds the host port now.
+    ports: !reset []
+    deploy:
+      replicas: ${APP_REPLICAS:-3}
+    environment:
+      <<: *redis-env
+      # Forced: the import worker runs the Jira landings. In `all` mode any
+      # copy could adopt one — hours of parsing inside a process that serves
+      # users.
+      WORKER_ROLE: api
+      # The hops in front of each copy: the host's reverse proxy and lb. With
+      # 1 every client would look like lb, and all anonymous traffic would
+      # share one rate-limit bucket. Add one per proxy in front of the host's.
+      TRUST_PROXY: ${TRUST_PROXY:-2}
+      # Per copy: 20 copies x 50 = 1000 connections to MongoDB, not 2000.
+      MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE:-50}
+    depends_on: *redis-ready
+
+  worker:
+    environment:
+      <<: *redis-env
+      MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE:-50}
+    depends_on: *redis-ready
+
+  # The Jira sync worker (jira-sync profile) on the same Redis: its writes
+  # reach every API copy's open tabs and caches through the bus.
+  sync:
+    environment:
+      <<: *redis-env
+      MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE:-50}
+    depends_on: *redis-ready
+
+  lb:
+    image: ${CADDY_IMAGE:-caddy}:${CADDY_VERSION:-2.10-alpine}
+    container_name: tasksense-lb
+    restart: unless-stopped
+    # Round robin over every copy Docker's DNS knows as `app`, health-checked,
+    # streams unbuffered — the configuration and why is in Caddyfile.
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      # The address and port the app had: the reverse proxy in front is
+      # unchanged. Loopback-only for the same reason as in the base file.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-3000}:8080"
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      # Through to a copy's liveness: up as long as it can reach one.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    read_only: true
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=16m
+      - /config:rw,noexec,nosuid,size=16m
+      - /tmp:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The caddy binary carries the file capability cap_net_bind_service; with
+    # it missing from the bounding set the kernel refuses to execute it at
+    # all. Port 8080 does not use it.
+    cap_add:
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          cpus: "${LB_CPU_LIMIT:-1}"
+          memory: ${LB_MEMORY_LIMIT:-512m}
+    logging: *logging
+
+  redis:
+    image: ${REDIS_IMAGE:-redis}:${REDIS_VERSION:-7-alpine}
+    container_name: tasksense-redis
+    profiles: ["bundled-redis"]
+    restart: unless-stopped
+    # The password goes into a config file on a tmpfs, never onto the command
+    # line, where `ps` on this host would show it. No persistence: no RDB
+    # snapshots, no AOF, no volume. Everything in it — URL tickets, lockout
+    # and rate-limit counters, the status of jobs a browser is polling,
+    # pub/sub — is short-lived; a restart costs those counters and, at worst,
+    # a job status still being polled. Sessions are in MongoDB and survive it.
+    # noeviction: a full Redis refuses writes rather than silently dropping a
+    # lockout count.
+    user: redis
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf 'requirepass %s\n' "$${REDISCLI_AUTH}" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf --save '' --appendonly no --maxmemory-policy noeviction
+    environment:
+      # redis-cli reads REDISCLI_AUTH itself, which keeps the healthcheck's
+      # password off its command line too.
+      REDISCLI_AUTH: ${BUNDLED_REDIS_PASSWORD:-}
+    # No `ports:` — reachable only over the compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /data:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "${REDIS_CPU_LIMIT:-1}"
+          memory: ${REDIS_MEMORY_LIMIT:-512m}
+    logging: *logging

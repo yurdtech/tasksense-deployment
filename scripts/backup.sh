@@ -5,7 +5,7 @@
 #   ./scripts/backup.sh                         → backups/tasksense-<timestamp>.tar.gz
 #   ./scripts/backup.sh --output /mnt/nfs/tasksense
 #   ./scripts/backup.sh --no-config             omit .env (it holds secrets)
-#   ./scripts/backup.sh --stop-app              stop app and worker during the dump, then start them again
+#   ./scripts/backup.sh --stop-app              stop app (every copy) and worker during the dump, then start them again
 #   ./scripts/backup.sh --keep 30               keep the newest 30 archives of this kind (default 14, 0 = all)
 #   ./scripts/backup.sh --label pre-upgrade     → tasksense-pre-upgrade-<timestamp>.tar.gz
 #
@@ -89,14 +89,14 @@ trap finish EXIT
 step "Backing up TaskSense ${VERSION}"
 
 if [ "${STOP_APP}" = "1" ]; then
-  if container_running "${APP_CONTAINER}" || container_running "${WORKER_CONTAINER}"; then
+  if app_running || container_running "${WORKER_CONTAINER}"; then
     step "Stopping the application for a consistent copy"
     stop_app_tier
     STOPPED_APP=1
     ok "app and worker stopped"
   fi
 fi
-if container_running "${APP_CONTAINER}" || container_running "${WORKER_CONTAINER}"; then
+if app_running || container_running "${WORKER_CONTAINER}"; then
   CONSISTENT=false
 else
   CONSISTENT=true

@@ -9,9 +9,10 @@ it, its default, what it does, and what we recommend for production.
   (`SESSION_TTL_HOURS` → `config.sessionTtlHours`, `MONGODB_DB` →
   `config.mongodbDatabase`, `SMTP_*` → `config.smtp.*`, `OIDC_*` →
   `config.oidc.*`), plus `appUrl`, `firstAdminEmail`, `heapMb`, `worker.*`,
-  `certs.*`, `logging.*`, `metrics.*`. Secrets — `STORAGE_SECRET`,
+  `certs.*`, `logging.*`, `metrics.*`, `redis.*`. Secrets — `STORAGE_SECRET`,
   `MONGODB_URI`, `OIDC_CLIENT_SECRET`, `SMTP_PASS`, `METRICS_TOKEN`,
-  `LICENSE_KEY` — go in the Secret named by `existingSecret`. The full mapping
+  `LICENSE_KEY` — go in the Secret named by `existingSecret`; `REDIS_URL` and
+  `REDIS_PASSWORD` in the one named by `redis.existingSecret`. The full mapping
   is the [values reference](02-INSTALL-KUBERNETES.md#values-reference).
   **The chart's defaults are already the recommended values** where they
   differ from the application's: `sessionTtlHours: 12`, `swaggerEnabled:
@@ -48,13 +49,20 @@ blank, the default is the recommendation.
 | `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
-| `COMPOSE_PROFILES` | yes | `bundled-mongo` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. Comma-separated; empty runs neither. | `bundled-mongo` for a pilot; empty with your own MongoDB; add `import-worker` for the Jira migration |
+| `COMPOSE_PROFILES` | yes | `bundled-mongo` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. `replicas`: several API processes behind a bundled load balancer (`docker-compose.replicas.yml`; needs `import-worker` and a Redis). `bundled-redis`: the Redis container, with `replicas` only. Comma-separated; empty runs none of them. | `bundled-mongo` for a pilot; empty with your own MongoDB; add `import-worker` for the Jira migration; `replicas` + `bundled-redis` (or your Redis) for several API processes |
+| `REDIS_IMAGE` / `REDIS_VERSION` | — | `redis` / `7-alpine` | The bundled Redis (`bundled-redis`). | Your mirror, if you set `TASKSENSE_IMAGE` |
+| `CADDY_IMAGE` / `CADDY_VERSION` | — | `caddy` / `2.10-alpine` | The load balancer of the `replicas` profile (`tasksense-lb`). | Your mirror, if you set `TASKSENSE_IMAGE` |
 
 > **`COMPOSE_PROFILES` and `MONGODB_URI` go together.** Remove
 > `bundled-mongo` *and* set `MONGODB_URI`, or neither — `preflight.sh` fails
 > on a mismatch. An `.env` from a 1.0.x install has no `COMPOSE_PROFILES`
 > line; `install.sh`, `upgrade.sh` and `preflight.sh` add
 > `COMPOSE_PROFILES=bundled-mongo` to it when `MONGODB_URI` is empty.
+>
+> **So do `bundled-redis` and your own Redis.** With `replicas`, exactly one
+> Redis: `bundled-redis` with `BUNDLED_REDIS_PASSWORD`, or `REDIS_URL` /
+> `REDIS_SENTINELS` / `REDIS_CLUSTER_NODES` — `preflight.sh` fails on none or
+> both. The `replicas` override needs Docker Compose 2.24.4 or newer.
 
 ## 2. Address and network
 
@@ -63,7 +71,8 @@ blank, the default is the recommendation.
 | `APP_URL` | yes | — | The URL users type, with scheme, no trailing slash. Sign-in redirects, e-mail links and the OIDC redirect URI are built from it. | `https://tasksense.<corp-domain>` |
 | `CORS_ALLOWED_ORIGINS` | — | must be set; `.env.example` uses `APP_URL` | Browser origins allowed to call the API, comma-separated. UI and API share one origin, so this is `APP_URL`. | Same as `APP_URL` |
 | `BIND_ADDRESS` *(Compose)* | — | `127.0.0.1` | Host interface the application port is published on. Loopback means only a proxy on this host reaches it. | Keep `127.0.0.1`; if the proxy is another host, that host's interface plus a firewall rule |
-| `HTTP_PORT` *(Compose)* | — | `3000` | Host port. The container always listens on 3000. | |
+| `HTTP_PORT` *(Compose)* | — | `3000` | Host port. The container always listens on 3000. With `replicas` the load balancer (`tasksense-lb`) holds it instead and the app containers publish nothing. | |
+| `TRUST_PROXY` | — | `1`; `2` with the Compose `replicas` profile | How many reverse proxies in front of the API to believe about the client's address (`X-Forwarded-For`): every proxy that appends to it. Too few makes every client look like the proxy — one rate-limit bucket for the whole installation; too many lets a client choose its address. Helm: `config.trustProxy`. [15-SCALING-AND-HA](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe) | `1` behind one proxy; `2` behind the host proxy and `tasksense-lb` (`preflight.sh` refuses less with `replicas`); one more for each further load balancer that appends |
 | `NODE_USE_ENV_PROXY` | with an outbound proxy | — | `1` makes the application's own HTTPS calls (the Jira Cloud sync, the Jira API import, outgoing webhooks, a cloud model) go through `HTTPS_PROXY`. Without it they try to connect directly. Compose: `compose/.env`; Helm: `extraEnv`. | `1` when the host reaches the internet only through a proxy |
 | `HTTPS_PROXY` / `NO_PROXY` | with an outbound proxy | — | The corporate proxy, e.g. `http://proxy.corp.internal:3128`, and what bypasses it — keep `localhost,127.0.0.1,mongo` and your internal hosts in `NO_PROXY`. Read only when `NODE_USE_ENV_PROXY=1`. | As your network team gives them |
 
@@ -101,19 +110,40 @@ the application (Admin → Authentication). See [05-IDENTITY](05-IDENTITY.md).
 | `MONGODB_TIMEOUT_MS` | — | `5000` | Server-selection timeout: how long every operation, and the initial connect, waits for a reachable server. | **`15000`** across a network or with a replica set (an election takes seconds) |
 | `MONGODB_OP_TIMEOUT_MS` | — | `30000` | Deadline of one database operation; also bounds the wait for a pooled connection. `0` disables it. Imports, restores, exports, backups, migrations and index builds run without it. | |
 | `MONGODB_MIN_POOL_SIZE` | — | `10` | Connections kept warm, so the first request after a quiet spell does not pay for TCP + TLS + authentication. | |
-| `MONGODB_MAX_POOL_SIZE` | — | `100` | Pool ceiling. Raise only if `tasksense_mongo_pool_checkout_failures_total{reason="timeout"}` says so. | |
+| `MONGODB_MAX_POOL_SIZE` | — | `100`; the chart: `50` with more than one API pod or autoscaling; the Compose `replicas` profile: `50` | Pool ceiling, per process. Every API process and the worker open their own: size MongoDB's connections for the sum ([the budget](11-SIZING.md#the-mongodb-connection-budget)). Raise only if `tasksense_mongo_pool_checkout_failures_total{reason="timeout"}` says so. | |
 | `MONGODB_COMPRESSORS` | — | `zlib`; `.env.example`: `none` (bundled) | Wire compression to MongoDB. **Switch it to `zlib` when you move to your own MongoDB.** | `zlib` for a database on another host; **`none`** for the bundled same-host container |
 | `MONGODB_COMMAND_MONITORING` | — | off | Per-command duration metrics. Costs CPU; turn on to diagnose, then off. | Off |
 | `MONGO_CACHE_GB` *(Compose)* | — | `1` | WiredTiger cache of the bundled MongoDB (`--wiredTigerCacheSizeGB`). Keep it at about half of `MONGO_MEMORY_LIMIT` minus 1 GB, never above it. | See [11-SIZING](11-SIZING.md) |
 
-## 6. Processes, memory and CPU
+### Redis — several API processes only
 
-The API is **one process by design** — see [15-SCALING-AND-HA](15-SCALING-AND-HA.md).
-The only optional second process is the import worker.
+Unset, the API runs as one process with this state in memory, as it always
+has. Set **exactly one** connection setting and Redis is used; a half-made
+configuration is refused at startup. [16-EXTERNAL-DATABASES](16-EXTERNAL-DATABASES.md#redis)
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it |
+| `REDIS_URL` | one of three | — | One Redis: `redis://[user:password@]host:6379[/db]`, `rediss://` for TLS. With the Compose `replicas` profile and `bundled-redis`, the stack points it at the bundled Redis. Helm: `redis.url` or `redis.existingSecret`. | Secret |
+| `REDIS_SENTINELS` | one of three | — | Sentinel addresses, `host:port,host:port`. Needs `REDIS_SENTINEL_NAME`. Helm: `redis.sentinels`. | **Sentinel**, three of them |
+| `REDIS_SENTINEL_NAME` | with sentinels | — | The master group the sentinels watch. | |
+| `REDIS_SENTINEL_PASSWORD` | — | — | The sentinels' own password, when it differs from the data nodes'. | Secret |
+| `REDIS_CLUSTER_NODES` | one of three | — | Redis Cluster seed nodes, `host:port,host:port`. | |
+| `REDIS_USERNAME` | — | — | ACL user for sentinels / cluster nodes; a URL carries its own. | A user of its own |
+| `REDIS_PASSWORD` | — | — | Password for sentinels / cluster nodes, or to override the one in `REDIS_URL`. Refused with no connection setting. | Secret, `openssl rand -hex 24` |
+| `REDIS_TLS` | — | `false` | TLS to the sentinels and cluster nodes. A URL says it with `rediss://` instead — `REDIS_TLS` beside `REDIS_URL` is refused. The CA is `NODE_EXTRA_CA_CERTS`. | `true` across a network |
+| `REDIS_KEY_PREFIX` | — | `tasksense:` | Prepended to every key and channel, so one Redis can serve a test installation beside production. | A distinct prefix per installation |
+| `BUNDLED_REDIS_PASSWORD` *(Compose)* | with `bundled-redis` | — | The bundled Redis's `requirepass`; the stack builds `REDIS_URL` from it. Hex: it goes inside a URL. Leave it empty with your own Redis. | `openssl rand -hex 24` |
+
+## 6. Processes, memory and CPU
+
+Without Redis the API is **one process**; with Redis it can run as 2 to 20 —
+see [15-SCALING-AND-HA](15-SCALING-AND-HA.md). The import worker is zero or one
+either way.
+
+| Variable | Required | Default | What it does | Recommended |
+| --- | --- | --- | --- | --- |
+| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). With Redis, scheduled jobs run under leases in MongoDB, so several API processes never run the same pass. | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it; the `replicas` override forces it |
+| `APP_REPLICAS` *(Compose)* | — | `3` | With the `replicas` profile: how many API containers, 1–20. Without the profile it has no effect, and `preflight.sh` refuses a value above 1 so the mismatch is not missed. Each gets `APP_CPU_LIMIT` / `APP_MEMORY_LIMIT`. | Fit them in the host: `APP_REPLICAS × APP_MEMORY_LIMIT` plus the worker, Redis, the load balancer and MongoDB |
 | `JIRA_SYNC_RUNNER` | — | `inline` | Where the Jira sync's background work runs: full migrations, and the two-way sync's queue and sweeps. `inline`: in the API process. `external`: in the separate sync worker; the API then only takes webhooks and queues the work. | **`external`** whenever the `jira-sync` profile is on (`preflight.sh` enforces it); Helm sets it from `jiraSync.enabled` |
 | `SYNC_WORKER_PORT` | — | `3100` | The sync worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `jiraSync.port` |
 | `SYNC_HEAP_MB` / `SYNC_CPU_LIMIT` / `SYNC_MEMORY_LIMIT` *(Compose)* | — | `2048` / `1` / `3g` | Heap, CPU and memory of the `sync` container. | |
@@ -125,8 +155,11 @@ The only optional second process is the import worker.
 | `WORKER_MEMORY_LIMIT` *(Compose)* | — | `6g` | Memory ceiling of the worker. | |
 | `MONGO_CPU_LIMIT` *(Compose)* | — | `2` | CPU ceiling of the bundled MongoDB. | |
 | `MONGO_MEMORY_LIMIT` *(Compose)* | — | `2g` | Memory ceiling of the bundled MongoDB. | |
+| `LB_CPU_LIMIT` / `LB_MEMORY_LIMIT` *(Compose)* | — | `1` / `512m` | Ceilings of `tasksense-lb` (`replicas`). | |
+| `REDIS_CPU_LIMIT` / `REDIS_MEMORY_LIMIT` *(Compose)* | — | `1` / `512m` | Ceilings of the bundled Redis (`bundled-redis`). | |
 | `NODE_OPTIONS` | — | set by the stack | Compose and Helm build it from the heap settings above (`--max-old-space-size=<MB>`). Set the heap variables, not this. | |
-| `SETTINGS_CACHE_TTL_MS` | — | `30000` with `WORKER_ROLE=all`, `0` otherwise | How long a cached workspace-settings document is trusted before it is re-checked; only matters when a second process writes. | |
+| `SETTINGS_CACHE_TTL_MS` | — | `30000` with `WORKER_ROLE=all`, `0` otherwise; with Redis, at most `5000` (`min(5000, that default)`) | How long a cached workspace-settings document is trusted before it is re-checked; only matters when another process writes. With Redis the other processes' writes arrive as invalidations, and the TTL only bounds how late a lost one is noticed. | |
+| `WEB_ASSETS_SHARED_DIR` | — | unset; the chart sets `/app/api/data/web-assets` with `strategy.type: RollingUpdate` | A directory on the shared data volume. Each process copies its web build's content-hashed files there at boot and serves it after its own build, so a page from one release finds its chunks on a pod of the other during a rolling update. Only needed with rolling updates. | Leave it to the chart |
 
 ## 7. Trusting your certificate authority
 
@@ -199,7 +232,7 @@ thousands of issues). Change them only on our advice.
 | --- | --- | --- | --- | --- |
 | `SWAGGER_ENABLED` | — | **on** in the application; `.env.example` and the chart: `false` | The interactive API browser at `/api/v1/swagger`. The application serves it unless this is `false` — it publishes the whole API surface without sign-in. Removing the line from `.env` turns it back **on**. | **`false`** |
 | `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration **and for the two-way Jira sync** (e.g. `your-company.atlassian.net` — listing it also spares the DNS check a proxied network cannot answer), GitLab, the model gateway |
-| `RATE_LIMIT_STORE` | — | `memory` | Where rate-limit counters live. `memory` fits the single-process design; `mongo` survives restarts at one database round trip per throttled request. | `memory` |
+| `RATE_LIMIT_STORE` | — | `redis` when Redis is configured, `memory` otherwise | Where rate-limit counters live: `memory` (per process), `mongo` (shared, one database round trip per throttled request), `redis` (shared). `memory` beside Redis is allowed with a warning in the log — N processes would allow N times every limit — and `preflight.sh` / the chart refuse it with more than one API process; `redis` without Redis is refused. Helm: `config.rateLimitStore` (empty = this default). | Leave unset |
 
 ## 13. AI features
 
@@ -227,7 +260,8 @@ Compose and Helm set these; a value in `.env` is overridden or rejected.
 | `NODE_ENV` | `production` | Required by the contract above. |
 | `PORT` | `3000` | The container port. Change `HTTP_PORT` instead. |
 | `MIGRATE_ON_BOOT` | `manual` | Migrations run once, in the `migrate` service (Compose) or the migration Job (Helm), before the application starts. `auto` (the application default) is for a bare single container. |
-| `TMPDIR`, `STORAGE_LOCAL_ROOT`, `BACKUP_DIR` | on the data volume | See section 9. |
+| `TMPDIR`, `STORAGE_LOCAL_ROOT`, `BACKUP_DIR` | on the data volume | See section 9. With several API processes every one of them must see the same volume (`ReadWriteMany` on Kubernetes). |
+| `WEB_ASSETS_SHARED_DIR` *(Helm)* | `/app/api/data/web-assets` with `RollingUpdate` | See section 6. |
 | `WEB_DIST_DIR`, `TASKSENSE_COMMIT`, `TASKSENSE_BUILD_DATE` | baked into the image | What `/api/v1/version` reports. |
 
 ## 15. Refused on-premise
@@ -292,4 +326,17 @@ With attachments in an internal object store, add its host (keep the others):
 
 ```dotenv
 EGRESS_ALLOWLIST=minio.corp.internal
+```
+
+Several API processes on one large host, with your own Redis (Sentinel):
+
+```dotenv
+COMPOSE_PROFILES=import-worker,replicas
+WORKER_ROLE=api
+APP_REPLICAS=3
+REDIS_SENTINELS=redis-1.corp.internal:26379,redis-2.corp.internal:26379,redis-3.corp.internal:26379
+REDIS_SENTINEL_NAME=tasksense
+REDIS_USERNAME=tasksense
+REDIS_PASSWORD=<openssl rand -hex 24>
+REDIS_TLS=true
 ```

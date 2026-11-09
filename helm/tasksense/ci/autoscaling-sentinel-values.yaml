@@ -1,0 +1,41 @@
+# CI: the API under a HorizontalPodAutoscaler (CPU and memory targets) — Redis
+# through Sentinel over TLS with an ACL user, its password in the
+# operator-managed Secret that also holds MONGODB_URI, the CA shared with
+# MongoDB, an explicit pool size and rate-limit store, two proxy hops.
+existingSecret: tasksense-corp-secrets
+appUrl: https://tasksense.corp.internal
+firstAdminEmail: admin@corp.internal
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 65
+  targetMemoryUtilizationPercentage: 80
+redis:
+  existingSecret: tasksense-corp-secrets
+  existingSecretKey: ""
+  existingSecretPasswordKey: REDIS_PASSWORD
+  sentinels:
+    - redis-0.redis.corp.internal:26379
+    - redis-1.redis.corp.internal:26379
+    - redis-2.redis.corp.internal:26379
+  sentinelName: tasksense
+  username: tasksense
+  tls: true
+worker:
+  enabled: true
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: ocs-storagecluster-cephfs
+certs:
+  existingConfigMap: corp-ca-bundle
+  caBundle: ca-bundle.pem
+config:
+  mongodbMaxPoolSize: 40
+  rateLimitStore: mongo
+  trustProxy: 2
+networkPolicy:
+  enabled: true
+  egressCIDRs: [10.20.0.0/16]
+  redis:
+    cidrs: [10.40.0.0/24]

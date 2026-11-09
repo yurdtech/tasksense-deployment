@@ -11,6 +11,10 @@
 #   COMPOSE_PROFILES=bundled-mongo                 the default: MongoDB beside the app
 #   COMPOSE_PROFILES=                              your own MongoDB (set MONGODB_URI)
 #   COMPOSE_PROFILES=bundled-mongo,import-worker   plus a separate Jira-import process
+#   COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+#                                                  several API processes behind a
+#                                                  load balancer, sharing Redis
+#                                                  (docker-compose.replicas.yml)
 #
 # Services, in start order:
 #
@@ -22,8 +26,11 @@
 #   worker   (profile import-worker)  runs Jira-backup landings and nothing
 #            user-facing, so a multi-gigabyte import cannot take the API down.
 #
-# The API is ONE process by design (in-process schedulers, in-process change
-# feed). Never scale `app` — HA is the restart policy plus a MongoDB replica set.
+# In this file the API is ONE process: without Redis its sign-in tickets,
+# counters, cache invalidations and live-update fan-out live in its memory, so
+# a second copy would disagree with the first. Do not `--scale app` — the
+# fixed container_name refuses it anyway. Several copies are the replicas
+# profile, which adds Redis and a load balancer (docker-compose.replicas.yml).
 # See docs/15-SCALING-AND-HA.md.
 #
 # Put your own reverse proxy in front for TLS — see docs/01-INSTALL-COMPOSE.md.

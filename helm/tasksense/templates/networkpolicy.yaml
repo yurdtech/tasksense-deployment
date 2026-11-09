@@ -113,6 +113,28 @@ spec:
             cidr: {{ . }}
         {{- end }}
     {{- end }}
+    {{- if include "tasksense.redisConfigured" . }}
+    {{- $nr := $np.redis | default (dict) }}
+    # Redis (redis.*): the data nodes and the sentinels. Every API pod's
+    # readiness depends on reaching it, so the rule comes with Redis itself.
+    # No cidrs / namespaceSelector: these ports to any address.
+    - ports:
+        {{- range ($nr.ports | default (list 6379 26379)) }}
+        - port: {{ int . }}
+          protocol: TCP
+        {{- end }}
+      {{- if or $nr.cidrs $nr.namespaceSelector }}
+      to:
+        {{- range $nr.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- with $nr.namespaceSelector }}
+        - namespaceSelector:
+            matchLabels: {{- toYaml . | nindent 14 }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
     {{- with $np.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

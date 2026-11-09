@@ -120,6 +120,45 @@ blocks "the worker beside an API that also lands imports" "the import-worker pro
 blocks "WORKER_ROLE=api with no worker to land them" "WORKER_ROLE=api but the import-worker profile is off" "WORKER_ROLE=api"
 blocks "WORKER_ROLE=worker for the API" "WORKER_ROLE=worker is not accepted" "WORKER_ROLE=worker"
 
+# ── several API processes (the replicas profile) ─────────────────────────────
+REPL="COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis"
+RPW="BUNDLED_REDIS_PASSWORD=0123456789abcdef0123456789abcdef0123456789abcdef"
+fixture_env "${ENV}" "${REPL}" "WORKER_ROLE=api" "${RPW}" "APP_REPLICAS=4"
+run_preflight
+check "replicas with the bundled Redis and the worker passes" "" "$(blockers)"
+contains "it says how many, and behind what" "+ 4 API process(es) behind tasksense-lb" "${OUT}"
+contains "and checks both compose files together" "docker-compose.yml with docker-compose.replicas.yml is valid" "${OUT}"
+fixture_env "${ENV}" "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api" \
+  "REDIS_SENTINELS=redis-0.acme.invalid:26379,redis-1.acme.invalid:26379" "REDIS_SENTINEL_NAME=mymaster"
+run_preflight
+check "replicas with your own Redis Sentinel passes" "" "$(blockers)"
+blocks "replicas without the import worker" "the replicas profile needs import-worker too" \
+  "COMPOSE_PROFILES=bundled-mongo,replicas,bundled-redis" "${RPW}"
+blocks "replicas without any Redis" "no Redis: the replicas profile needs bundled-redis" \
+  "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api"
+blocks "the bundled Redis without its password" "BUNDLED_REDIS_PASSWORD is empty" "${REPL}" "WORKER_ROLE=api"
+blocks "a bundled Redis password that breaks the URL" "BUNDLED_REDIS_PASSWORD contains characters" \
+  "${REPL}" "WORKER_ROLE=api" "BUNDLED_REDIS_PASSWORD=ab/cd@ef"
+blocks "the bundled Redis AND your own" "bundled-redis is in COMPOSE_PROFILES AND your own Redis is set" \
+  "${REPL}" "WORKER_ROLE=api" "${RPW}" "REDIS_URL=redis://redis.acme.invalid:6379"
+blocks "your own Redis with the bundled password left in" "BUNDLED_REDIS_PASSWORD is set, but bundled-redis is not in COMPOSE_PROFILES" \
+  "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api" "${RPW}" "REDIS_CLUSTER_NODES=redis-0.acme.invalid:6379"
+blocks "sentinels without the master's name" "REDIS_SENTINELS needs REDIS_SENTINEL_NAME" \
+  "COMPOSE_PROFILES=bundled-mongo,import-worker,replicas" "WORKER_ROLE=api" "REDIS_SENTINELS=redis-0.acme.invalid:26379"
+blocks "bundled-redis without replicas" "bundled-redis is in COMPOSE_PROFILES without replicas" \
+  "COMPOSE_PROFILES=bundled-mongo,bundled-redis" "${RPW}"
+blocks "more than 20 copies" "APP_REPLICAS=21 — at most 20 API processes are supported" \
+  "${REPL}" "WORKER_ROLE=api" "${RPW}" "APP_REPLICAS=21"
+blocks "APP_REPLICAS without the profile" "APP_REPLICAS=3 but the replicas profile is off" "APP_REPLICAS=3"
+blocks "one proxy hop where there are two" "TRUST_PROXY=1 with the replicas profile" "${REPL}" "WORKER_ROLE=api" "${RPW}" "TRUST_PROXY=1"
+blocks "per-process rate limits across copies" "RATE_LIMIT_STORE=memory with 3 API processes" \
+  "${REPL}" "WORKER_ROLE=api" "${RPW}" "RATE_LIMIT_STORE=memory"
+blocks "the redis rate-limit store with no Redis" "RATE_LIMIT_STORE=redis, but no Redis is configured" "RATE_LIMIT_STORE=redis"
+fixture_env "${ENV}" "${REPL}" "WORKER_ROLE=api" "${RPW}"
+OUT="$(FAKE_COMPOSE_VERSION=2.24.3 "${SANDBOX}/scripts/preflight.sh" --offline 2>&1)"; RC=$?
+check "replicas on a compose without !reset: exit 1" "1" "${RC}"
+contains "and says which version it needs" "x docker compose 2.24.3 is too old for the replicas profile — 2.24.4 or newer is required" "${OUT}"
+
 # ── certificates ─────────────────────────────────────────────────────────────
 blocks "NODE_EXTRA_CA_CERTS that is not there" "NODE_EXTRA_CA_CERTS=/certs/nope.pem, but compose/certs/nope.pem does not exist" \
   "NODE_EXTRA_CA_CERTS=/certs/nope.pem"

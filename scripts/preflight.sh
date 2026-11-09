@@ -221,14 +221,14 @@ check_enum LOG_LEVEL verbose debug log warn error fatal
 check_enum LOG_FORMAT json text
 check_enum AGENT_DISPATCHER on off
 check_enum MONGODB_COMPRESSORS zlib none
-check_enum RATE_LIMIT_STORE memory mongo
+check_enum RATE_LIMIT_STORE memory mongo redis
 check_enum WORKER_ROLE all api
 
 # Numbers. An active but empty line is read as 0 — which the application
 # refuses for most of these, and which for SESSION_TTL_HOURS means "never".
 for key in SMTP_PORT MONGODB_TIMEOUT_MS MONGODB_MAX_POOL_SIZE STORAGE_MAX_FILE_MB \
            STORAGE_MAX_VIDEO_FILE_MB JIRA_BACKUP_RETENTION_DAYS STATE_TASK_LIMIT \
-           REPORTS_MAX_TASKS HTTP_PORT APP_HEAP_MB WORKER_HEAP_MB; do
+           REPORTS_MAX_TASKS HTTP_PORT APP_HEAP_MB WORKER_HEAP_MB APP_REPLICAS; do
   env_has_key "${key}" || continue
   value="$(env_value "${key}")"
   if ! is_uint "${value}" || [ "${value}" -eq 0 ]; then
@@ -325,8 +325,8 @@ step "Database"
 PROFILES="$(env_profiles)"
 for p in $(printf '%s' "${PROFILES}" | tr ',' ' '); do
   case "${p}" in
-    bundled-mongo|import-worker) ;;
-    *) fail "COMPOSE_PROFILES names '${p}', which is not a profile — use bundled-mongo and/or import-worker" ;;
+    bundled-mongo|import-worker|replicas|bundled-redis) ;;
+    *) fail "COMPOSE_PROFILES names '${p}', which is not a profile — use bundled-mongo, import-worker, replicas and bundled-redis" ;;
   esac
 done
 
@@ -425,6 +425,108 @@ else
   fi
 fi
 
+# ══ 5b. API processes ════════════════════════════════════════════════════════
+# One without Redis — the default. Several only with the replicas profile, and
+# then with Redis: without it every copy would keep its own sign-ins, counters
+# and live updates, which is an installation that disagrees with itself.
+step "API processes"
+
+REPLICAS_N=1
+APP_REPLICAS_SET="$(env_value APP_REPLICAS)"
+STORE="$(env_value RATE_LIMIT_STORE)"
+if profile_enabled replicas; then
+  REPLICAS_N="${APP_REPLICAS_SET:-3}"
+  if is_uint "${REPLICAS_N}" && [ "${REPLICAS_N}" -gt 20 ]; then
+    fail "APP_REPLICAS=${REPLICAS_N} — at most 20 API processes are supported"
+  fi
+  if ! is_uint "${REPLICAS_N}" || [ "${REPLICAS_N}" -lt 1 ]; then REPLICAS_N=1; fi   # reported above
+
+  # docker-compose.replicas.yml resets the app's name and port with `!reset`.
+  if "${COMPOSE[@]}" version 2>&1 | grep -qi 'podman-compose'; then
+    fail "the replicas profile needs Docker Compose ${COMPOSE_REPLICAS_MIN_VERSION}+ — podman-compose does not implement the !reset tag its override uses"
+    detail "With Podman, install docker-compose ${COMPOSE_REPLICAS_MIN_VERSION}+ as its compose provider."
+  elif [ -n "${CVER}" ] && ! version_ge "${CVER}" "${COMPOSE_REPLICAS_MIN_VERSION}"; then
+    fail "${COMPOSE[*]} ${CVER} is too old for the replicas profile — ${COMPOSE_REPLICAS_MIN_VERSION} or newer is required (for the !reset tag)"
+    detail "Upgrade the docker-compose-plugin package."
+  fi
+
+  if ! profile_enabled import-worker; then
+    fail "the replicas profile needs import-worker too — every API copy runs WORKER_ROLE=api, so nothing else would land Jira imports"
+    detail "Add import-worker to COMPOSE_PROFILES and set WORKER_ROLE=api."
+  fi
+
+  if bundled_redis_enabled && external_redis; then
+    fail "bundled-redis is in COMPOSE_PROFILES AND your own Redis is set (REDIS_URL / REDIS_SENTINELS / REDIS_CLUSTER_NODES) — the bundled one would run unused"
+    detail "Your own Redis: remove bundled-redis. The bundled one: comment out the REDIS_* connection lines."
+  elif bundled_redis_enabled; then
+    RPASS="$(env_value BUNDLED_REDIS_PASSWORD)"
+    if [ -z "${RPASS}" ]; then
+      fail "BUNDLED_REDIS_PASSWORD is empty — the bundled Redis needs one. Generate: openssl rand -hex 24"
+    else
+      case "${RPASS}" in
+        *[!A-Za-z0-9._~-]*)
+          fail "BUNDLED_REDIS_PASSWORD contains characters a connection string would have to encode — it is placed inside REDIS_URL"
+          detail "Use a hex password:  openssl rand -hex 24" ;;
+        *) ok "bundled Redis ($(redis_image)), with a password, no persistence" ;;
+      esac
+    fi
+  elif external_redis; then
+    RURL="$(env_value REDIS_URL)"; RSENT="$(env_value REDIS_SENTINELS)"; RCLUS="$(env_value REDIS_CLUSTER_NODES)"
+    RSET=0
+    for v in "${RURL}" "${RSENT}" "${RCLUS}"; do [ -n "${v}" ] && RSET=$((RSET + 1)); done
+    if [ "${RSET}" -gt 1 ]; then
+      fail "set exactly one of REDIS_URL, REDIS_SENTINELS or REDIS_CLUSTER_NODES — the application refuses two at boot"
+    elif [ -n "${RURL}" ]; then
+      case "${RURL}" in
+        redis://*|rediss://*) ok "your own Redis: $(uri_redacted "${RURL}")" ;;
+        *) fail "REDIS_URL must start with redis:// (or rediss:// for TLS)" ;;
+      esac
+    elif [ -n "${RSENT}" ]; then
+      if [ -z "$(env_value REDIS_SENTINEL_NAME)" ]; then
+        fail "REDIS_SENTINELS needs REDIS_SENTINEL_NAME — the master group the sentinels watch"
+      else
+        ok "your own Redis: sentinels ${RSENT}, master $(env_value REDIS_SENTINEL_NAME)"
+      fi
+    else
+      ok "your own Redis: cluster ${RCLUS}"
+    fi
+    if [ -n "$(env_value BUNDLED_REDIS_PASSWORD)" ]; then
+      fail "BUNDLED_REDIS_PASSWORD is set, but bundled-redis is not in COMPOSE_PROFILES — leave it empty with your own Redis"
+      detail "Beside REDIS_SENTINELS or REDIS_CLUSTER_NODES it would also point REDIS_URL at a Redis that does not run."
+    fi
+  else
+    fail "no Redis: the replicas profile needs bundled-redis in COMPOSE_PROFILES, or your own Redis (REDIS_URL, REDIS_SENTINELS or REDIS_CLUSTER_NODES)"
+    detail "Without it every API copy keeps its own sign-ins, counters and live updates — docs/15-SCALING-AND-HA.md."
+  fi
+
+  TP="$(env_value TRUST_PROXY)"
+  if [ -n "${TP}" ] && is_uint "${TP}" && [ "${TP}" -lt 2 ]; then
+    fail "TRUST_PROXY=${TP} with the replicas profile — the load balancer is a hop as well: 2 (your proxy and tasksense-lb), one more per load balancer in front of your proxy"
+    detail "Too low, and every anonymous client shares one rate-limit bucket. Comment it out for 2."
+  fi
+  if [ "${STORE}" = "memory" ] && [ "${REPLICAS_N}" -gt 1 ]; then
+    fail "RATE_LIMIT_STORE=memory with ${REPLICAS_N} API processes — each would count only what reached it, so every limit would be ${REPLICAS_N} times higher"
+    detail "Comment it out (Redis is then used), or set redis or mongo."
+  fi
+  LB_PORT="$(env_value HTTP_PORT)"
+  ok "${REPLICAS_N} API process(es) behind ${LB_CONTAINER} on ${BIND}:${LB_PORT:-3000}, TRUST_PROXY=${TP:-2}"
+else
+  ok "one API process"
+  if bundled_redis_enabled; then
+    fail "bundled-redis is in COMPOSE_PROFILES without replicas — the bundled Redis is part of the replicas topology only"
+  fi
+  if is_uint "${APP_REPLICAS_SET}" && [ "${APP_REPLICAS_SET}" -gt 1 ]; then
+    fail "APP_REPLICAS=${APP_REPLICAS_SET} but the replicas profile is off — one API process would run"
+    detail "Add replicas (with import-worker and Redis) to COMPOSE_PROFILES, or comment APP_REPLICAS out."
+  fi
+  if [ "${STORE}" = "redis" ] && ! external_redis; then
+    fail "RATE_LIMIT_STORE=redis, but no Redis is configured — the application refuses it at boot"
+  fi
+  if external_redis; then
+    note "your own Redis is configured — the one API process uses it, and is not ready while it is unreachable"
+  fi
+fi
+
 # ══ 6. Import worker ═════════════════════════════════════════════════════════
 step "Import worker"
 
@@ -483,10 +585,14 @@ fi
 
 # Limits against the host, and heaps against their limits.
 APP_MEM="$(size_to_mb "$(env_value APP_MEMORY_LIMIT)")"; APP_MEM="${APP_MEM:-2048}"
-TOTAL_MB="${APP_MEM}"
+TOTAL_MB=$((APP_MEM * REPLICAS_N))
 [ "${BUNDLED}" = "1" ] && { M="$(size_to_mb "$(env_value MONGO_MEMORY_LIMIT)")"; TOTAL_MB=$((TOTAL_MB + ${M:-2048})); }
 WORKER_MEM="$(size_to_mb "$(env_value WORKER_MEMORY_LIMIT)")"; WORKER_MEM="${WORKER_MEM:-6144}"
 profile_enabled import-worker && TOTAL_MB=$((TOTAL_MB + WORKER_MEM))
+if profile_enabled replicas; then
+  M="$(size_to_mb "$(env_value LB_MEMORY_LIMIT)")"; TOTAL_MB=$((TOTAL_MB + ${M:-512}))
+  bundled_redis_enabled && { M="$(size_to_mb "$(env_value REDIS_MEMORY_LIMIT)")"; TOTAL_MB=$((TOTAL_MB + ${M:-512})); }
+fi
 if [ "${MEM_MB}" -gt 0 ] && [ "${TOTAL_MB}" -gt "${MEM_MB}" ]; then
   advise "the containers' memory limits add up to $((TOTAL_MB / 1024)) GB, more than this host's $((MEM_MB / 1024)) GB"
 fi
@@ -535,7 +641,9 @@ step "Network"
 PORT="$(env_value HTTP_PORT)"; PORT="${PORT:-3000}"
 PROBE_ADDR="${BIND}"; case "${PROBE_ADDR}" in 0.0.0.0|localhost|::) PROBE_ADDR=127.0.0.1 ;; esac
 if is_uint "${PORT}" && tcp_reachable "${PROBE_ADDR}" "${PORT}" 2; then
-  if [ "${RUNTIME_OK}" = "1" ] && container_running "${APP_CONTAINER}"; then
+  # The app in the default topology, the load balancer with replicas — either
+  # is the stack itself, whichever topology this configuration is moving to.
+  if [ "${RUNTIME_OK}" = "1" ] && { container_running "${APP_CONTAINER}" || container_running "${LB_CONTAINER}"; }; then
     ok "port ${PORT} is held by TaskSense itself — a restart or upgrade replaces it"
   else
     fail "port ${PORT} on ${PROBE_ADDR} is already in use — change HTTP_PORT or stop what is holding it"
@@ -550,7 +658,7 @@ fi
 # is already in use", after the images were pulled and the volumes created.
 if [ "${RUNTIME_OK}" = "1" ]; then
   CLASHES=0
-  for name in "${MONGO_CONTAINER}" "${MIGRATE_CONTAINER}" "${APP_CONTAINER}" "${WORKER_CONTAINER}"; do
+  for name in "${MONGO_CONTAINER}" "${MIGRATE_CONTAINER}" "${APP_CONTAINER}" "${WORKER_CONTAINER}" "${LB_CONTAINER}" "${REDIS_CONTAINER}"; do
     owner="$(container_project "${name}")" || continue
     [ "${owner}" = "${COMPOSE_PROJECT}" ] && continue
     CLASHES=$((CLASHES + 1))
@@ -565,8 +673,10 @@ check_registry
 # ══ 9. Compose file ══════════════════════════════════════════════════════════
 step "Compose file"
 
+CFG_NAME="docker-compose.yml"
+replicas_enabled && CFG_NAME="docker-compose.yml with docker-compose.replicas.yml"
 if CFG_ERR="$(compose config -q 2>&1)"; then
-  ok "docker-compose.yml is valid with this configuration ($(compose config --services 2>/dev/null | tr '\n' ' '))"
+  ok "${CFG_NAME} is valid with this configuration ($(compose config --services 2>/dev/null | tr '\n' ' '))"
 else
   fail "compose cannot read the stack with this configuration:"
   printf '%s\n' "${CFG_ERR}" | sed 's/^/      /'

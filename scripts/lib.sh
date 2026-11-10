@@ -532,8 +532,12 @@ caddy_image() {
 # runs first after updating these files, the configuration is right before
 # compose reads it.
 migrate_legacy_env() {
-  migrate_env_from_1_0 "$@"
-  migrate_env_sync_worker "$@"
+  # The file is optional, as in the two steps it runs: callers pass none and get
+  # ENV_FILE. Forwarding "$@" instead reads, to shellcheck (SC2119), as a
+  # function that wants the script's arguments.
+  local file="${1:-${ENV_FILE}}"
+  migrate_env_from_1_0 "${file}"
+  migrate_env_sync_worker "${file}"
 }
 
 migrate_env_from_1_0() {

@@ -13,7 +13,7 @@ oc create secret docker-registry ghcr -n tasksense \
 oc create secret generic tasksense-secrets -n tasksense \
   --from-env-file=tasksense-secrets.env          # MONGODB_URI, STORAGE_SECRET, …
 
-helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.1 \
   -n tasksense \
   -f ../helm/tasksense/values-openshift.yaml \
   -f my-values.yaml \

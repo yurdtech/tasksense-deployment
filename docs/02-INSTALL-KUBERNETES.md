@@ -67,7 +67,7 @@ detects which one it is talking to.
 ## Install
 
 The steps assume namespace `tasksense` and release name `tasksense`. Replace
-`1.1.0` with the version you are installing.
+`1.1.1` with the version you are installing.
 
 ### Step 1 — Namespace and image pull secret
 
@@ -215,7 +215,7 @@ explanations, in `helm/tasksense/values.yaml`.
 ### Step 4 — Render it first
 
 ```bash
-helm template tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+helm template tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.1 \
   -n tasksense -f my-values.yaml > /tmp/tasksense-rendered.yaml && echo rendered
 ```
 
@@ -250,7 +250,7 @@ something broken, and names the value to change:
 ### Step 5 — Install
 
 ```bash
-helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.1 \
   -n tasksense -f my-values.yaml --wait --timeout 30m
 ```
 
@@ -269,9 +269,9 @@ STATUS: deployed
 REVISION: 1
 TEST SUITE: None
 NOTES:
-TaskSense 1.1.0 — chart 1.1.0, release tasksense (revision 1) in tasksense.
+TaskSense 1.1.1 — chart 1.1.1, release tasksense (revision 1) in tasksense.
 
-  image        ghcr.io/yurdtech/tasksense:1.1.0
+  image        ghcr.io/yurdtech/tasksense:1.1.1
   api          1 replica, strategy Recreate, WORKER_ROLE=all, heap 1536 MB
   redis        off — the API runs as one process
   ...
@@ -586,7 +586,7 @@ application back at the version that matches the dump — see
    to render):
 
    ```bash
-   helm upgrade tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+   helm upgrade tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.1 \
      -n tasksense -f my-values.yaml --wait --timeout 30m
    ```
 
@@ -666,10 +666,10 @@ On a machine with internet access, from a checkout of this repository at the
 release tag, signed in to `ghcr.io`:
 
 ```bash
-scripts/helm-airgap-bundle.sh --version 1.1.0
+scripts/helm-airgap-bundle.sh --version 1.1.1
 ```
 
-Expected: `==> …/dist/tasksense-helm-airgap-1.1.0.tar.gz` and its `.sha256`. The
+Expected: `==> …/dist/tasksense-helm-airgap-1.1.1.tar.gz` and its `.sha256`. The
 bundle holds the chart package, `values-openshift.yaml`, the TaskSense image and
 the `mongo` image the backup Jobs use (linux/amd64; `--platform` to change), a
 manifest with image digests and SHA-256 checksums. `--from-oci` bundles the
@@ -679,8 +679,8 @@ Inside the network, signed in to your registry (`docker login`, `podman login`
 or `skopeo login` — any of the three works):
 
 ```bash
-sha256sum -c tasksense-helm-airgap-1.1.0.tar.gz.sha256
-mkdir tasksense-bundle && tar -xzf tasksense-helm-airgap-1.1.0.tar.gz -C tasksense-bundle
+sha256sum -c tasksense-helm-airgap-1.1.1.tar.gz.sha256
+mkdir tasksense-bundle && tar -xzf tasksense-helm-airgap-1.1.1.tar.gz -C tasksense-bundle
 cd tasksense-bundle
 ./helm-airgap-load.sh harbor.corp.internal            # --push-chart to also push the chart
 ```
@@ -688,7 +688,7 @@ cd tasksense-bundle
 Expected: every checksum `OK`, then
 
 ```
-  ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.corp.internal/yurdtech/tasksense:1.1.0
+  ghcr.io/yurdtech/tasksense:1.1.1 -> harbor.corp.internal/yurdtech/tasksense:1.1.1
   mongo:7 -> harbor.corp.internal/library/mongo:7
 ```
 
@@ -700,7 +700,7 @@ registry host is replaced and the path kept; Docker Hub official images gain
 kubectl create secret docker-registry tasksense-pull -n tasksense \
   --docker-server=harbor.corp.internal --docker-username='<robot account>' --docker-password='<token>'
 
-helm install tasksense ./tasksense-1.1.0.tgz -n tasksense \
+helm install tasksense ./tasksense-1.1.1.tgz -n tasksense \
   --set global.imageRegistry=harbor.corp.internal \
   --set 'imagePullSecrets[0].name=tasksense-pull' \
   -f my-values.yaml --wait --timeout 30m

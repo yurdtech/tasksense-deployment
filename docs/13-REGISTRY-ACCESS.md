@@ -83,10 +83,10 @@ write the token anywhere themselves.
 ### 2. Pull
 
 ```bash
-docker pull ghcr.io/yurdtech/tasksense:1.1.0
+docker pull ghcr.io/yurdtech/tasksense:1.1.1
 ```
 
-Expected: ends with `Status: Downloaded newer image for ghcr.io/yurdtech/tasksense:1.1.0`.
+Expected: ends with `Status: Downloaded newer image for ghcr.io/yurdtech/tasksense:1.1.1`.
 `install.sh` does this for you; doing it by hand is a quick way to prove the
 token and the network path work before the maintenance window.
 
@@ -96,10 +96,10 @@ Every image and every chart is signed with our cosign key. Get `cosign.pub`
 from the public releases page, then:
 
 ```bash
-cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.0
+cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.1
 ```
 
-Expected: `Verification for ghcr.io/yurdtech/tasksense:1.1.0 -- The following checks were performed on each of these signatures: … The signatures were verified against the specified public key`,
+Expected: `Verification for ghcr.io/yurdtech/tasksense:1.1.1 -- The following checks were performed on each of these signatures: … The signatures were verified against the specified public key`,
 followed by a JSON line naming the image digest.
 
 cosign also looks the signature up in the public Sigstore transparency log. On
@@ -153,7 +153,7 @@ create, or one from Vault / External Secrets, is the better choice for productio
 ```bash
 echo '<TOKEN>' | helm registry login ghcr.io -u yurdtech --password-stdin
 helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense \
-  --version 1.1.0 -n tasksense -f my-values.yaml
+  --version 1.1.1 -n tasksense -f my-values.yaml
 ```
 
 Expected: `Login Succeeded`, then `STATUS: deployed` and the chart's notes.
@@ -161,7 +161,7 @@ The chart version always equals the application version. Verify the chart
 signature the same way as the image:
 
 ```bash
-cosign verify --key cosign.pub ghcr.io/yurdtech/charts/tasksense:1.1.0
+cosign verify --key cosign.pub ghcr.io/yurdtech/charts/tasksense:1.1.1
 ```
 
 The whole Helm installation: [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md),
@@ -205,11 +205,11 @@ everything internally from there. Run this on a machine that can reach both
 echo '<TOKEN>' | docker login ghcr.io -u yurdtech --password-stdin
 docker login harbor.corp.internal
 
-./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.0
+./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.1
 ```
 
 Expected: one line per image copied —
-`harbor.corp.internal/tasksense/tasksense:1.1.0`,
+`harbor.corp.internal/tasksense/tasksense:1.1.1`,
 `harbor.corp.internal/tasksense/mongo:7`,
 `harbor.corp.internal/tasksense/redis:7-alpine` and
 `harbor.corp.internal/tasksense/caddy:2.10-alpine` — then the settings to put
@@ -270,22 +270,22 @@ token**, on any machine that has internet:
 
 ```bash
 echo '<TOKEN>' | oras login ghcr.io -u yurdtech --password-stdin
-oras pull ghcr.io/yurdtech/tasksense-offline:1.1.0
+oras pull ghcr.io/yurdtech/tasksense-offline:1.1.1
 ```
 
 Expected: `Downloaded` lines and four files in the current directory:
-`tasksense-onprem-1.1.0.tar.gz`, `SHA256SUMS`, `SHA256SUMS.sig` and
+`tasksense-onprem-1.1.1.tar.gz`, `SHA256SUMS`, `SHA256SUMS.sig` and
 `cosign.pub`. The bill of materials (`sbom.cdx.json`) and the vulnerability
 scan (`trivy-report.json`) are inside the tarball, at its top level.
 
 **2. Verify it — before carrying it in, not after:**
 
 ```bash
-./scripts/verify-signature.sh tasksense-onprem-1.1.0.tar.gz
+./scripts/verify-signature.sh tasksense-onprem-1.1.1.tar.gz
 ```
 
 (Use the script from a clone of this repository, or from
-`tasksense-deployment-1.1.0.tar.gz` on the public releases page.)
+`tasksense-deployment-1.1.1.tar.gz` on the public releases page.)
 
 Expected:
 
@@ -296,9 +296,9 @@ Expected:
   compare it with the fingerprint YurdTech gave you out-of-band
   ✓ SHA256SUMS is signed by that key
 ==> Checksums
-  ✓ tasksense-onprem-1.1.0.tar.gz matches SHA256SUMS
+  ✓ tasksense-onprem-1.1.1.tar.gz matches SHA256SUMS
 
-VERIFIED  tasksense-onprem-1.1.0.tar.gz : intact and signed by the release key
+VERIFIED  tasksense-onprem-1.1.1.tar.gz : intact and signed by the release key
 ```
 
 Compare the printed fingerprint with the one we gave you out-of-band. The
@@ -317,8 +317,8 @@ policy requires it.
 **3. Carry it in** by whatever your policy allows, then on the server:
 
 ```bash
-tar xzf tasksense-onprem-1.1.0.tar.gz
-cd tasksense-onprem-1.1.0
+tar xzf tasksense-onprem-1.1.1.tar.gz
+cd tasksense-onprem-1.1.1
 cp compose/.env.example compose/.env && chmod 600 compose/.env
 ${EDITOR:-vi} compose/.env              # docs/01-INSTALL-COMPOSE.md, step 4
 ./scripts/preflight.sh --offline
@@ -342,7 +342,7 @@ bundle's version.
 On a machine with internet, logged in to `ghcr.io`:
 
 ```bash
-./scripts/helm-airgap-bundle.sh            # → dist/tasksense-helm-airgap-1.1.0.tar.gz
+./scripts/helm-airgap-bundle.sh            # → dist/tasksense-helm-airgap-1.1.1.tar.gz
 ```
 
 It packs the chart, every image the chart can use — the application and the
@@ -352,17 +352,17 @@ manifest with image digests, all checksummed. `--version`, `--platform`
 packs the published chart instead of the local one.
 
 Expected: ends with the bundle path,
-`dist/tasksense-helm-airgap-1.1.0.tar.gz`.
+`dist/tasksense-helm-airgap-1.1.1.tar.gz`.
 
 Inside your network, on a machine logged in to your registry:
 
 ```bash
-mkdir bundle && tar xzf tasksense-helm-airgap-1.1.0.tar.gz -C bundle && cd bundle
+mkdir bundle && tar xzf tasksense-helm-airgap-1.1.1.tar.gz -C bundle && cd bundle
 ./helm-airgap-load.sh harbor.corp.internal
 ```
 
 Expected: the checksums verify (`OK`), each image is pushed
-(`==> ghcr.io/yurdtech/tasksense:1.1.0 -> harbor.corp.internal/yurdtech/tasksense:1.1.0`),
+(`==> ghcr.io/yurdtech/tasksense:1.1.1 -> harbor.corp.internal/yurdtech/tasksense:1.1.1`),
 and the script prints the `helm install` command with
 `--set global.imageRegistry=harbor.corp.internal`.
 

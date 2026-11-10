@@ -1,5 +1,6 @@
 {{- $fullname := include "tasksense.fullname" . -}}
 {{- $worker := include "tasksense.suffixedName" (dict "root" $ "suffix" "worker") -}}
+{{- $sync := include "tasksense.suffixedName" (dict "root" $ "suffix" "sync") -}}
 {{- $migrate := include "tasksense.suffixedName" (dict "root" $ "suffix" "migrate") -}}
 {{- $preBackup := include "tasksense.suffixedName" (dict "root" $ "suffix" "pre-upgrade-backup") -}}
 {{- $ns := .Release.Namespace -}}
@@ -11,6 +12,7 @@ TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }},
   api          {{ if include "tasksense.autoscaling" . }}autoscaled {{ int $v.autoscaling.minReplicas }}–{{ int $v.autoscaling.maxReplicas }} replicas (HPA){{ else }}{{ $replicas }} replica{{ if ne $replicas 1 }}s{{ end }}{{ end }}, strategy {{ $v.strategy.type }}, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
   redis        {{ include "tasksense.redisSummary" . }}
   worker       {{ if $v.worker.enabled }}on — {{ $worker }}, heap {{ $v.worker.heapMb }} MB{{ else }}off (the API runs Jira landings itself; worker.enabled=true for a migration){{ end }}
+  sync         {{ if $v.jiraSync.enabled }}on — {{ $sync }}, heap {{ $v.jiraSync.heapMb }} MB (Jira and Confluence sync; JIRA_SYNC_RUNNER=external){{ else }}off (the API runs the Jira sync itself; JIRA_SYNC_RUNNER=inline){{ end }}
   migrations   {{ if $v.migrations.enabled }}pre-install/pre-upgrade Job, MIGRATE_ON_BOOT=manual{{ else }}at boot (MIGRATE_ON_BOOT=auto){{ end }}
   backups      {{ if $v.backup.enabled }}nightly "{{ $v.backup.schedule }}"{{ if $v.backup.suspend }} (suspended){{ end }} -> PVC {{ include "tasksense.backupClaimName" . }}, kept {{ $v.backup.retentionDays }} days{{ if and $v.migrations.enabled $v.migrations.backupBeforeUpgrade }}; dump before every upgrade{{ end }}{{ else }}off{{ end }}
   security     {{ if include "tasksense.isOpenShift" . }}OpenShift posture (uid/fsGroup from the SCC){{ else }}Kubernetes posture (runAsUser {{ $v.podSecurityContext.runAsUser | default 1001 }}){{ end }}; AGENT_EXECUTOR=off; sessions {{ $v.config.sessionTtlHours }}h; Swagger {{ ternary "on" "off" (eq (toString $v.config.swaggerEnabled) "true") }}
@@ -20,6 +22,9 @@ TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }},
      kubectl -n {{ $ns }} rollout status deploy/{{ $fullname }} --timeout=10m
 {{- if $v.worker.enabled }}
      kubectl -n {{ $ns }} rollout status deploy/{{ $worker }}
+{{- end }}
+{{- if $v.jiraSync.enabled }}
+     kubectl -n {{ $ns }} rollout status deploy/{{ $sync }}
 {{- end }}
 {{- if $v.migrations.enabled }}
 

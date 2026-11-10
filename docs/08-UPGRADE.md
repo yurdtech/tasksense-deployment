@@ -316,7 +316,7 @@ For a full rollback, restore the pre-upgrade dump from the backup PVC as well:
 
 ## The upgrade that brings the Jira sync worker
 
-From this release the Jira and Confluence sync runs in its own process: the
+From 1.1.1 the Jira and Confluence sync runs in its own process: the
 `tasksense-sync` container on Compose, the `<release>-sync` Deployment on
 Kubernetes and OpenShift. **It is on by default, and the upgrade starts it**,
 with nothing to edit. Without a Jira connection it only answers its health
@@ -336,6 +336,26 @@ Turning it off later, and everything it needs:
 [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker),
 [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#the-jira-sync-worker-on-by-default),
 [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md#the-jira-sync-worker).
+
+---
+
+## Upgrading from 1.1.0 to 1.1.1
+
+The procedure above, with nothing to edit first. 1.1.1 adds **no schema
+migration**: the `migrate` step reports the schema current, and
+`./scripts/rollback.sh --app-only` (or `helm rollback`) returns to 1.1.0
+without the schema-ahead warning. It is not marked rolling-safe — keep
+`Recreate` for this upgrade.
+
+| Change | What to do |
+| --- | --- |
+| **The Jira sync worker starts** — one more container on Compose, one more Deployment on Kubernetes | Nothing, unless the Kubernetes data volume is `ReadWriteOncePod` or `persistence.enabled: false`: then set `jiraSync.enabled: false` first, or the chart refuses the upgrade. Mind the namespace quota (requests 250m / 1Gi). [The upgrade that brings the Jira sync worker](#the-upgrade-that-brings-the-jira-sync-worker). |
+| **Jira and Confluence sync** — a new Sync page imports projects, boards, issues with their full history, comments, worklogs, attachments, people, workflows and automation rules, and Confluence spaces into Docs. It only reads from Jira until an administrator makes a board live | Before connecting Jira, add the Jira site (and the proxy, if any) to `EGRESS_ALLOWLIST` / `config.egressAllowlist`. Free disk for the attachments it copies: a run pauses itself below 2 GB free. |
+| **Several API processes with Redis** — optional | Nothing changes without `REDIS_URL`. To scale out: [15-SCALING-AND-HA](15-SCALING-AND-HA.md). |
+| **Sign-in verification by email code** — optional, off | Admin → Authentication → Sign-in verification, separately for directory (LDAP) and for email + password sign-in. It needs a working email channel and is refused without one. |
+| **Space permission schemes are applied as Jira applies them** | Nothing changes on default settings. Where an administrator has set a space's permission scheme, screens or automation actors, some requests that 1.1.0 allowed are now refused — on purpose: a space whose scheme withholds *Browse* is hidden from that person everywhere (a direct link answers 404); a rule whose actor is a named person acts with that person's permissions; the REST API refuses a field the space's screen leaves off (400); a workflow, priority or work-type scheme in use cannot be deleted (409); `votes` is no longer accepted on `PATCH /tasks/:id`. Review such spaces before the upgrade and tell the teams concerned. |
+| **Team screen** — only administrators invite, and a role change needs an administrator's approval | Tell the people who invited colleagues until now. |
+| **Invites expire** — a link invite after 7 days, an email invite after 14 (Admin → Security → Invites). An invite from 1.1.0 carries no date and runs out by its age; a pending invitee takes no seat until they accept | Re-send invites older than that, or lengthen the expiry before the upgrade. |
 
 ---
 

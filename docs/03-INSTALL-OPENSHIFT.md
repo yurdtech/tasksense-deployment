@@ -84,7 +84,7 @@ The overlay goes **before** your file — with several `-f`, the later file wins
 and yours must:
 
 ```bash
-helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.0 \
+helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense --version 1.1.1 \
   -n tasksense \
   -f helm/tasksense/values-openshift.yaml \
   -f my-values.yaml \
@@ -99,7 +99,7 @@ instead of OCI: replace the chart reference with `./helm/tasksense` and drop
 Expected: `STATUS: deployed` and NOTES beginning
 
 ```
-TaskSense 1.1.0 — chart 1.1.0, release tasksense (revision 1) in tasksense.
+TaskSense 1.1.1 — chart 1.1.1, release tasksense (revision 1) in tasksense.
   ...
   security     OpenShift posture (uid/fsGroup from the SCC); AGENT_EXECUTOR=off; sessions 12h; Swagger off
 ```

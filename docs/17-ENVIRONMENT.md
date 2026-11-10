@@ -147,6 +147,7 @@ either way.
 | `JIRA_SYNC_RUNNER` | — | `inline` | Where the Jira sync's background work runs: full migrations, and the two-way sync's queue and sweeps. `inline`: in the API process. `external`: in the separate sync worker; the API then only takes webhooks and queues the work. | **`external`** whenever the `jira-sync` profile is on (`preflight.sh` enforces it); Helm sets it from `jiraSync.enabled` |
 | `SYNC_WORKER_PORT` | — | `3100` | The sync worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `jiraSync.port` |
 | `SYNC_HEAP_MB` / `SYNC_CPU_LIMIT` / `SYNC_MEMORY_LIMIT` *(Compose)* | — | `2048` / `1` / `3g` | Heap, CPU and memory of the `sync` container. | |
+| `REPLICATION_MIN_FREE_MB` | — | `2048` | A Jira or Confluence sync run pauses itself when free disk under the database or the local file storage drops below this many MB, so it never fills the disk. An administrator resumes it from the Sync page once there is room. | Lower only on a small test installation |
 | `APP_HEAP_MB` *(Compose)* | — | `1536` | Node.js heap of the API (`--max-old-space-size`). Keep it at about 75 % of `APP_MEMORY_LIMIT`. | |
 | `APP_CPU_LIMIT` *(Compose)* | — | `2` | CPU ceiling of the API container. | |
 | `APP_MEMORY_LIMIT` *(Compose)* | — | `2g` | Memory ceiling of the API container. | |
@@ -191,6 +192,7 @@ Admin → Email delivery overrides these once saved there.
 | --- | --- | --- | --- | --- |
 | `STORAGE_MAX_FILE_MB` | — | `25` | Per-file attachment limit. | Per your policy |
 | `STORAGE_MAX_VIDEO_FILE_MB` | — | `200` | Limit for inline-playable video (mp4/webm/mov). | Lower, or equal to the above, if video is not wanted |
+| `STORAGE_UPLOAD_CEILING_MB` | — | none | A hard ceiling on the upload caps an administrator can set in Admin → Storage. Use it when the disk or a proxy in front cannot take more. Unset, there is no ceiling. | Your proxy's body limit, if it has one |
 | `JIRA_BACKUP_MAX_GB` | — | `20` | Largest Jira site backup (`entities.xml`) and workspace archive accepted. Streamed to disk, never held in memory. Your reverse proxy's upload limit must be at least this (`examples/nginx.conf` uses 21g). | At least the size of the backup you will import |
 | `JIRA_BACKUP_RETENTION_DAYS` | — | `7` | How long an uploaded Jira backup is kept for further landings before it is deleted. | `7` during the migration; it is a full copy of your Jira, so not longer than needed |
 | `TMPDIR` | — | set by the stack | Where uploads are staged: `/app/api/data/tmp`, on the data volume, shared by the API and the worker. Not configurable in `.env`. | Plan **free space = 2 × the Jira backup size** on the data volume |

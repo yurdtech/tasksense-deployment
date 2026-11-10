@@ -120,7 +120,7 @@ confirm "This host runs ${CURRENT_VERSION}. Overwrite its data with the archive 
 # ── 1. Stop writers ──────────────────────────────────────────────────────────
 step "Stopping the application"
 stop_app_tier
-ok "app and worker stopped"
+ok "app and workers stopped"
 RESTARTED=0
 on_exit() {
   local rc=$?

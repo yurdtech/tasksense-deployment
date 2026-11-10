@@ -180,11 +180,11 @@ if [ -n "${FAKE_REAL_DOCKER}" ] && "${FAKE_REAL_DOCKER}" compose version >/dev/n
 fi
 
 # ── a 1.0 configuration is carried forward first ─────────────────────────────
-fixture_env "${ENV}" "-COMPOSE_PROFILES" "-SWAGGER_ENABLED" "TASKSENSE_VERSION=1.0.0"
+fixture_env "${ENV}" "-COMPOSE_PROFILES" "-SWAGGER_ENABLED" "-JIRA_SYNC_RUNNER" "TASKSENSE_VERSION=1.0.0"
 run_preflight --target-version 1.1.0
 contains "a 1.0 file is carried over before it is checked" "Configuration carried over from 1.0" "${OUT}"
 check "and then passes" "" "$(blockers)"
-check "with the bundled database it always had" "1" "$(grep -c '^COMPOSE_PROFILES=bundled-mongo$' "${ENV}")"
+check "with the bundled database it always had, and the sync worker" "1" "$(grep -c '^COMPOSE_PROFILES=bundled-mongo,jira-sync$' "${ENV}")"
 
 # ── a container already holding one of the stack's names ─────────────────────
 # Left over from an earlier attempt: `up` would stop halfway on "Conflict. The

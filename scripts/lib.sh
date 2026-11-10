@@ -29,6 +29,7 @@ case "${ENV_FILE}" in /*) ;; *) ENV_FILE="${PWD}/${ENV_FILE}" ;; esac
 # stop_app also ask Compose for every container of the app service.
 APP_CONTAINER=tasksense-app
 WORKER_CONTAINER=tasksense-worker
+SYNC_CONTAINER=tasksense-sync
 MONGO_CONTAINER=tasksense-mongo
 # shellcheck disable=SC2034  # read by preflight.sh
 MIGRATE_CONTAINER=tasksense-migrate
@@ -262,11 +263,18 @@ stop_app() {
 }
 
 # The application tier: everything that writes to the database except the
-# database. Stopped before a consistent backup or a restore, worker first so no
-# landing is mid-write when the API goes.
+# database. Stopped before a consistent backup or a restore, the workers first
+# so no landing or sync run is mid-write when the API goes. A sync run stopped
+# here resumes at its checkpoint on the next start.
 stop_app_tier() {
   stop_container "${WORKER_CONTAINER}"
+  stop_container "${SYNC_CONTAINER}"
   stop_app
+}
+
+# Is any process of the application tier running?
+app_tier_running() {
+  app_running || container_running "${WORKER_CONTAINER}" || container_running "${SYNC_CONTAINER}"
 }
 
 # Bring the stack up as COMPOSE_PROFILES describes it.
@@ -280,10 +288,14 @@ stop_app_tier() {
 #
 # The same for the replicas profile's load balancer, which would otherwise keep
 # holding HTTP_PORT and stop the single app from publishing it, and for its
-# bundled Redis.
+# bundled Redis. And for the sync worker: left running after jira-sync was
+# removed, it would run the Jira sync beside an API now told to run it too.
 compose_up() {
   if ! import_worker_enabled; then
     stop_container "${WORKER_CONTAINER}" "the import-worker profile is not in COMPOSE_PROFILES"
+  fi
+  if ! jira_sync_enabled; then
+    stop_container "${SYNC_CONTAINER}" "the jira-sync profile is not in COMPOSE_PROFILES"
   fi
   if ! bundled_mongo_enabled; then
     stop_container "${MONGO_CONTAINER}" "the bundled-mongo profile is not in COMPOSE_PROFILES"
@@ -447,6 +459,12 @@ import_worker_enabled() {
   profile_enabled import-worker
 }
 
+# The Jira sync in its own process (the sync service).
+jira_sync_enabled() {
+  [ -f "${ENV_FILE}" ] || return 1
+  profile_enabled jira-sync
+}
+
 # Several API processes behind a load balancer (docker-compose.replicas.yml).
 replicas_enabled() {
   [ -f "${ENV_FILE}" ] || return 1
@@ -514,6 +532,11 @@ caddy_image() {
 # runs first after updating these files, the configuration is right before
 # compose reads it.
 migrate_legacy_env() {
+  migrate_env_from_1_0 "$@"
+  migrate_env_sync_worker "$@"
+}
+
+migrate_env_from_1_0() {
   local file="${1:-${ENV_FILE}}" profiles keep stamp
   [ -f "${file}" ] || return 0
   grep -q '^COMPOSE_PROFILES=' "${file}" && return 0
@@ -545,6 +568,73 @@ migrate_legacy_env() {
   grep -q '^SWAGGER_ENABLED=false$' "${file}" && ok "SWAGGER_ENABLED=false  (the API browser stays off, as before)"
   note "the original is kept at ${keep}"
   note "compare with compose/.env.example for the settings 1.1 added — every one has a default"
+}
+
+# Since the sync worker exists, the Jira sync runs in its own container by
+# default. A configuration from before it says nothing about JIRA_SYNC_RUNNER:
+# it gains the jira-sync profile and JIRA_SYNC_RUNNER=external, once, so the
+# upgrade brings the worker up with nothing to edit. A configuration that names
+# JIRA_SYNC_RUNNER at all — inline included — has made its choice and is left
+# as it is.
+migrate_env_sync_worker() {
+  local file="${1:-${ENV_FILE}}" profiles keep stamp
+  [ -f "${file}" ] || return 0
+  env_has_key JIRA_SYNC_RUNNER "${file}" && return 0
+
+  profiles="$(env_value COMPOSE_PROFILES "${file}" | tr -d ' ')"
+  case ",${profiles}," in
+    *,jira-sync,*) ;;
+    *) profiles="${profiles:+${profiles},}jira-sync" ;;
+  esac
+
+  stamp="$(date -u +%Y%m%d-%H%M%SZ)"
+  mkdir -p "${BACKUPS_DIR}"
+  keep="${BACKUPS_DIR}/env-before-sync-worker-${stamp}"
+  ( umask 077; cp "${file}" "${keep}" )
+  env_set "${file}" COMPOSE_PROFILES "${profiles}"
+  env_set "${file}" JIRA_SYNC_RUNNER external
+
+  step "The Jira sync worker"
+  ok "COMPOSE_PROFILES=${profiles}  (the Jira sync now runs in its own container)"
+  ok "JIRA_SYNC_RUNNER=external"
+  note "to keep it in the API process instead: remove jira-sync from COMPOSE_PROFILES and set JIRA_SYNC_RUNNER=inline"
+  note "the original is kept at ${keep}"
+}
+
+# Does IMAGE carry the sync worker (dist/sync-worker.js)? 0 yes, 1 no, 2 cannot
+# tell. Asked of the image itself, because no version number marks where it
+# arrived on every branch a site may run.
+image_has_sync_worker() {
+  local rc=0
+  "${RUNTIME}" run --rm --network none --entrypoint node "$1" \
+    -e "process.exit(require('fs').existsSync('dist/sync-worker.js') ? 0 : 3)" >/dev/null 2>&1 || rc=$?
+  case "${rc}" in
+    0) return 0 ;;
+    3) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# A version without the sync worker cannot run the jira-sync profile's
+# container — it would restart forever — and its API runs the Jira sync itself.
+# So going to one turns the profile off, says so, and keeps the original.
+sync_worker_off_for_image() {
+  local image="$1" version="$2" profiles keep stamp rc=0
+  jira_sync_enabled || return 0
+  image_has_sync_worker "${image}" || rc=$?
+  case "${rc}" in
+    0) return 0 ;;
+    2) warn "could not tell whether ${version} has the sync worker — if the sync container keeps restarting, remove jira-sync from COMPOSE_PROFILES and set JIRA_SYNC_RUNNER=inline"; return 0 ;;
+  esac
+  profiles="$(env_profiles | tr ',' '\n' | { grep -vx 'jira-sync' || true; } | paste -sd, -)"
+  stamp="$(date -u +%Y%m%d-%H%M%SZ)"
+  mkdir -p "${BACKUPS_DIR}"
+  keep="${BACKUPS_DIR}/env-before-sync-worker-off-${stamp}"
+  ( umask 077; cp "${ENV_FILE}" "${keep}" )
+  env_set "${ENV_FILE}" COMPOSE_PROFILES "${profiles}"
+  env_set "${ENV_FILE}" JIRA_SYNC_RUNNER inline
+  ok "${version} has no sync worker: jira-sync removed from COMPOSE_PROFILES, JIRA_SYNC_RUNNER=inline"
+  note "the original is kept at ${keep}"
 }
 
 # ── MongoDB connection strings ───────────────────────────────────────────────

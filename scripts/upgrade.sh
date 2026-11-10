@@ -112,12 +112,13 @@ if bundled_mongo_enabled || external_database; then
   ensure_image "$(mongo_image)" >/dev/null 2>&1 || warn "$(mongo_image) is not on this host — the backup step needs it"
 fi
 ok "${TARGET_IMAGE}"
+sync_worker_off_for_image "${TARGET_IMAGE}" "${TARGET}"
 
 # ── 3. Stop, then back up ────────────────────────────────────────────────────
 step "Stopping the application"
 stop_app_tier
 STAGE_REACHED=stopped
-ok "app and worker stopped — the backup that follows is exact"
+ok "app and workers stopped — the backup that follows is exact"
 
 restart_current() {
   env_set "${ENV_FILE}" TASKSENSE_VERSION "${CURRENT}"

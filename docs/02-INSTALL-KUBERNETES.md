@@ -21,7 +21,8 @@ for what differs.
 
 ## What the chart installs
 
-By default TaskSense is **one API pod**, plus an optional import worker. Without
+By default TaskSense is **one API pod and the Jira sync worker**, plus an
+optional import worker. Without
 Redis that is the only layout: sign-in tickets, lockout and rate-limit counters,
 cache invalidations and the live-update fan-out live in the process, so the
 chart refuses `replicaCount` above 1, autoscaling and a PodDisruptionBudget,
@@ -36,6 +37,8 @@ PodDisruptionBudget; scheduled jobs still run once, under job leases in MongoDB.
 | Object | What it is |
 |---|---|
 | Deployment `<release>` | The API (port 3000), `replicaCount` pods (1 by default), `WORKER_ROLE=all` (or `api` with the worker) |
+| Deployment `<release>-sync` *(on by default)* | The Jira sync worker, `node dist/sync-worker.js`, `WORKER_ROLE=sync` — Jira and Confluence migrations and the two-way sync. The API then runs with `JIRA_SYNC_RUNNER=external`. `jiraSync.enabled: false` turns it off |
+| Service `<release>-sync` *(with the sync worker)* | ClusterIP, port 3100: `/live`, `/ready`, `/metrics` — probes and Prometheus only |
 | HorizontalPodAutoscaler `<release>` *(opt-in, needs Redis)* | `autoscaling.*`, `autoscaling/v2` |
 | PodDisruptionBudget `<release>` *(opt-in, needs Redis)* | `maxUnavailable: 1` for the API pods |
 | Deployment `<release>-worker` *(opt-in)* | The import worker, `node dist/worker.js`, `WORKER_ROLE=worker` — lands Jira site backups |
@@ -237,6 +240,8 @@ something broken, and names the value to change:
 | `config.rateLimitStore: redis` without `redis.*` | `config.rateLimitStore=redis needs Redis …` |
 | `terminationGracePeriodSeconds` below `preStopSleepSeconds` + 20 | `terminationGracePeriodSeconds (…) must be at least preStopSleepSeconds + 20 …` |
 | `worker.enabled` on ReadWriteOnce | `worker.enabled=true needs persistence.accessMode=ReadWriteMany …` |
+| the sync worker (default) with `persistence.accessMode: ReadWriteOncePod` | `jiraSync.enabled=true (the default) cannot run with persistence.accessMode=ReadWriteOncePod …` — set `jiraSync.enabled: false` |
+| the sync worker (default) with `persistence.enabled: false` | `jiraSync.enabled=true (the default) requires persistence.enabled=true …` — set `jiraSync.enabled: false` |
 | a short `storageSecret` | `storageSecret must be at least 32 characters …` |
 | `config.agentExecutor: on` | `… this chart always renders AGENT_EXECUTOR=off …` |
 | `config.jiraBackupMaxGb` above `ingress.uploadMaxBody` | `ingress.uploadMaxBody (21g) is smaller than config.jiraBackupMaxGb …` |
@@ -373,6 +378,50 @@ ReadWriteMany in place. Scale the API to 0, create an RWX claim, copy
 upgrade with `worker.enabled: true`, `persistence.accessMode: ReadWriteMany` and
 `persistence.existingClaim: <the new claim>`. The old claim stays (it is kept on
 uninstall too) until you delete it.
+
+---
+
+## The Jira sync worker
+
+On by default (`jiraSync.enabled: true`). Jira and Confluence migrations, and
+the Jira two-way sync's queue and sweeps, run in this pod
+(`<release>-sync`) instead of the API. Reading a whole Jira site — hundreds of
+thousands of issues with their history and attachments — then never shares a
+heap with the people using the product. Until an administrator connects Jira
+it only answers its probes.
+
+- **Upgrade.** Your values file comes with the chart's defaults, so
+  `helm upgrade -f my-values.yaml` brings the pod up. Set
+  `jiraSync.enabled: false` to keep the sync in the API process instead.
+- **Storage.** It writes Jira attachments into the workspace's storage. With
+  the local provider that is the data claim:
+  - `ReadWriteMany`: it runs on any node;
+  - `ReadWriteOnce`: the chart schedules it onto the API pod's node, which a
+    ReadWriteOnce volume allows;
+  - `ReadWriteOncePod` or `persistence.enabled: false`: the chart refuses —
+    set `jiraSync.enabled: false`.
+
+  With S3 / MinIO / WebDAV attachments the claim still holds upload staging,
+  so the same rule applies.
+- **Egress.** This pod calls Jira and Confluence. With `networkPolicy.enabled`
+  its egress needs the Jira site (or your outbound proxy) on 443 —
+  [18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md), row O15 — and the
+  site in `config.egressAllowlist`. For Jira Cloud user pictures, also the
+  avatar host. Without it people keep their initials, and Needs attention
+  says why.
+- **Redis.** Not needed. With `redis.*` set, the pod gets the same Secret and
+  ConfigMap as the API and uses the same connection.
+- **Resources.** Requests 250m / 1Gi, limit 1 CPU / 3Gi (`jiraSync.resources`,
+  heap `jiraSync.heapMb`). Fit it in the namespace's quota.
+
+```bash
+kubectl -n tasksense logs deploy/tasksense-sync | tail -1
+kubectl -n tasksense get pods -l app.kubernetes.io/component=sync
+```
+
+Expected: `[tasksense-sync] up — Jira migrations and the two-way sync run here`.
+The Sync page in the app shows **Sync worker online**. More:
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker).
 
 ---
 
@@ -727,6 +776,12 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `worker.enabled` | `false` | Import worker; API gets `WORKER_ROLE=api` |
 | `worker.heapMb` | `4096` | Worker `NODE_OPTIONS` |
 | `worker.resources` | req 500m / 2Gi, limit 2 CPU / 6Gi | Worker pod |
+| `jiraSync.enabled` | `true` | The sync worker Deployment and Service; API gets `JIRA_SYNC_RUNNER=external` (`inline` when `false`) |
+| `jiraSync.heapMb` | `2048` | Sync worker `NODE_OPTIONS` |
+| `jiraSync.port` | `3100` | `SYNC_WORKER_PORT`: `/live`, `/ready`, `/metrics` |
+| `jiraSync.resources` | req 250m / 1Gi, limit 1 CPU / 3Gi | Sync worker pod |
+| `jiraSync.terminationGracePeriodSeconds` | `45` | Time to hand a run back at its checkpoint |
+| `jiraSync.nodeSelector` / `tolerations` / `affinity` / `priorityClassName` / `podAnnotations` / `podLabels` | empty | Sync worker pod; `affinity` is merged after the chart's own co-location rule (ReadWriteOnce) |
 | `config.mongodbDatabase` | `tasksense` | `MONGODB_DB` (also what the backups dump) |
 | `config.mongodbTimeoutMs` | `15000` | `MONGODB_TIMEOUT_MS` (app default 5000) |
 | `config.mongodbOpTimeoutMs` | `30000` | `MONGODB_OP_TIMEOUT_MS` |

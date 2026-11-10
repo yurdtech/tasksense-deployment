@@ -89,14 +89,14 @@ trap finish EXIT
 step "Backing up TaskSense ${VERSION}"
 
 if [ "${STOP_APP}" = "1" ]; then
-  if app_running || container_running "${WORKER_CONTAINER}"; then
+  if app_tier_running; then
     step "Stopping the application for a consistent copy"
     stop_app_tier
     STOPPED_APP=1
-    ok "app and worker stopped"
+    ok "app and workers stopped"
   fi
 fi
-if app_running || container_running "${WORKER_CONTAINER}"; then
+if app_tier_running; then
   CONSISTENT=false
 else
   CONSISTENT=true

@@ -187,6 +187,10 @@ services:
       # `all` runs every workload in this process. With the import-worker
       # profile on it must be `api` — scripts/preflight.sh refuses otherwise.
       WORKER_ROLE: ${WORKER_ROLE:-all}
+      # `inline` runs the Jira sync (migrations, the two-way sync's queue) in
+      # this process. With the jira-sync profile on it must be `external` —
+      # scripts/preflight.sh refuses otherwise.
+      JIRA_SYNC_RUNNER: ${JIRA_SYNC_RUNNER:-inline}
       # V8 sizes its heap from the HOST's memory, so without a cap a container
       # with a memory limit is OOM-killed before the collector runs. Keep it at
       # about 75% of APP_MEMORY_LIMIT.
@@ -247,6 +251,40 @@ services:
         limits:
           cpus: "${WORKER_CPU_LIMIT:-2}"
           memory: ${WORKER_MEMORY_LIMIT:-6g}
+
+  sync:
+    <<: *tasksense
+    container_name: tasksense-sync
+    profiles: ["jira-sync"]
+    restart: unless-stopped
+    command: ["node", "dist/sync-worker.js"]
+    environment:
+      <<: *stack-env
+      MIGRATE_ON_BOOT: manual
+      # Forced: this process runs Jira migrations and the two-way sync's queue
+      # and nothing user-facing. Runs are lease-based, so a worker that dies
+      # hands them to the next start at the last checkpoint.
+      WORKER_ROLE: sync
+      SYNC_WORKER_PORT: "3100"
+      NODE_OPTIONS: --max-old-space-size=${SYNC_HEAP_MB:-2048}
+    # No `ports:` — 3100 answers /live, /ready and /metrics inside the compose
+    # network only; nothing on the host or the network needs it.
+    depends_on:
+      <<: *mongo-ready
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "${SYNC_CPU_LIMIT:-1}"
+          memory: ${SYNC_MEMORY_LIMIT:-3g}
 
 volumes:
   app-data:

@@ -49,7 +49,7 @@ blank, the default is the recommendation.
 | `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
-| `COMPOSE_PROFILES` | yes | `bundled-mongo` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. `replicas`: several API processes behind a bundled load balancer (`docker-compose.replicas.yml`; needs `import-worker` and a Redis). `bundled-redis`: the Redis container, with `replicas` only. Comma-separated; empty runs none of them. | `bundled-mongo` for a pilot; empty with your own MongoDB; add `import-worker` for the Jira migration; `replicas` + `bundled-redis` (or your Redis) for several API processes |
+| `COMPOSE_PROFILES` | yes | `bundled-mongo,jira-sync` | Which optional services run. `bundled-mongo`: the MongoDB container. `import-worker`: the separate Jira import process. `jira-sync`: the separate Jira and Confluence sync process (on by default, with `JIRA_SYNC_RUNNER=external`). `replicas`: several API processes behind a bundled load balancer (`docker-compose.replicas.yml`; needs `import-worker` and a Redis). `bundled-redis`: the Redis container, with `replicas` only. Comma-separated; empty runs none of them. | `bundled-mongo,jira-sync` for a pilot; `jira-sync` alone with your own MongoDB; add `import-worker` for the Jira migration; `replicas` + `bundled-redis` (or your Redis) for several API processes |
 | `REDIS_IMAGE` / `REDIS_VERSION` | — | `redis` / `7-alpine` | The bundled Redis (`bundled-redis`). | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `CADDY_IMAGE` / `CADDY_VERSION` | — | `caddy` / `2.10-alpine` | The load balancer of the `replicas` profile (`tasksense-lb`). | Your mirror, if you set `TASKSENSE_IMAGE` |
 
@@ -73,6 +73,8 @@ blank, the default is the recommendation.
 | `BIND_ADDRESS` *(Compose)* | — | `127.0.0.1` | Host interface the application port is published on. Loopback means only a proxy on this host reaches it. | Keep `127.0.0.1`; if the proxy is another host, that host's interface plus a firewall rule |
 | `HTTP_PORT` *(Compose)* | — | `3000` | Host port. The container always listens on 3000. With `replicas` the load balancer (`tasksense-lb`) holds it instead and the app containers publish nothing. | |
 | `TRUST_PROXY` | — | `1`; `2` with the Compose `replicas` profile | How many reverse proxies in front of the API to believe about the client's address (`X-Forwarded-For`): every proxy that appends to it. Too few makes every client look like the proxy — one rate-limit bucket for the whole installation; too many lets a client choose its address. Helm: `config.trustProxy`. [15-SCALING-AND-HA](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe) | `1` behind one proxy; `2` behind the host proxy and `tasksense-lb` (`preflight.sh` refuses less with `replicas`); one more for each further load balancer that appends |
+| `NODE_USE_ENV_PROXY` | with an outbound proxy | — | `1` makes the application's own HTTPS calls (the Jira Cloud sync, the Jira API import, outgoing webhooks, a cloud model) go through `HTTPS_PROXY`. Without it they try to connect directly. Compose: `compose/.env`; Helm: `extraEnv`. | `1` when the host reaches the internet only through a proxy |
+| `HTTPS_PROXY` / `NO_PROXY` | with an outbound proxy | — | The corporate proxy, e.g. `http://proxy.corp.internal:3128`, and what bypasses it — keep `localhost,127.0.0.1,mongo` and your internal hosts in `NO_PROXY`. Read only when `NODE_USE_ENV_PROXY=1`. | As your network team gives them |
 
 ## 3. Secrets and licence
 
@@ -140,8 +142,12 @@ either way.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). With Redis, scheduled jobs run under leases in MongoDB, so several API processes never run the same pass. | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it; the `replicas` override forces it |
+| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). With Redis, scheduled jobs run under leases in MongoDB, so several API processes never run the same pass. | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it; the `replicas` override forces it |
 | `APP_REPLICAS` *(Compose)* | — | `3` | With the `replicas` profile: how many API containers, 1–20. Without the profile it has no effect, and `preflight.sh` refuses a value above 1 so the mismatch is not missed. Each gets `APP_CPU_LIMIT` / `APP_MEMORY_LIMIT`. | Fit them in the host: `APP_REPLICAS × APP_MEMORY_LIMIT` plus the worker, Redis, the load balancer and MongoDB |
+| `JIRA_SYNC_RUNNER` | — | `external` in `compose/.env.example`, with the `jira-sync` profile; the application's own default is `inline` | Where the Jira sync's background work runs: full migrations, and the two-way sync's queue and sweeps. `external`: in the separate sync worker; the API then only takes webhooks and queues the work. `inline`: in the API process. A `.env` from before the worker has no such line, and the scripts add it (with the profile) on the next upgrade. | **`external`** whenever the `jira-sync` profile is on and **`inline`** without it — `preflight.sh` enforces both. Helm sets it from `jiraSync.enabled` (default `true`) |
+| `SYNC_WORKER_PORT` | — | `3100` | The sync worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `jiraSync.port` |
+| `SYNC_HEAP_MB` / `SYNC_CPU_LIMIT` / `SYNC_MEMORY_LIMIT` *(Compose)* | — | `2048` / `1` / `3g` | Heap, CPU and memory of the `sync` container. | |
+| `REPLICATION_MIN_FREE_MB` | — | `2048` | A Jira or Confluence sync run pauses itself when free disk under the database or the local file storage drops below this many MB, so it never fills the disk. An administrator resumes it from the Sync page once there is room. | Lower only on a small test installation |
 | `APP_HEAP_MB` *(Compose)* | — | `1536` | Node.js heap of the API (`--max-old-space-size`). Keep it at about 75 % of `APP_MEMORY_LIMIT`. | |
 | `APP_CPU_LIMIT` *(Compose)* | — | `2` | CPU ceiling of the API container. | |
 | `APP_MEMORY_LIMIT` *(Compose)* | — | `2g` | Memory ceiling of the API container. | |
@@ -186,6 +192,7 @@ Admin → Email delivery overrides these once saved there.
 | --- | --- | --- | --- | --- |
 | `STORAGE_MAX_FILE_MB` | — | `25` | Per-file attachment limit. | Per your policy |
 | `STORAGE_MAX_VIDEO_FILE_MB` | — | `200` | Limit for inline-playable video (mp4/webm/mov). | Lower, or equal to the above, if video is not wanted |
+| `STORAGE_UPLOAD_CEILING_MB` | — | none | A hard ceiling on the upload caps an administrator can set in Admin → Storage. Use it when the disk or a proxy in front cannot take more. Unset, there is no ceiling. | Your proxy's body limit, if it has one |
 | `JIRA_BACKUP_MAX_GB` | — | `20` | Largest Jira site backup (`entities.xml`) and workspace archive accepted. Streamed to disk, never held in memory. Your reverse proxy's upload limit must be at least this (`examples/nginx.conf` uses 21g). | At least the size of the backup you will import |
 | `JIRA_BACKUP_RETENTION_DAYS` | — | `7` | How long an uploaded Jira backup is kept for further landings before it is deleted. | `7` during the migration; it is a full copy of your Jira, so not longer than needed |
 | `TMPDIR` | — | set by the stack | Where uploads are staged: `/app/api/data/tmp`, on the data volume, shared by the API and the worker. Not configurable in `.env`. | Plan **free space = 2 × the Jira backup size** on the data volume |
@@ -226,7 +233,7 @@ thousands of issues). Change them only on our advice.
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
 | `SWAGGER_ENABLED` | — | **on** in the application; `.env.example` and the chart: `false` | The interactive API browser at `/api/v1/swagger`. The application serves it unless this is `false` — it publishes the whole API surface without sign-in. Removing the line from `.env` turns it back **on**. | **`false`** |
-| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration, GitLab, the model gateway |
+| `EGRESS_ALLOWLIST` | — | empty | Internal hosts the application may call from administrator-supplied URLs: the object-storage endpoint (S3 / MinIO / WebDAV), webhooks, importers, the model base URL. Everything private is refused otherwise, and Admin → Storage will not save an endpoint it would refuse. SMTP, LDAP, OIDC and MongoDB are not affected. See [04-CONFIGURATION](04-CONFIGURATION.md#internal-hosts-the-application-calls-egress_allowlist). | Only hosts you intend: the MinIO / S3 host if attachments are not on the volume, the Jira host during migration **and for the two-way Jira sync** (e.g. `your-company.atlassian.net` — listing it also spares the DNS check a proxied network cannot answer), GitLab, the model gateway |
 | `RATE_LIMIT_STORE` | — | `redis` when Redis is configured, `memory` otherwise | Where rate-limit counters live: `memory` (per process), `mongo` (shared, one database round trip per throttled request), `redis` (shared). `memory` beside Redis is allowed with a warning in the log — N processes would allow N times every limit — and `preflight.sh` / the chart refuse it with more than one API process; `redis` without Redis is refused. Helm: `config.rateLimitStore` (empty = this default). | Leave unset |
 
 ## 13. AI features
@@ -284,7 +291,8 @@ MongoDB, before site-specific values:
 
 ```dotenv
 TASKSENSE_VERSION=1.1.0
-COMPOSE_PROFILES=                      # your own MongoDB; add import-worker for the Jira migration
+COMPOSE_PROFILES=jira-sync             # your own MongoDB; add import-worker for the Jira migration
+JIRA_SYNC_RUNNER=external
 APP_URL=https://tasksense.corp.internal
 CORS_ALLOWED_ORIGINS=https://tasksense.corp.internal
 BIND_ADDRESS=127.0.0.1
@@ -312,7 +320,7 @@ METRICS_TOKEN=<openssl rand -hex 32>
 During the Jira migration window, additionally:
 
 ```dotenv
-COMPOSE_PROFILES=import-worker
+COMPOSE_PROFILES=import-worker,jira-sync
 WORKER_ROLE=api
 EGRESS_ALLOWLIST=jira.corp.internal    # only if importing over the Jira API rather than from a backup file
 ```
@@ -326,7 +334,7 @@ EGRESS_ALLOWLIST=minio.corp.internal
 Several API processes on one large host, with your own Redis (Sentinel):
 
 ```dotenv
-COMPOSE_PROFILES=import-worker,replicas
+COMPOSE_PROFILES=import-worker,jira-sync,replicas
 WORKER_ROLE=api
 APP_REPLICAS=3
 REDIS_SENTINELS=redis-1.corp.internal:26379,redis-2.corp.internal:26379,redis-3.corp.internal:26379

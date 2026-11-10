@@ -135,6 +135,8 @@ jobs:
           redis.password has no effect without a Redis connection|--set redis.password=secret
           redis.url is a secret|--set existingSecret=corp --set redis.url=redis://redis:6379
           must be at least preStopSleepSeconds + 20|--set replicaCount=2 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany --set terminationGracePeriodSeconds=20
+          jiraSync.enabled=true (the default) cannot run with persistence.accessMode=ReadWriteOncePod|--set persistence.accessMode=ReadWriteOncePod
+          jiraSync.enabled=true (the default) requires persistence.enabled=true|--set persistence.enabled=false
           CASES
           for s in scripts/helm-airgap-bundle.sh scripts/helm-airgap-load.sh scripts/wizard/platform-helm.sh; do bash -n "$s"; done
 

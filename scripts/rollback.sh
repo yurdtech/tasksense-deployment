@@ -88,6 +88,7 @@ if ! "${RUNTIME}" image inspect "${IMAGE}" >/dev/null 2>&1; then
   "${RUNTIME}" pull "${IMAGE}" || die "${IMAGE} is not on this host and could not be pulled — nothing was changed" \
     "Offline: ./scripts/load-images.sh --offline from the ${TARGET} bundle first."
 fi
+sync_worker_off_for_image "${IMAGE}" "${TARGET}"
 
 if [ "${APP_ONLY}" = "1" ]; then
   stop_app_tier

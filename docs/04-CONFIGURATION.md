@@ -88,13 +88,15 @@ Compose decides which optional services run from `COMPOSE_PROFILES` in `.env`:
 | --- | --- | --- |
 | `bundled-mongo` | MongoDB 7 beside the application | You do not bring your own database. The default in `.env.example`. |
 | `import-worker` | The Jira import worker | You are landing a large Jira site backup. Requires `WORKER_ROLE=api`. |
+| `jira-sync` | The Jira and Confluence sync worker | Always, unless the host has no room for it — on in `.env.example`. Requires `JIRA_SYNC_RUNNER=external`; without the profile set `JIRA_SYNC_RUNNER=inline` and the API runs the sync itself ([15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker)). |
 | `replicas` | `APP_REPLICAS` API containers behind a load balancer, `tasksense-lb` (`compose/docker-compose.replicas.yml`) | One process is not enough ([15-SCALING-AND-HA](15-SCALING-AND-HA.md)). Requires `import-worker`, a Redis, and Docker Compose 2.24.4 or newer. |
 | `bundled-redis` | Redis 7 beside them | With `replicas`, when you do not bring your own Redis. Requires `BUNDLED_REDIS_PASSWORD`. |
 
-Comma-separated, e.g. `COMPOSE_PROFILES=bundled-mongo,import-worker`; empty runs
-none of them. The `migrate` service always runs, once, before the application.
-On Helm the same choices are `worker.enabled`, `replicaCount` with `redis.*`,
-and — always — your own MongoDB and Redis.
+Comma-separated, e.g. `COMPOSE_PROFILES=bundled-mongo,import-worker,jira-sync`;
+empty runs none of them. The `migrate` service always runs, once, before the
+application. On Helm the same choices are `worker.enabled`, `jiraSync.enabled`
+(on by default), `replicaCount` with `redis.*`, and — always — your own MongoDB
+and Redis.
 
 With `replicas`, the scripts run Compose with both files —
 `docker compose -f docker-compose.yml -f docker-compose.replicas.yml`. Do the

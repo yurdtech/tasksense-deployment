@@ -5,7 +5,7 @@
 #
 #   tests/compose-topologies.sh
 #
-#   bundled    COMPOSE_PROFILES=bundled-mongo                (the default)
+#   bundled    COMPOSE_PROFILES=bundled-mongo,jira-sync      (the default)
 #   external   COMPOSE_PROFILES=  + MONGODB_URI              (your own MongoDB)
 #   worker     COMPOSE_PROFILES=bundled-mongo,import-worker  (+ WORKER_ROLE=api)
 #   replicas   COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
@@ -66,7 +66,7 @@ for t in bundled external worker; do
 done
 
 # ── which services run ───────────────────────────────────────────────────────
-check "bundled: mongo, migrate, app"            "app migrate mongo"        "$(q "${WORK}/bundled.json" 'sorted(s)')"
+check "bundled: mongo, migrate, app, sync"      "app migrate mongo sync"   "$(q "${WORK}/bundled.json" 'sorted(s)')"
 check "external: no database container at all"  "app migrate"              "$(q "${WORK}/external.json" 'sorted(s)')"
 check "worker: plus the import worker"          "app migrate mongo worker" "$(q "${WORK}/worker.json" 'sorted(s)')"
 

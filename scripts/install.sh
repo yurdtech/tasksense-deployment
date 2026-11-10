@@ -58,6 +58,7 @@ else
   note "database: your own — $(uri_redacted "$(env_value MONGODB_URI)")"
 fi
 if import_worker_enabled; then note "import worker: on — Jira landings run in their own process"; fi
+if jira_sync_enabled; then note "sync worker: on — the Jira and Confluence sync runs in its own process"; fi
 if replicas_enabled; then
   if bundled_redis_enabled; then RDESC="bundled Redis ($(redis_image))"; else RDESC="your own Redis"; fi
   REPS="$(env_value APP_REPLICAS)"

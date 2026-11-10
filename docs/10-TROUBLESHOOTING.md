@@ -323,6 +323,109 @@ example `8g` / `6144`), `up -d`, and let it resume.
 
 ---
 
+## Jira and Confluence sync
+
+The sync worker runs by default; see
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker).
+
+### `preflight.sh`: the `jira-sync` profile and `JIRA_SYNC_RUNNER` disagree
+
+`the jira-sync profile is on but JIRA_SYNC_RUNNER=inline`, or
+`JIRA_SYNC_RUNNER=external but the jira-sync profile is off`.
+
+**Cause:** the two settings say where the sync runs, and they must agree.
+Usually a `COMPOSE_PROFILES` line copied from an older example, without
+`jira-sync`.
+
+**Fix:** to keep the worker, put `jira-sync` back in `COMPOSE_PROFILES`.
+Otherwise set `JIRA_SYNC_RUNNER=inline`.
+
+### Helm refuses: `jiraSync.enabled=true (the default) …`
+
+**Cause:** the data volume is `ReadWriteOncePod`, or `persistence.enabled` is
+`false`. The sync worker cannot share either with the API.
+
+**Fix:** `jiraSync.enabled: false` in the values file. The API then runs the
+sync itself. Or move to `ReadWriteOnce` / `ReadWriteMany` storage.
+
+### The Sync page says **Sync worker offline**
+
+**Cause:** the API leaves the sync to the worker (`JIRA_SYNC_RUNNER=external`),
+and no worker has reported in. It is not running, not ready, or cannot reach
+MongoDB.
+
+**Fix:**
+
+```bash
+docker compose -f compose/docker-compose.yml ps sync
+docker compose -f compose/docker-compose.yml logs sync | tail -30
+# Kubernetes
+kubectl -n tasksense get pods -l app.kubernetes.io/component=sync
+kubectl -n tasksense describe pod -l app.kubernetes.io/component=sync | tail -20
+```
+
+On Kubernetes a **Pending** pod usually means one of two things:
+
+- the namespace quota has no room for it (it requests 250m / 1Gi);
+- on `ReadWriteOnce` storage, the API's node has no room, because the worker
+  must run beside the API.
+
+Nothing is lost while it is down: runs wait, and resume at their checkpoint
+when it is back.
+
+### A run stops: `TaskSense may not reach https://<site> …`
+
+**Cause:** the worker could not reach the Jira site:
+
+- DNS does not resolve it;
+- egress or the NetworkPolicy blocks 443;
+- the outbound proxy is not configured.
+
+The failed items are listed on the run.
+
+**Fix:** open the path from the sync worker (not just the API): O15 in
+[18-PRE-INSTALL-CHECKLIST](18-PRE-INSTALL-CHECKLIST.md), `EGRESS_ALLOWLIST`,
+and `NODE_USE_ENV_PROXY=1` with `HTTPS_PROXY` behind a proxy. Then use
+**Retry** under Needs attention on the Sync page; only the failed items are
+read again.
+
+### A run is paused: `Paused: only … GB is free on the disk …`
+
+**Cause:** free disk under the database or the data volume fell below
+`REPLICATION_MIN_FREE_MB` (2 GB). The run stopped itself rather than fill the
+disk.
+
+**Fix:** free or add space, then **Resume** on the Sync page. It goes on from
+where it stopped. Attachments are often the bulk; a run's attachment size
+limit keeps the largest files in Jira (they are listed under Needs
+attention).
+
+### Jira user pictures do not arrive
+
+**Cause:** Needs attention lists **Profile pictures**, because the picture host
+is not reachable. Or the workspace has profile photos turned off (Admin →
+Profiles).
+
+**Fix:** allow the avatar host in `EGRESS_ALLOWLIST` and the egress rules, or
+turn photos on, then run the sync again. People keep their initials until
+then.
+
+### The `sync` container keeps restarting after going back to an older version
+
+**Cause:** that version has no sync worker. `rollback.sh` and `upgrade.sh`
+normally turn the profile off for you; a manual `TASKSENSE_VERSION` change
+does not.
+
+**Fix:** remove `jira-sync` from `COMPOSE_PROFILES`, set
+`JIRA_SYNC_RUNNER=inline`, then:
+
+```bash
+docker compose -f compose/docker-compose.yml stop sync
+docker compose -f compose/docker-compose.yml up -d
+```
+
+---
+
 ## Sign-in
 
 ### Directory sign-in says "The directory is not reachable"

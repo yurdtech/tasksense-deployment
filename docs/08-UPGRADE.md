@@ -251,6 +251,7 @@ Check:
 ```bash
 kubectl -n tasksense logs job/tasksense-migrate
 kubectl -n tasksense rollout status deploy/tasksense
+kubectl -n tasksense rollout status deploy/tasksense-sync    # the sync worker, unless jiraSync.enabled: false
 helm test tasksense -n tasksense --logs
 ```
 
@@ -259,7 +260,8 @@ helm test tasksense -n tasksense --logs
 > during the dump may or may not be in it. For a strictly consistent
 > pre-upgrade dump, stop the application first:
 > `kubectl -n tasksense scale deploy/tasksense --replicas=0` (and
-> `deploy/tasksense-worker` if the worker is on) — `helm upgrade` brings them
+> `deploy/tasksense-worker` if the worker is on, and `deploy/tasksense-sync`) —
+> `helm upgrade` brings them
 > back (the chart's `replicaCount` is re-applied). With `autoscaling.enabled`
 > the Deployment has no replica count of its own: scale it back to
 > `autoscaling.minReplicas` after the upgrade, and the autoscaler takes over.
@@ -309,6 +311,31 @@ release promises. After a release that was not rolling-safe, roll back with
 previous chart and image back — **application only**, like `--app-only` above.
 For a full rollback, restore the pre-upgrade dump from the backup PVC as well:
 [02-INSTALL-KUBERNETES › Rollback](02-INSTALL-KUBERNETES.md#rollback).
+
+---
+
+## The upgrade that brings the Jira sync worker
+
+From this release the Jira and Confluence sync runs in its own process: the
+`tasksense-sync` container on Compose, the `<release>-sync` Deployment on
+Kubernetes and OpenShift. **It is on by default, and the upgrade starts it**,
+with nothing to edit. Without a Jira connection it only answers its health
+check.
+
+| | Docker Compose | Kubernetes / OpenShift |
+| --- | --- | --- |
+| What the upgrade does | `upgrade.sh` finds no `JIRA_SYNC_RUNNER` in `.env`. It adds `jira-sync` to `COMPOSE_PROFILES` and sets `JIRA_SYNC_RUNNER=external`, prints **The Jira sync worker**, and keeps the original as `backups/env-before-sync-worker-*`. Then it starts the container with the rest. | `jiraSync.enabled` defaults to `true`, so `helm upgrade -f my-values.yaml` creates the Deployment and its Service, and gives the API `JIRA_SYNC_RUNNER=external`. |
+| Check | `docker compose -f compose/docker-compose.yml ps sync` → `healthy` | `kubectl -n tasksense rollout status deploy/tasksense-sync` |
+| Extra resources | up to 1 CPU and 3 GB (`SYNC_CPU_LIMIT`, `SYNC_MEMORY_LIMIT`) | requests 250m / 1Gi, limit 1 CPU / 3Gi — mind the namespace quota |
+| Storage | the same data volume as the API, nothing to do | `ReadWriteOnce`: scheduled onto the API's node. `ReadWriteMany`: anywhere. `ReadWriteOncePod`, or `persistence.enabled: false`: the chart refuses — set `jiraSync.enabled: false` before upgrading |
+| Network | none inbound. Outbound, to the Jira site on 443 (or the proxy), once Jira is connected | the same. With `networkPolicy.enabled`, egress to the site or the proxy ([18](18-PRE-INSTALL-CHECKLIST.md), O15) |
+| To keep the old behaviour | before the upgrade, set `JIRA_SYNC_RUNNER=inline` in `.env`. A `.env` that names it is never changed | `jiraSync.enabled: false` in the values file |
+| Rolling back | `rollback.sh` sees that the older image has no sync worker. It removes `jira-sync`, sets `JIRA_SYNC_RUNNER=inline`, and keeps the original `.env` | nothing to do: the older chart has no sync Deployment |
+
+Turning it off later, and everything it needs:
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker),
+[01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#the-jira-sync-worker-on-by-default),
+[02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md#the-jira-sync-worker).
 
 ---
 

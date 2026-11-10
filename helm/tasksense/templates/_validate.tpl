@@ -250,10 +250,10 @@ reports the real problem rather than a nil-pointer error further down.
 {{- /* ── Jira sync worker ──────────────────────────────────────────────── */ -}}
 {{- if $v.jiraSync.enabled -}}
 {{- if not $v.persistence.enabled -}}
-{{- fail "jiraSync.enabled=true requires persistence.enabled=true: the sync worker writes Jira attachments and user pictures to the same data volume the API serves them from" -}}
+{{- fail "jiraSync.enabled=true (the default) requires persistence.enabled=true: the sync worker writes Jira attachments to the same data volume the API serves them from. Set jiraSync.enabled: false to keep the Jira sync in the API process." -}}
 {{- end -}}
 {{- if eq (toString $v.persistence.accessMode) "ReadWriteOncePod" -}}
-{{- fail "jiraSync.enabled=true cannot run with persistence.accessMode=ReadWriteOncePod: only one pod may mount the data volume, and the sync worker writes attachments to it. Use ReadWriteOnce (the worker is then scheduled onto the API's node) or ReadWriteMany." -}}
+{{- fail "jiraSync.enabled=true (the default) cannot run with persistence.accessMode=ReadWriteOncePod: only one pod may mount the data volume, and the sync worker writes attachments to it. Use ReadWriteOnce (the worker is then scheduled onto the API's node) or ReadWriteMany — or set jiraSync.enabled: false to keep the Jira sync in the API process." -}}
 {{- end -}}
 {{- if or (lt (int $v.jiraSync.port) 1024) (gt (int $v.jiraSync.port) 65535) (eq (int $v.jiraSync.port) 3000) -}}
 {{- fail (printf "jiraSync.port must be between 1024 and 65535 and not 3000, the API's port (got %v)" $v.jiraSync.port) -}}

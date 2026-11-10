@@ -232,6 +232,12 @@ an NFS class. The chart refuses `worker.enabled`, `replicaCount` above 1,
 autoscaling and `RollingUpdate` on anything else. The backups volume
 (`backup.persistence`) can stay ReadWriteOnce.
 
+The Jira sync worker (`<release>-sync`, on by default) shares the data
+volume. On `ReadWriteOnce` the chart schedules it onto the API pod's node; on
+`ReadWriteMany`, anywhere. On `ReadWriteOncePod` the chart refuses: set
+`jiraSync.enabled: false`, and the API runs the sync itself
+([02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md#the-jira-sync-worker)).
+
 ```bash
 oc get storageclass
 ```

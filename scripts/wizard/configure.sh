@@ -628,6 +628,7 @@ configure_summary() {
   fi
 
   ui_summary_add "Import worker" "$(profile_on import-worker && echo "on (WORKER_ROLE=api)" || echo "off")"
+  ui_summary_add "Sync worker" "$(profile_on jira-sync && echo "on (JIRA_SYNC_RUNNER=external)" || echo "off — the API runs the Jira sync")"
   ui_summary_add "AI features" "$([ "$(cfg_get AGENT_DISPATCHER)" = "on" ] && echo "on (command execution off)" || echo "off")"
   ui_summary_add "API browser" "$([ "$(cfg_get SWAGGER_ENABLED)" = "true" ] && echo "on" || echo "off")"
   ui_summary_add "Licence" "$([ -n "$(cfg_get LICENSE_KEY)" ] && echo "supplied" || echo "free tier")"

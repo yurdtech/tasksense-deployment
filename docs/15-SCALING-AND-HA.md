@@ -292,7 +292,7 @@ The `replicas` profile adds `compose/docker-compose.replicas.yml` to the
 stack ([01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#several-api-processes-the-replicas-profile)):
 
 ```dotenv
-COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+COMPOSE_PROFILES=bundled-mongo,import-worker,jira-sync,replicas,bundled-redis
 WORKER_ROLE=api
 APP_REPLICAS=3
 BUNDLED_REDIS_PASSWORD=<openssl rand -hex 24>
@@ -424,23 +424,37 @@ How it behaves:
   local storage provider it mounts the API's data volume:
   - with `ReadWriteMany`, it can run on any node;
   - with `ReadWriteOnce`, the chart schedules it onto the API's node;
-  - `ReadWriteOncePod` is refused.
+  - `ReadWriteOncePod`, and `persistence.enabled: false`, cannot share the
+    volume: the chart refuses them while the worker is on, so turn it off
+    there (below).
 - **Egress.** It is the process that calls Jira. Add the Jira site, and for
   Jira Cloud user pictures the avatar host, to `EGRESS_ALLOWLIST`.
 - **Zero or one.** A second worker would only wait on the leases.
+- **Idle until used.** With no Jira connection it does nothing but answer its
+  probes. It needs no configuration of its own.
 
-Turning it on:
+**It is on by default, on both platforms.** A fresh install and an upgrade
+both start it:
 
 | | Compose (`compose/.env`) | Helm |
 | --- | --- | --- |
-| Enable | add `jira-sync` to `COMPOSE_PROFILES` | `jiraSync.enabled: true` |
-| API side | `JIRA_SYNC_RUNNER=external` (`preflight.sh` enforces it) | set automatically |
-| Memory | `SYNC_MEMORY_LIMIT`, `SYNC_HEAP_MB` | `jiraSync.resources`, `jiraSync.heapMb` |
+| On | `jira-sync` in `COMPOSE_PROFILES`, with `JIRA_SYNC_RUNNER=external` — the example's values | `jiraSync.enabled: true`, the chart's default |
+| An upgrade | A `.env` from before the worker has no `JIRA_SYNC_RUNNER` line. `upgrade.sh` (also `install.sh` and `preflight.sh`) then adds `jira-sync` and `JIRA_SYNC_RUNNER=external` once, says so, and keeps the original under `backups/`. A `.env` that names `JIRA_SYNC_RUNNER` is left alone. | Your own values file comes with the chart's defaults, so the worker is on unless the file sets `jiraSync.enabled: false` |
+| API side | `JIRA_SYNC_RUNNER=external`; `preflight.sh` refuses a mismatch with the profile | set automatically |
+| Memory | `SYNC_MEMORY_LIMIT` (3g), `SYNC_HEAP_MB` (2048) | `jiraSync.resources`, `jiraSync.heapMb` |
 | Metrics | `/metrics` on 3100 inside the compose network | a `ServiceMonitor` when `metrics.serviceMonitor.enabled` |
+| Turn it off | remove `jira-sync` from `COMPOSE_PROFILES` and set `JIRA_SYNC_RUNNER=inline`, then `up -d` (the scripts stop the sync container) | `jiraSync.enabled: false` |
 
-Without the worker (`JIRA_SYNC_RUNNER=inline`, the default), the API runs the
-Jira sync itself. That suits a small site. For a large migration, turn the
-worker on.
+Turned off, the API runs the Jira sync itself, as before the worker existed.
+That suits a small site, or a host with no room for the extra process. A run
+under way when you switch either way is picked up by the other side at its
+last checkpoint.
+
+**Going back to a version without the worker.** `rollback.sh` and
+`upgrade.sh` look inside the target image. When it has no sync worker they
+remove `jira-sync` and set `JIRA_SYNC_RUNNER=inline` for you, and keep the
+original `.env`. On Helm nothing is needed: an older chart has no sync
+Deployment, and its API runs the Jira sync itself.
 
 ---
 

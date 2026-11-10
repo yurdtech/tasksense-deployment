@@ -80,6 +80,14 @@ Add for a **Jira migration window** (the import worker,
 | --- | --- | --- |
 | Import worker | **+2 vCPU, +6 GB RAM**, and free disk of **2 × the Jira backup's size** on the data volume | `WORKER_CPU_LIMIT=2` `WORKER_MEMORY_LIMIT=6g` `WORKER_HEAP_MB=4096` *(defaults)* |
 
+Add **always** — the Jira sync worker is on by default
+([15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker)). It sits
+nearly idle until Jira is connected, but size for its limit:
+
+| | Host | Worker |
+| --- | --- | --- |
+| Sync worker | **+1 vCPU, +3 GB RAM** at its limit, and room on the data volume for the Jira attachments it brings | `SYNC_CPU_LIMIT=1` `SYNC_MEMORY_LIMIT=3g` `SYNC_HEAP_MB=2048` *(defaults)*; Helm `jiraSync.resources` (req 250m / 1Gi, limit 1 CPU / 3Gi) |
+
 **Helm** uses the same numbers: `resources.limits.memory` and `heapMb` for
 the API (defaults `2Gi` and `1536`), `worker.resources.limits.memory` and
 `worker.heapMb` for the worker (`6Gi` and `4096`). MongoDB is yours — size it

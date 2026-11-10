@@ -325,8 +325,8 @@ step "Database"
 PROFILES="$(env_profiles)"
 for p in $(printf '%s' "${PROFILES}" | tr ',' ' '); do
   case "${p}" in
-    bundled-mongo|import-worker|replicas|bundled-redis) ;;
-    *) fail "COMPOSE_PROFILES names '${p}', which is not a profile — use bundled-mongo, import-worker, replicas and bundled-redis" ;;
+    bundled-mongo|import-worker|jira-sync|replicas|bundled-redis) ;;
+    *) fail "COMPOSE_PROFILES names '${p}', which is not a profile — use bundled-mongo, import-worker, jira-sync, replicas and bundled-redis" ;;
   esac
 done
 
@@ -658,7 +658,7 @@ fi
 # is already in use", after the images were pulled and the volumes created.
 if [ "${RUNTIME_OK}" = "1" ]; then
   CLASHES=0
-  for name in "${MONGO_CONTAINER}" "${MIGRATE_CONTAINER}" "${APP_CONTAINER}" "${WORKER_CONTAINER}" "${LB_CONTAINER}" "${REDIS_CONTAINER}"; do
+  for name in "${MONGO_CONTAINER}" "${MIGRATE_CONTAINER}" "${APP_CONTAINER}" "${WORKER_CONTAINER}" "${SYNC_CONTAINER}" "${LB_CONTAINER}" "${REDIS_CONTAINER}"; do
     owner="$(container_project "${name}")" || continue
     [ "${owner}" = "${COMPOSE_PROJECT}" ] && continue
     CLASHES=$((CLASHES + 1))

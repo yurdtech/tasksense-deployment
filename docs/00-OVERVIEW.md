@@ -32,8 +32,12 @@ One image, a database, and your reverse proxy.
         └───┬──────────┬───┘          │                   │
             │          │              └────────▲──────────┘
    data volume      ┌──▼───────────────┐       │
-   (attachments,    │ import worker    │───────┘
-   upload staging)  │ optional, 0 or 1 │
+   (attachments,    │ import worker    │───────┤
+   upload staging)  │ optional, 0 or 1 │       │
+                    └──────────────────┘       │
+                    ┌──────────────────┐       │
+                    │ sync worker      │───────┘
+                    │ on by default    │──────▶ your Jira / Confluence site
                     └──────────────────┘
         migrate: a one-shot run of the same image before every start
 ```
@@ -43,6 +47,7 @@ One image, a database, and your reverse proxy.
 | **API** | Serves the web interface and the REST API from one port, so there is one origin, one certificate and no CORS to configure. **One process** by default; with Redis configured, 2 to 20 behind a load balancer — see [15-SCALING-AND-HA](15-SCALING-AND-HA.md). |
 | **migrate** | Brings the database schema up to the installed version, then exits. The API starts only after it succeeded. |
 | **Import worker** *(optional)* | The same image running only Jira backup landings, so a multi-gigabyte import never competes with users for memory. For the migration window. |
+| **Sync worker** *(on by default)* | The same image running only the Jira and Confluence sync — full migrations and the two-way sync — so reading a whole Jira site never competes with users. Idle until Jira is connected; can be turned off, and the API then runs the sync itself. [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker) |
 | **MongoDB 7** | The only data store. Bundled as a container on Docker Compose, or yours (required on Kubernetes). |
 | **Data volume** | Attachments (unless you use object storage), upload staging, the application's own snapshots. Shared by every API process (`ReadWriteMany` on Kubernetes). |
 | **Redis** *(only for several API processes)* | What the processes share: sign-in tickets, lockout and rate-limit counters, cache invalidations, live-update fan-out. Short-lived, no user data. Bundled on Compose (`bundled-redis`), or yours. |

@@ -162,6 +162,30 @@ in every process — there is no fallback to per-process memory.
 > `/health/ready`: those fail while MongoDB fails over, and a liveness failure
 > restarts the pod — the one moment when that makes the outage longer.
 
+### The Jira sync worker
+
+The sync worker (on by default, see
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker)) serves no
+users. Its own port, 3100, answers three paths, and only inside the compose
+network or the cluster:
+
+| Path | Answers | Use for |
+| --- | --- | --- |
+| `/live` | The process is running | `livenessProbe` |
+| `/ready` | MongoDB is reachable. Where Redis is configured the body also carries `"redis":"up"` or `"down"`, but readiness depends on MongoDB alone: the worker's work is all in MongoDB, and a Redis outage only delays the pings it sends the API | `readinessProbe`, the Compose healthcheck |
+| `/metrics` | Prometheus, with the same `METRICS_TOKEN` as the API (404 without one) | scraping |
+
+Besides the process and MongoDB gauges it reports
+`tasksense_jira_sync_queue_pending` and `tasksense_jira_sync_queue_running`
+(the two-way sync's queue), and `tasksense_redis_up` where Redis is configured.
+On Kubernetes, `metrics.serviceMonitor.enabled` adds a second ServiceMonitor,
+`<release>-sync`, for the worker's Service. On Compose, scrape `sync:3100/metrics` from a
+Prometheus on the compose network; nothing publishes it on the host.
+
+How far a migration has got is in the application, not in Prometheus: the
+Sync page shows every run's phase, counts, pace and failures, and whether the
+worker is **online**.
+
 ### Index and schema state, through blackbox_exporter
 
 TaskSense has no metric for these; they are in the health response. Probe it

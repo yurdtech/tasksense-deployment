@@ -124,7 +124,7 @@ decide — continue to step 4.
 monitoring), point TaskSense at it instead. It is two lines in `.env`:
 
 ```dotenv
-COMPOSE_PROFILES=                      # drop "bundled-mongo"
+COMPOSE_PROFILES=jira-sync             # drop "bundled-mongo", keep the sync worker
 MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&tls=true&tlsCAFile=/certs/corp-ca.pem&authSource=admin
 ```
 
@@ -477,7 +477,7 @@ checkpoint, and the API never notices.
 Turn it on for the migration window:
 
 ```dotenv
-COMPOSE_PROFILES=bundled-mongo,import-worker    # or just import-worker with your own MongoDB
+COMPOSE_PROFILES=bundled-mongo,import-worker,jira-sync    # or import-worker,jira-sync with your own MongoDB
 WORKER_ROLE=api                                 # the API must stop running landings itself
 ```
 
@@ -498,6 +498,74 @@ When the migration is done, remove `import-worker` from `COMPOSE_PROFILES`,
 set `WORKER_ROLE=all` (or delete the line) and `up -d` again. Sizing and the
 reasoning: [15-SCALING-AND-HA](15-SCALING-AND-HA.md). With the `replicas`
 profile the worker stays on — below.
+
+---
+
+## The Jira sync worker (on by default)
+
+Jira and Confluence migrations, and the Jira two-way sync's queue and sweeps,
+run in their own container, `tasksense-sync`, from the same image. A
+migration that reads a whole Jira site never shares memory with the people
+using the product. Until an administrator connects Jira it only answers its
+health check.
+
+It is on in `.env.example`:
+
+```dotenv
+COMPOSE_PROFILES=bundled-mongo,jira-sync    # jira-sync alone with your own MongoDB
+JIRA_SYNC_RUNNER=external                   # the API leaves the sync to it
+```
+
+**Upgrading an installation from before the worker.** Its `.env` has no
+`JIRA_SYNC_RUNNER` line. `upgrade.sh` (also `install.sh` and `preflight.sh`)
+then adds `jira-sync` to `COMPOSE_PROFILES` and sets `JIRA_SYNC_RUNNER=external`,
+once. It prints **The Jira sync worker** and keeps the original under
+`backups/env-before-sync-worker-*`. The upgrade then starts the container.
+
+```bash
+docker compose -f compose/docker-compose.yml ps sync
+docker compose -f compose/docker-compose.yml logs sync | tail -1
+```
+
+Expected: the container `healthy`, and
+`[tasksense-sync] up — Jira migrations and the two-way sync run here`. The Sync
+page in the app shows **Sync worker online**.
+
+What it needs:
+
+- **Memory and CPU.** Up to 3 GB and 1 CPU (`SYNC_MEMORY_LIMIT`,
+  `SYNC_CPU_LIMIT`, heap `SYNC_HEAP_MB=2048`). Add that to the host's sizing.
+- **Disk.** It writes Jira attachments to the same data volume as the API
+  (or to the object store the workspace uses). A run pauses itself when the
+  free disk falls under `REPLICATION_MIN_FREE_MB` (2 GB).
+- **Network.** It is the container that calls Jira and Confluence: the site on
+  443, directly or through the outbound proxy (`NODE_USE_ENV_PROXY=1`,
+  `HTTPS_PROXY`). Put the site in `EGRESS_ALLOWLIST`. For Jira Cloud user
+  pictures, also the avatar host. No inbound port: 3100 (`/live`, `/ready`,
+  `/metrics`) is open only inside the compose network.
+- **Redis.** Not needed. With the `replicas` profile it uses the same Redis
+  as the API copies.
+
+**Turning it off** — a small host with no room for the extra process:
+
+```dotenv
+COMPOSE_PROFILES=bundled-mongo              # jira-sync removed
+JIRA_SYNC_RUNNER=inline                     # the API runs the sync itself
+```
+
+Then:
+
+```bash
+./scripts/preflight.sh
+docker compose -f compose/docker-compose.yml stop sync    # compose leaves a container of a removed profile running
+docker compose -f compose/docker-compose.yml up -d
+```
+
+The scripts (`upgrade.sh`, `backup.sh --stop-app`, `restore.sh`) stop
+`tasksense-sync` themselves when the profile is off. `preflight.sh` refuses a
+profile and a `JIRA_SYNC_RUNNER` that disagree. A run under way continues in
+the API at its last checkpoint. More:
+[15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker).
 
 ---
 
@@ -524,7 +592,7 @@ It needs:
 In `compose/.env`:
 
 ```dotenv
-COMPOSE_PROFILES=bundled-mongo,import-worker,replicas,bundled-redis
+COMPOSE_PROFILES=bundled-mongo,import-worker,jira-sync,replicas,bundled-redis
 WORKER_ROLE=api
 APP_REPLICAS=3                  # 1–20
 BUNDLED_REDIS_PASSWORD=         # openssl rand -hex 24  (hex: it goes inside a URL)

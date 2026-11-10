@@ -100,7 +100,8 @@ printf '\n  1.0 → 1.1 carry-over\n'
 printf 'TASKSENSE_VERSION=1.0.0\nMONGO_USER=tasksense\nMONGO_PASSWORD=abc\n#SWAGGER_ENABLED=1\n' > "${SANDBOX}/compose/.env"
 chmod 600 "${SANDBOX}/compose/.env"
 out="$(lib "${SANDBOX}/compose/.env" 'migrate_legacy_env')"
-check "a bundled 1.0 install gets COMPOSE_PROFILES=bundled-mongo" "bundled-mongo" "$(lib "${SANDBOX}/compose/.env" 'env_value COMPOSE_PROFILES')"
+check "a bundled 1.0 install gets COMPOSE_PROFILES=bundled-mongo, and the sync worker" "bundled-mongo,jira-sync" "$(lib "${SANDBOX}/compose/.env" 'env_value COMPOSE_PROFILES')"
+check "with the sync run outside the API" "external" "$(lib "${SANDBOX}/compose/.env" 'env_value JIRA_SYNC_RUNNER')"
 check "and keeps the API browser off, as 1.0 had it" "false" "$(lib "${SANDBOX}/compose/.env" 'env_value SWAGGER_ENABLED')"
 contains "and says so" "Configuration carried over from 1.0" "${out}"
 check "the original is kept under backups/, mode 600" "600" "$(mode_of "$(ls "${SANDBOX}"/backups/env-before-1.1-* | head -n1)")"
@@ -112,14 +113,25 @@ check "and says nothing" "" "${out}"
 
 printf 'TASKSENSE_VERSION=1.0.0\nMONGODB_URI=mongodb://u:p@db.acme.internal/?authSource=admin\nSWAGGER_ENABLED=true\n' > "${SANDBOX}/compose/.env"
 lib "${SANDBOX}/compose/.env" 'migrate_legacy_env' >/dev/null
-check "an external 1.0 install gets an empty COMPOSE_PROFILES" "1" "$(grep -c '^COMPOSE_PROFILES=$' "${SANDBOX}/compose/.env")"
+check "an external 1.0 install gets no database profile, only the sync worker" "1" "$(grep -c '^COMPOSE_PROFILES=jira-sync$' "${SANDBOX}/compose/.env")"
 check "an explicit SWAGGER_ENABLED is left alone" "true" "$(lib "${SANDBOX}/compose/.env" 'env_value SWAGGER_ENABLED')"
 check "and is not duplicated" "1" "$(grep -c '^SWAGGER_ENABLED=' "${SANDBOX}/compose/.env")"
 
 fixture_env "${SANDBOX}/compose/.env"
 before="$(cat "${SANDBOX}/compose/.env")"
 lib "${SANDBOX}/compose/.env" 'migrate_legacy_env' >/dev/null
-check "a 1.1 configuration is never touched" "${before}" "$(cat "${SANDBOX}/compose/.env")"
+check "a current configuration is never touched" "${before}" "$(cat "${SANDBOX}/compose/.env")"
+
+# ── carrying a configuration from before the sync worker forward ────────────
+fixture_env "${SANDBOX}/compose/.env" "COMPOSE_PROFILES=bundled-mongo,import-worker" "-JIRA_SYNC_RUNNER"
+out="$(lib "${SANDBOX}/compose/.env" 'migrate_legacy_env')"
+check "a 1.1 install gains the sync worker beside its profiles" "bundled-mongo,import-worker,jira-sync" "$(lib "${SANDBOX}/compose/.env" 'env_value COMPOSE_PROFILES')"
+check "and runs the sync outside the API" "external" "$(lib "${SANDBOX}/compose/.env" 'env_value JIRA_SYNC_RUNNER')"
+contains "and says so" "The Jira sync worker" "${out}"
+fixture_env "${SANDBOX}/compose/.env" "COMPOSE_PROFILES=bundled-mongo" "JIRA_SYNC_RUNNER=inline"
+before="$(cat "${SANDBOX}/compose/.env")"
+lib "${SANDBOX}/compose/.env" 'migrate_legacy_env' >/dev/null
+check "a configuration that chose inline keeps it" "${before}" "$(cat "${SANDBOX}/compose/.env")"
 
 # ── the in-container credential file ─────────────────────────────────────────
 # What runs inside the mongo container, run here by sh: the secret goes from

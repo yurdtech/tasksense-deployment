@@ -1,4 +1,4 @@
-# CI: the Jira sync worker on a ReadWriteOnce data volume — the worker is
+# CI: the Jira sync worker (on by default) on a ReadWriteOnce data volume — the worker is
 # scheduled onto the API's node — with metrics scraped and the network policy on.
 appUrl: https://tasksense.corp.internal
 mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin

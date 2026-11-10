@@ -87,7 +87,7 @@ compose_cli() { command -v docker >/dev/null 2>&1 && docker compose version >/de
 # override applied where the example documents it: KEY=VALUE replaces an active
 # line, uncomments a `#KEY=` one, or is appended; -KEY deletes the active line.
 fixture_env() {
-  local out="$1" kv; shift
+  local out="$1" kv own_profiles=0 own_runner=0; shift
   sed -e 's/<CHANGE_ME_STORAGE_SECRET>/0123456789abcdefghijABCDEFGHIJ0123456789/' \
       -e 's/<CHANGE_ME_MONGO_PASSWORD>/0123456789abcdef0123456789abcdef/' \
       -e 's#<CHANGE_ME_APP_URL>#https://tasksense.acme.internal#' \
@@ -108,7 +108,18 @@ fixture_env() {
             if (!done) print k "=" v
           }' "${out}" > "${out}.tmp" && mv "${out}.tmp" "${out}" ;;
     esac
+    case "${kv}" in
+      COMPOSE_PROFILES=*) own_profiles=1 ;;
+      JIRA_SYNC_RUNNER=* | -JIRA_SYNC_RUNNER) own_runner=1 ;;
+    esac
   done
+  # A fixture that names its own profiles without jira-sync is about something
+  # else; the example's JIRA_SYNC_RUNNER=external would then contradict it, so
+  # the sync stays in the API process — the configuration an operator who
+  # removed the profile writes.
+  if [ "${own_profiles}" = "1" ] && [ "${own_runner}" = "0" ] && ! grep -q '^COMPOSE_PROFILES=.*jira-sync' "${out}"; then
+    awk 'index($0, "JIRA_SYNC_RUNNER=") == 1 { print "JIRA_SYNC_RUNNER=inline"; next } { print }' "${out}" > "${out}.tmp" && mv "${out}.tmp" "${out}"
+  fi
   chmod 600 "${out}"
 }
 

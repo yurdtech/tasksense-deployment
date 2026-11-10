@@ -150,7 +150,7 @@ and is a private key — on Kubernetes mount it from a Secret, not a ConfigMap.
 **Compose** — in `compose/.env`:
 
 ```dotenv
-COMPOSE_PROFILES=                  # was: bundled-mongo   (keep import-worker if you use it)
+COMPOSE_PROFILES=jira-sync         # was: bundled-mongo,jira-sync   (keep import-worker if you use it)
 MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 MONGODB_DB=tasksense
 MONGODB_TIMEOUT_MS=15000           # an election takes seconds; 5 s is for the same host
@@ -247,7 +247,7 @@ deliberately once you are satisfied: `docker volume rm tasksense-mongo-data`.
 ## Switching back to the bundled database
 
 ```dotenv
-COMPOSE_PROFILES=bundled-mongo
+COMPOSE_PROFILES=bundled-mongo,jira-sync
 # MONGODB_URI=…
 MONGO_USER=tasksense
 MONGO_PASSWORD=<the password the bundled volume was created with>
@@ -373,7 +373,7 @@ password with `openssl rand -hex 24` — it may go inside a URL.
 `compose/.env`:
 
 ```dotenv
-COMPOSE_PROFILES=import-worker,replicas          # your own MongoDB and Redis
+COMPOSE_PROFILES=import-worker,jira-sync,replicas   # your own MongoDB and Redis
 BUNDLED_REDIS_PASSWORD=                          # empty: no bundled Redis
 
 # One Redis

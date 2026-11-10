@@ -163,8 +163,8 @@ TaskSense at it — a dedicated account with `readWrite` + `dbAdmin` on one
 database, a replica set, TLS with your CA:
 
 ```dotenv
-# compose/.env — drop the profile, set the URI
-COMPOSE_PROFILES=
+# compose/.env — drop bundled-mongo, set the URI
+COMPOSE_PROFILES=jira-sync
 MONGODB_URI=mongodb://tasksense:<pw>@mongo-1.corp.internal:27017,mongo-2.corp.internal:27017,mongo-3.corp.internal:27017/?replicaSet=rs0&authSource=admin&tls=true&tlsCAFile=/certs/corp-ca.pem
 MONGODB_TIMEOUT_MS=15000
 ```

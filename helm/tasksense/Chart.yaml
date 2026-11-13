@@ -7,11 +7,11 @@ type: application
 # template is a new chart version even when the image is unchanged. The release
 # workflow stamps both fields; 1.1.0 is the first chart for the enterprise
 # packaging (single active API, optional import worker, pre-upgrade dump).
-version: 1.1.1
+version: 1.1.2
 
 # The image tag you get when image.tag is empty. It is always a version that
 # exists — never "latest".
-appVersion: "1.1.1"
+appVersion: "1.1.2"
 
 # OpenShift 4.12 is Kubernetes 1.25 — the oldest platform this chart is tested
 # against (CronJob timeZone, Pod Security Admission, batch/v1 everywhere).

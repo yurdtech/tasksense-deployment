@@ -73,7 +73,7 @@ continue at step 3.
 ```bash
 git clone https://github.com/yurdtech/tasksense-deployment.git
 cd tasksense-deployment
-git checkout v1.1.1          # the release you were told to install
+git checkout v1.1.2          # the release you were told to install
 ```
 
 
@@ -146,7 +146,7 @@ ${EDITOR:-vi} compose/.env
 The file explains every setting where it appears. These have no default:
 
 ```dotenv
-TASKSENSE_VERSION=1.1.1                          # pin it; never "latest"
+TASKSENSE_VERSION=1.1.2                          # pin it; never "latest"
 APP_URL=https://tasksense.corp.internal          # what users type
 CORS_ALLOWED_ORIGINS=https://tasksense.corp.internal
 FIRST_ADMIN_EMAIL=tasksense-admin@corp.internal  # becomes the administrator
@@ -249,7 +249,7 @@ Expected ending (abridged):
 
 ```
 ==> Installed
-  {"version":"1.1.1","commit":"…","builtAt":"…","service":"tasksense-api"}
+  {"version":"1.1.2","commit":"…","builtAt":"…","service":"tasksense-api"}
 
   TaskSense is running.
 
@@ -318,7 +318,7 @@ means the application cannot reach MongoDB.
 curl -s http://127.0.0.1:3000/api/v1/version
 ```
 
-Expected: `{"version":"1.1.1","commit":"…","builtAt":"…","service":"tasksense-api"}`.
+Expected: `{"version":"1.1.2","commit":"…","builtAt":"…","service":"tasksense-api"}`.
 Confirm a deployment by the commit, not only the tag.
 
 To watch the log live:

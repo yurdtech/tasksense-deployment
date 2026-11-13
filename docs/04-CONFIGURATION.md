@@ -65,7 +65,7 @@ These have no default; the stack does not start without them.
 
 | Setting | Example | |
 | --- | --- | --- |
-| `TASKSENSE_VERSION` | `1.1.1` | Pin it; never `latest`. |
+| `TASKSENSE_VERSION` | `1.1.2` | Pin it; never `latest`. |
 | `APP_URL` | `https://tasksense.corp.internal` | What users type. Sign-in redirects and e-mail links are built from it. |
 | `CORS_ALLOWED_ORIGINS` | same as `APP_URL` | |
 | `STORAGE_SECRET` | `openssl rand -base64 32` | At least 32 characters. **Not recoverable — back it up.** |

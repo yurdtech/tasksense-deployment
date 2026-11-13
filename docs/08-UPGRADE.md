@@ -339,6 +339,32 @@ Turning it off later, and everything it needs:
 
 ---
 
+## Upgrading from 1.1.1 to 1.1.2
+
+The procedure above, with nothing to edit first. 1.1.2 adds **no schema
+migration**: the `migrate` step reports the schema current, and
+`./scripts/rollback.sh --app-only` (or `helm rollback`) returns to 1.1.1
+without the schema-ahead warning. It is not marked rolling-safe — keep
+`Recreate` for this upgrade. Coming from 1.1.0, read
+[1.1.0 to 1.1.1](#upgrading-from-110-to-111) first: its changes come with
+this upgrade too.
+
+| Change | What to do |
+| --- | --- |
+| **The Jira sync lands on S3 / MinIO storage** — a key with an escaped character (`sprints/13767:8167`) was signed wrongly, S3 answered 403 `SignatureDoesNotMatch` and a migration stopped at *Projects, boards and sprints* | Nothing. A run stopped that way resumes from its checkpoint: Sync → the run → Resume. |
+| **A storage failure no longer stops the Jira sync as UNKNOWN** — S3 429 / 503 SlowDown and 5xx requeue the run from its checkpoint; 401 / 403 report a permission error | Nothing. |
+| **The sync worker logs its runs** — `tasksense-sync` writes, at the default log level, when a run starts, each kind and scope, every page it lands with its counts, and how it ended; the run's warnings (Jira rate limits, retries, a full disk) go to the process log too | Nothing. Read a run's progress with `docker compose logs -f sync` / `kubectl logs -f deploy/tasksense-sync`. |
+| **Open tabs stay live through a migration** — the change stream now carries the changed rows, so tabs no longer each fetch `GET /state/delta` as a migration lands | Nothing. |
+| **SMTP to a plain or internal relay** — STARTTLS can be switched off, and a certificate no trusted CA signed can be accepted | Only for a relay whose STARTTLS is broken: `SMTP_IGNORE_TLS=true` (`config.smtp.ignoreTls`). For an internal certificate, mount your CA (`NODE_EXTRA_CA_CERTS` / `certs.*`); `SMTP_TLS_REJECT_UNAUTHORIZED=false` (`config.smtp.tlsRejectUnauthorized`) only as a last resort. A relay set in the Admin console has the same two settings; one saved before keeps *When the server offers it*. [17-ENVIRONMENT](17-ENVIRONMENT.md) |
+| **Cross-workspace and reach fixes** — a media link is bound to its workspace; an API token cannot switch workspace; a session whose account has no workspace left ends; releases, plans, history and the epic sync stay within the caller's reach | Nothing changes on default settings. A script that switched workspace with an API token gets a refusal: make a token in each workspace instead. |
+| **Image scan** — the three fixable HIGH findings of the 1.1.1 image (body-parser, multer) are fixed | Nothing. |
+| **What's New** — after the upgrade, people see the 1.1.2 notes once in the app | Admin → Overview → Workspace: *Show What's New after updates* stops the pop-up, *What's New* turns the notes off altogether. |
+| **Knowledge Base: a new page is its author's draft until the first Publish** | Tell the teams that write in the Knowledge Base. |
+| **Pulse: every check-in needs a note** | Tell the teams that use Pulse. |
+| **Team invites** — many addresses at once, one link for several people, a custom link expiry | Nothing. |
+
+---
+
 ## Upgrading from 1.1.0 to 1.1.1
 
 The procedure above, with nothing to edit first. 1.1.1 adds **no schema

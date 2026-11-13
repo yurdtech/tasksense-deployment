@@ -133,7 +133,7 @@ EOF
 # 5. Install from the OCI registry (dump + migrations run first, as hook Jobs)
 echo '<TOKEN>' | helm registry login ghcr.io -u yurdtech --password-stdin
 helm install tasksense oci://ghcr.io/yurdtech/charts/tasksense \
-  --version 1.1.1 -n tasksense -f my-values.yaml --wait --timeout 30m
+  --version 1.1.2 -n tasksense -f my-values.yaml --wait --timeout 30m
 #    → STATUS: deployed      (--timeout: the first migration can outlast Helm's 5-minute default)
 
 # 6. Verify
@@ -179,8 +179,8 @@ up either kind. Full guide: [docs/16-EXTERNAL-DATABASES.md](docs/16-EXTERNAL-DAT
 | Your servers can… | Use | |
 | --- | --- | --- |
 | reach `ghcr.io` during installs | `docker login` / `helm registry login` with the token | [13 › Pulling directly](docs/13-REGISTRY-ACCESS.md#pulling-directly) |
-| reach only your Harbor / Nexus / Artifactory | `./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.1` | [13 › Mirroring](docs/13-REGISTRY-ACCESS.md#mirroring-into-your-own-registry) |
-| reach nothing | the offline bundle: `oras pull ghcr.io/yurdtech/tasksense-offline:1.1.1`, `verify-signature.sh`, carry in, `install.sh --offline` | [13 › Air-gapped](docs/13-REGISTRY-ACCESS.md#no-route-out-air-gapped) |
+| reach only your Harbor / Nexus / Artifactory | `./scripts/load-images.sh --registry harbor.corp.internal/tasksense --version 1.1.2` | [13 › Mirroring](docs/13-REGISTRY-ACCESS.md#mirroring-into-your-own-registry) |
+| reach nothing | the offline bundle: `oras pull ghcr.io/yurdtech/tasksense-offline:1.1.2`, `verify-signature.sh`, carry in, `install.sh --offline` | [13 › Air-gapped](docs/13-REGISTRY-ACCESS.md#no-route-out-air-gapped) |
 
 The registry token is read-only and per customer (username always `yurdtech`).
 The offline bundle — deployment files, the TaskSense and `mongo:7` images,
@@ -194,8 +194,8 @@ chart (`tasksense-<version>.tgz`), `SHA256SUMS`, `SHA256SUMS.sig` and
 Verify before installing — the script fails closed without cosign:
 
 ```bash
-cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.1
-./scripts/verify-signature.sh tasksense-onprem-1.1.1.tar.gz
+cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.2
+./scripts/verify-signature.sh tasksense-onprem-1.1.2.tar.gz
 ```
 
 ---

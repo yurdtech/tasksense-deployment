@@ -45,7 +45,7 @@ any web-font request, and with no source maps. CI enforces it: the build fails
 if a third-party origin appears in the output. Check it yourself:
 
 ```bash
-docker run --rm --entrypoint sh ghcr.io/yurdtech/tasksense:1.1.1 -c \
+docker run --rm --entrypoint sh ghcr.io/yurdtech/tasksense:1.1.2 -c \
   'grep -ohrE "https://[a-zA-Z0-9._-]+" /app/web/dist | sort -u'
 ```
 
@@ -367,8 +367,8 @@ it — logs contain user names and task titles.
 | Vulnerability scan | Trivy, fixable CRITICAL and HIGH findings, `trivy-report.json` in the offline bundle. It reports rather than blocks the release; re-scan in your registry and gate on it if your policy requires. |
 
 ```bash
-cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.1
-./scripts/verify-signature.sh tasksense-onprem-1.1.1.tar.gz
+cosign verify --key cosign.pub ghcr.io/yurdtech/tasksense:1.1.2
+./scripts/verify-signature.sh tasksense-onprem-1.1.2.tar.gz
 ```
 
 The image and the bundle are private in the registry; access is a per-customer,

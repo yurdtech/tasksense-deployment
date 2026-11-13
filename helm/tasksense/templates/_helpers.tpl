@@ -492,6 +492,9 @@ application's validation, which refuses to boot on one.
 {{- $_ := set $d "SMTP_HOST" (toString $c.smtp.host) -}}
 {{- $_ := set $d "SMTP_PORT" (include "tasksense.str" ($c.smtp.port | default 587)) -}}
 {{- $_ := set $d "SMTP_SECURE" (ternary "true" "false" (eq (toString $c.smtp.secure) "true")) -}}
+{{- /* 1.1.2: only the non-default is rendered, so an install that sets neither keeps its ConfigMap (and its checksum) as before. */ -}}
+{{- if eq (toString $c.smtp.ignoreTls) "true" }}{{ $_ := set $d "SMTP_IGNORE_TLS" "true" }}{{ end -}}
+{{- if eq (toString $c.smtp.tlsRejectUnauthorized) "false" }}{{ $_ := set $d "SMTP_TLS_REJECT_UNAUTHORIZED" "false" }}{{ end -}}
 {{- with $c.smtp.user }}{{ $_ := set $d "SMTP_USER" (toString .) }}{{ end -}}
 {{- end -}}
 {{- with $c.emailFrom }}{{ $_ := set $d "EMAIL_FROM" (toString .) }}{{ end -}}

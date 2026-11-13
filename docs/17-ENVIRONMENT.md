@@ -45,7 +45,7 @@ blank, the default is the recommendation.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `TASKSENSE_VERSION` | yes | `1.1.1` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
+| `TASKSENSE_VERSION` | yes | `1.1.2` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
 | `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
@@ -183,6 +183,8 @@ Admin → Email delivery overrides these once saved there.
 | `SMTP_HOST` | — | — | Relay host. | The internal relay |
 | `SMTP_PORT` | — | `587` | Relay port. | `25` / `587` (STARTTLS) or `465` (implicit TLS) |
 | `SMTP_SECURE` | — | `false` | `true`: TLS from the first byte (port 465). `false`: plain connection, upgraded with STARTTLS when the relay offers it. | Match the relay |
+| `SMTP_IGNORE_TLS` | — | `false` | From 1.1.2. `true`: never upgrade with STARTTLS, even when the relay offers it — for a plain internal relay whose STARTTLS is broken. Ignored with `SMTP_SECURE=true`. A relay set in the Admin console has the same choice under *STARTTLS* (*Off — never encrypt* / *When the server offers it* / *Required*). | `false` |
+| `SMTP_TLS_REJECT_UNAUTHORIZED` | — | `true` | From 1.1.2. `false` accepts a relay certificate no trusted CA signed (in the Admin console: *Allow an untrusted certificate*). | `true`, with your internal CA in `NODE_EXTRA_CA_CERTS` |
 | `SMTP_USER` / `SMTP_PASS` | — | — | Relay authentication; omitted when either is empty. | Per relay policy |
 | `EMAIL_FROM` | — | — | Sender, e.g. `TaskSense <tasksense@corp.internal>`. | An address the relay accepts |
 
@@ -290,7 +292,7 @@ What we would put in `compose/.env` for a regulated installation with its own
 MongoDB, before site-specific values:
 
 ```dotenv
-TASKSENSE_VERSION=1.1.1
+TASKSENSE_VERSION=1.1.2
 COMPOSE_PROFILES=jira-sync             # your own MongoDB; add import-worker for the Jira migration
 JIRA_SYNC_RUNNER=external
 APP_URL=https://tasksense.corp.internal

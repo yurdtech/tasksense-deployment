@@ -392,6 +392,12 @@ config:
     host: ""            # SMTP_HOST — empty = mail is simulated (logged, not sent)
     port: 587           # SMTP_PORT
     secure: false       # SMTP_SECURE — true for implicit TLS (465); STARTTLS on 587 needs false
+    # From 1.1.2. A plain relay that offers a broken STARTTLS: true never
+    # upgrades the connection, even when the relay offers it.
+    ignoreTls: false    # SMTP_IGNORE_TLS
+    # From 1.1.2. false accepts a relay certificate no trusted CA signed.
+    # Prefer certs.* with your internal CA, which keeps the check.
+    tlsRejectUnauthorized: true   # SMTP_TLS_REJECT_UNAUTHORIZED
     user: ""            # SMTP_USER
     pass: ""            # SMTP_PASS (Secret; with existingSecret put it there)
   emailFrom: ""         # EMAIL_FROM, e.g. "TaskSense <tasksense@corp.internal>"

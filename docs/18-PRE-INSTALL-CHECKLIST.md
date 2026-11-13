@@ -232,7 +232,7 @@ same host); for production, your own.
 | API processes | ____ (Helm: `replicaCount` or autoscaling min / max ____; Compose: `APP_REPLICAS`) |
 | Data volume (Kubernetes, several API pods) | `ReadWriteMany` storage class ______ |
 | Docker data root (`/var/lib/docker`) on its own volume | ____ GB = images (~3 GB) + attachments + **2 × the Jira backup** + MongoDB (bundled) |
-| Jira site backup size | ____ GB (e.g. a 13 GB backup needs 26 GB free for the import) |
+| Jira site backup size | ____ GB (e.g. a 10 GB backup needs 20 GB free for the import) |
 | Migration window extra | +2 vCPU, +6 GB RAM for the import worker |
 | Jira sync worker (on by default) | +1 vCPU, +3 GB RAM at its limit (Helm requests 250m / 1Gi) — or turn it off |
 | Attachments growth | ____ GB/year — or object storage |
@@ -321,7 +321,7 @@ To agree in the kick-off meeting. The right-hand column is for your values.
 | MCP / external AI clients | Not used · read-only PAT pilot · full | Not used, or read-only pilot | ☐ no ☐ pilot: ______ |
 | E-mail | SMTP relay (host, port, TLS, CA), `EMAIL_FROM`; or in-app only | Relay with STARTTLS | relay: ______ · port __ · ☐ STARTTLS ☐ 465 |
 | Attachments | Local volume (default) · S3 / MinIO · WebDAV; size limit; extension allow-list; an internal store's host in `EGRESS_ALLOWLIST` | Volume for the pilot; object storage for production | ☐ volume ☐ store: ______ · allowlisted ☐ · limit __ MB |
-| Jira migration | XML site backup (tested with a 13 GB / 574k-issue site backup), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
+| Jira migration | XML site backup (large site backups too; the import needs twice the backup size free), automation rules (imported inactive), project selection, Confluence | Backup import with the import worker | source: ______ · window: ______ · disk ☐ · worker ☐ |
 | Integrations | GitLab webhook, inbound mail, outgoing webhooks (SIEM), `EGRESS_ALLOWLIST` | Only what is used; allowlist minimal | GitLab: ______ · mail: ______ · allowlist: ______ |
 | Jira in parallel | Two-way sync with a Jira Cloud site: a sync account and API token, the projects to bind (same keys), security-level mapping, whether Jira may call the webhook path (I8) | A dedicated Jira account; webhook on; sweep 60 s | site: ______ · account: ______ · projects: ______ · webhook ☐ |
 | Jira sync worker | On (default: `jira-sync` profile with `JIRA_SYNC_RUNNER=external`; Helm `jiraSync.enabled: true`) · off (the API runs the sync) | On; off only on a host with no room, or on `ReadWriteOncePod` storage | ☐ on ☐ off |

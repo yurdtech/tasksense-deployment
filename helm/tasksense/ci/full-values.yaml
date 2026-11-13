@@ -82,7 +82,7 @@ metrics:
 backup:
   enabled: true
   schedule: "30 1 * * *"
-  timeZone: Asia/Baku
+  timeZone: Europe/Berlin
   retentionDays: 14
   image:
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

@@ -187,7 +187,7 @@ persistence:
 # Nightly dump + a dump before every upgrade, on their own volume.
 backup:
   enabled: true
-  timeZone: Asia/Baku
+  timeZone: Europe/Berlin
 
 # Bound outbound traffic to what TaskSense needs.
 networkPolicy:

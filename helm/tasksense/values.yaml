@@ -633,7 +633,7 @@ backup:
   # off. docs/07-BACKUP-DR.md
   enabled: false
   schedule: "0 2 * * *"
-  timeZone: ""              # e.g. Asia/Baku; empty = the controller's (UTC)
+  timeZone: ""              # e.g. Europe/Berlin; empty = the controller's (UTC)
   suspend: false            # keep the volume and pre-upgrade dumps, skip the nightly run
   retentionDays: 30         # nightly and pre-upgrade dumps older than this are deleted
   activeDeadlineSeconds: 7200

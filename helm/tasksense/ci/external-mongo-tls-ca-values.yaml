@@ -19,4 +19,4 @@ config:
   mongodbCompressors: zlib
 backup:
   enabled: true
-  timeZone: Asia/Baku
+  timeZone: Europe/Berlin

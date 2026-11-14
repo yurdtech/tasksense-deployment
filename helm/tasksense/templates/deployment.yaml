@@ -17,19 +17,21 @@ spec:
     matchLabels: {{- include "tasksense.selectorLabels" . | nindent 6 }}
   strategy:
     {{- if include "tasksense.rollingUpdate" . }}
-    # Opt-in (Redis and a ReadWriteMany volume are required): new pods start
-    # while the old ones serve, so two releases answer side by side for the
-    # length of the rollout. Only for a release whose notes mark it
-    # rolling-safe — docs/08-UPGRADE.md.
+    # No outage: a new pod starts while the old ones serve, and an old pod
+    # stops only once its replacement is ready (maxUnavailable 0). Two
+    # releases answer side by side for the length of the rollout, so the
+    # release must be rolling-safe — docs/08-UPGRADE.md. The default wherever
+    # Redis and a ReadWriteMany or ReadWriteOnce volume are configured.
     type: RollingUpdate
     rollingUpdate:
       maxSurge: {{ include "tasksense.str" (dig "rollingUpdate" "maxSurge" 1 .Values.strategy) }}
       maxUnavailable: {{ include "tasksense.str" (dig "rollingUpdate" "maxUnavailable" 0 .Values.strategy) }}
     {{- else }}
-    # The default: the old pods stop before the new ones start, so two
-    # releases never serve at once — the migrations that ran first may have
-    # changed what the old one reads (and a ReadWriteOnce volume could not be
-    # mounted by both anyway).
+    # The old pods stop before the new ones start: a short outage on every
+    # upgrade. Chosen with strategy.type: Recreate (a release that is not
+    # rolling-safe), and the only way without Redis (two processes would each
+    # keep their own sign-in, rate-limit and live-update state) or with a
+    # ReadWriteOncePod volume (one pod may mount it).
     type: Recreate
     {{- end }}
   template:
@@ -142,7 +144,17 @@ spec:
       {{- with .Values.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- $affinity := deepCopy (.Values.affinity | default dict) }}
+      {{- with include "tasksense.dataNodeAffinityTerm" . }}
+      {{- $podAffinity := get $affinity "podAffinity" | default dict }}
+      {{- $required := get $podAffinity "requiredDuringSchedulingIgnoredDuringExecution" | default list }}
+      {{- $_ := set $podAffinity "requiredDuringSchedulingIgnoredDuringExecution" (append $required (fromYaml .)) }}
+      {{- $_ := set $affinity "podAffinity" $podAffinity }}
+      {{- end }}
+      {{- with $affinity }}
+      # With a ReadWriteOnce volume, a required term keeps the API on the node
+      # that holds it (tasksense.dataNodeAffinityTerm); `affinity` from the
+      # values is kept beside it.
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.topologySpreadConstraints }}

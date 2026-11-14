@@ -142,10 +142,12 @@ either way.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). With Redis, scheduled jobs run under leases in MongoDB, so several API processes never run the same pass. | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it; the `replicas` override forces it |
+| `WORKER_ROLE` | — | `all` | Which background work this process runs. `all`: everything in one process. `api`: everything except Jira backup landings. `worker`: only landings (the compose `worker` service forces this). `sync`: only the Jira sync (the compose `sync` service and the Helm sync worker force this). `automation`: only automation rules (the Helm automation worker forces this; TaskSense 1.1.3 and later). With Redis, scheduled jobs run under leases in MongoDB, so several API processes never run the same pass. | **`api`** whenever the `import-worker` profile is on — `preflight.sh` enforces it; the `replicas` override forces it |
 | `APP_REPLICAS` *(Compose)* | — | `3` | With the `replicas` profile: how many API containers, 1–20. Without the profile it has no effect, and `preflight.sh` refuses a value above 1 so the mismatch is not missed. Each gets `APP_CPU_LIMIT` / `APP_MEMORY_LIMIT`. | Fit them in the host: `APP_REPLICAS × APP_MEMORY_LIMIT` plus the worker, Redis, the load balancer and MongoDB |
 | `JIRA_SYNC_RUNNER` | — | `external` in `compose/.env.example`, with the `jira-sync` profile; the application's own default is `inline` | Where the Jira sync's background work runs: full migrations, and the two-way sync's queue and sweeps. `external`: in the separate sync worker; the API then only takes webhooks and queues the work. `inline`: in the API process. A `.env` from before the worker has no such line, and the scripts add it (with the profile) on the next upgrade. | **`external`** whenever the `jira-sync` profile is on and **`inline`** without it — `preflight.sh` enforces both. Helm sets it from `jiraSync.enabled` (default `true`) |
 | `SYNC_WORKER_PORT` | — | `3100` | The sync worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `jiraSync.port` |
+| `AUTOMATION_RUNNER` | — | `inline` | Where automation rules run (TaskSense 1.1.3 and later). `inline`: in the process whose write triggered them. `external`: in the separate automation worker (`WORKER_ROLE=automation`); every other process only writes the event to the automation queue and, with Redis, wakes the worker. Manual and incoming-webhook rules always answer inside their request. | Helm: `automationWorker.enabled` sets it for every pod |
+| `AUTOMATION_WORKER_PORT` | — | `3200` | The automation worker's health and metrics port (`/live`, `/ready`, `/metrics`). | Helm: `automationWorker.port` |
 | `SYNC_HEAP_MB` / `SYNC_CPU_LIMIT` / `SYNC_MEMORY_LIMIT` *(Compose)* | — | `2048` / `1` / `3g` | Heap, CPU and memory of the `sync` container. | |
 | `REPLICATION_MIN_FREE_MB` | — | `2048` | A Jira or Confluence sync run pauses itself when free disk under the database or the local file storage drops below this many MB, so it never fills the disk. An administrator resumes it from the Sync page once there is room. | Lower only on a small test installation |
 | `APP_HEAP_MB` *(Compose)* | — | `1536` | Node.js heap of the API (`--max-old-space-size`). Keep it at about 75 % of `APP_MEMORY_LIMIT`. | |
@@ -160,7 +162,7 @@ either way.
 | `REDIS_CPU_LIMIT` / `REDIS_MEMORY_LIMIT` *(Compose)* | — | `1` / `512m` | Ceilings of the bundled Redis (`bundled-redis`). | |
 | `NODE_OPTIONS` | — | set by the stack | Compose and Helm build it from the heap settings above (`--max-old-space-size=<MB>`). Set the heap variables, not this. | |
 | `SETTINGS_CACHE_TTL_MS` | — | `30000` with `WORKER_ROLE=all`, `0` otherwise; with Redis, at most `5000` (`min(5000, that default)`) | How long a cached workspace-settings document is trusted before it is re-checked; only matters when another process writes. With Redis the other processes' writes arrive as invalidations, and the TTL only bounds how late a lost one is noticed. | |
-| `WEB_ASSETS_SHARED_DIR` | — | unset; the chart sets `/app/api/data/web-assets` with `strategy.type: RollingUpdate` | A directory on the shared data volume. Each process copies its web build's content-hashed files there at boot and serves it after its own build, so a page from one release finds its chunks on a pod of the other during a rolling update. Only needed with rolling updates. | Leave it to the chart |
+| `WEB_ASSETS_SHARED_DIR` | — | unset; the chart sets `/app/api/data/web-assets` with `RollingUpdate` (the default with Redis) | A directory on the shared data volume. Each process copies its web build's content-hashed files there at boot and serves it after its own build, so a page from one release finds its chunks on a pod of the other during a rolling update. Only needed with rolling updates. | Leave it to the chart |
 
 ## 7. Trusting your certificate authority
 
@@ -219,7 +221,7 @@ thousands of issues). Change them only on our advice.
 | `TASKS_MAX_UNPAGED` | `1000` | Ceiling of an unpaged `GET /tasks`. |
 | `EXPORT_JSON_MAX_ROWS` | `100000` | Rows in a single-document JSON export; above it the streamed NDJSON archive is used. |
 | `REPORTS_MAX_TASKS` | `150000` | Rows one report reads; a report that hits it says so. |
-| `AUTOMATION_PROCESSING_MINUTES_PER_12H` | `60` | Automation processing time per workspace per 12 h (Jira's own rule). `0` lifts it. |
+| `AUTOMATION_PROCESSING_MINUTES_PER_12H` | `0` on-premise from 1.1.3 (the chart's `config.automationProcessingMinutesPer12h` likewise); `60` before | Automation processing time per workspace per 12 h before every rule waits for the next window (Jira's own rule). `0` lifts it. On a busy installation 60 minutes can run out in the middle of a working day. |
 
 ## 11. Logs and metrics
 
@@ -265,7 +267,7 @@ Compose and Helm set these; a value in `.env` is overridden or rejected.
 | `PORT` | `3000` | The container port. Change `HTTP_PORT` instead. |
 | `MIGRATE_ON_BOOT` | `manual` | Migrations run once, in the `migrate` service (Compose) or the migration Job (Helm), before the application starts. `auto` (the application default) is for a bare single container. |
 | `TMPDIR`, `STORAGE_LOCAL_ROOT`, `BACKUP_DIR` | on the data volume | See section 9. With several API processes every one of them must see the same volume (`ReadWriteMany` on Kubernetes). |
-| `WEB_ASSETS_SHARED_DIR` *(Helm)* | `/app/api/data/web-assets` with `RollingUpdate` | See section 6. |
+| `WEB_ASSETS_SHARED_DIR` *(Helm)* | `/app/api/data/web-assets` with `RollingUpdate` (the default with Redis) | See section 6. |
 | `WEB_DIST_DIR`, `TASKSENSE_COMMIT`, `TASKSENSE_BUILD_DATE` | baked into the image | What `/api/v1/version` reports. |
 
 ## 15. Refused on-premise

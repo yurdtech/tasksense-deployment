@@ -385,8 +385,58 @@ mode switch. "true" or "".
 {{- if and (kindIs "map" $as) (eq (toString (index $as "enabled")) "true") -}}true{{- end -}}
 {{- end -}}
 
+{{/*
+The API Deployment's strategy, resolved: Recreate or RollingUpdate.
+strategy.type names it; empty or "auto" (the default) picks RollingUpdate
+wherever a new API pod can serve beside the old one for the length of a
+rollout, and Recreate everywhere else. That needs Redis, which the two
+processes share their state through, and a persistent volume both can
+mount: ReadWriteMany, or ReadWriteOnce with the new pod on the volume's node
+(tasksense.dataNodeAffinityTerm).
+*/}}
+{{- define "tasksense.strategyType" -}}
+{{- $raw := dig "type" "" (.Values.strategy | default dict) -}}
+{{- $type := "" -}}
+{{- if $raw -}}{{- $type = toString $raw -}}{{- end -}}
+{{- if and $type (ne $type "auto") -}}
+{{- $type -}}
+{{- else if and (eq (include "tasksense.redisConfigured" .) "true") (eq (toString .Values.persistence.enabled) "true") (has (toString .Values.persistence.accessMode) (list "ReadWriteMany" "ReadWriteOnce")) -}}
+RollingUpdate
+{{- else -}}
+Recreate
+{{- end -}}
+{{- end -}}
+
 {{- define "tasksense.rollingUpdate" -}}
-{{- if eq (toString (dig "type" "Recreate" (.Values.strategy | default dict))) "RollingUpdate" -}}true{{- end -}}
+{{- if eq (include "tasksense.strategyType" .) "RollingUpdate" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The required pod-affinity term that keeps the API on the node that holds a
+ReadWriteOnce data volume, or "" when the volume is not ReadWriteOnce.
+
+Such a volume attaches to one node, and every pod mounting it must run there.
+Two moments put the API pod somewhere else without this term: the new pod of
+a rolling update, which starts while the old one still holds the volume, and
+the new pod of a Recreate, which starts while the sync and automation workers
+still hold it. Either then waits on "Multi-Attach error" and the API never
+comes up. The term names the pods of this release that mount the volume, by
+release and component (the workers carry a name label of their own). On a
+fresh install none run yet, and a pod matching its own term is scheduled
+anyway, so the first one goes wherever the scheduler puts it.
+*/}}
+{{- define "tasksense.dataNodeAffinityTerm" -}}
+{{- if and (eq (toString .Values.persistence.enabled) "true") (eq (toString .Values.persistence.accessMode) "ReadWriteOnce") -}}
+labelSelector:
+  matchLabels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: tasksense
+  matchExpressions:
+    - key: app.kubernetes.io/component
+      operator: In
+      values: [api, sync, automation]
+topologyKey: kubernetes.io/hostname
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -554,7 +604,18 @@ Call with (dict "root" $ "role" "api|worker|migrate" "heapMb" <n>).
   value: sync
 - name: SYNC_WORKER_PORT
   value: {{ int $root.Values.jiraSync.port | quote }}
+{{- else if eq .role "automation" }}
+- name: WORKER_ROLE
+  value: automation
+- name: AUTOMATION_WORKER_PORT
+  value: {{ int $root.Values.automationWorker.port | quote }}
 {{- end }}
+{{- /* Every process that publishes events agrees on where the rules run: with
+       the automation worker on, they only queue (the worker's own role makes
+       it run them whatever this says). */}}
+{{- $aw := $root.Values.automationWorker | default dict }}
+- name: AUTOMATION_RUNNER
+  value: {{ ternary "external" "inline" (eq (toString $aw.enabled) "true") | quote }}
 {{- /* Redis from a Secret the operator manages: for every role, the migration
        Job included. It validates the same configuration, the rest of which
        (REDIS_USERNAME, REDIS_SENTINELS …) reaches it through the ConfigMap —

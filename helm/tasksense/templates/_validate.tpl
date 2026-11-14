@@ -17,7 +17,7 @@ reports the real problem rather than a nil-pointer error further down.
 
 {{- /* The same, from a chart before the blocks below existed (1.1.0). */ -}}
 {{- $missing := list -}}
-{{- range $k := list "redis" "autoscaling" "podDisruptionBudget" "strategy" "jiraSync" -}}
+{{- range $k := list "redis" "autoscaling" "podDisruptionBudget" "strategy" "jiraSync" "automationWorker" -}}
 {{- if not (hasKey $v $k) -}}{{- $missing = append $missing $k -}}{{- end -}}
 {{- end -}}
 {{- if $missing -}}
@@ -38,10 +38,12 @@ reports the real problem rather than a nil-pointer error further down.
 {{- $pdb := index $v "podDisruptionBudget" | default (dict) -}}
 {{- $pdbOn := and (kindIs "map" $pdb) (eq (toString (index $pdb "enabled")) "true") -}}
 {{- $replicas := int ($v.replicaCount | default 0) -}}
-{{- $strategy := toString (dig "type" "Recreate" ($v.strategy | default (dict))) -}}
-{{- if not (has $strategy (list "Recreate" "RollingUpdate")) -}}
-{{- fail (printf "strategy.type must be Recreate or RollingUpdate (got %s)" $strategy) -}}
+{{- $strategyRaw := dig "type" "" ($v.strategy | default (dict)) -}}
+{{- if and $strategyRaw (not (has (toString $strategyRaw) (list "auto" "Recreate" "RollingUpdate"))) -}}
+{{- fail (printf "strategy.type must be empty (auto), Recreate or RollingUpdate (got %s)" (toString $strategyRaw)) -}}
 {{- end -}}
+{{- /* Resolved: empty picks RollingUpdate where it can run (tasksense.strategyType). */ -}}
+{{- $strategy := include "tasksense.strategyType" . -}}
 {{- if lt $replicas 0 -}}
 {{- fail (printf "replicaCount must be 0 or more (got %v; 0 stops the API)" (toString $v.replicaCount)) -}}
 {{- end -}}
@@ -134,7 +136,15 @@ reports the real problem rather than a nil-pointer error further down.
 {{- if not $v.persistence.enabled -}}
 {{- fail (printf "%s needs persistence.enabled=true: every API pod must see the same attachments, backups and staged uploads, and an emptyDir is one pod's own" $what) -}}
 {{- end -}}
-{{- if ne (toString $v.persistence.accessMode) "ReadWriteMany" -}}
+{{- /* A rolling update alone is two pods for the length of a rollout,
+       which a ReadWriteOnce volume serves when both are on its node — the
+       API's affinity sees to that. Every other way to more than one pod is
+       for good, and needs ReadWriteMany. */ -}}
+{{- $rollingOnly := eq $what "strategy.type=RollingUpdate" -}}
+{{- if and $rollingOnly (eq (toString $v.persistence.accessMode) "ReadWriteOncePod") -}}
+{{- fail "strategy.type=RollingUpdate cannot run with persistence.accessMode=ReadWriteOncePod: the new API pod has to mount the data volume while the old one still holds it, and only one pod may. Use ReadWriteOnce (the new pod is then scheduled onto the volume's node) or ReadWriteMany — or strategy.type: Recreate, which stops the old pod first. docs/08-UPGRADE.md" -}}
+{{- end -}}
+{{- if and (not $rollingOnly) (ne (toString $v.persistence.accessMode) "ReadWriteMany") -}}
 {{- fail (printf "%s needs persistence.accessMode=ReadWriteMany (it is %s): every API pod mounts the data volume — attachments, BACKUP_DIR and the uploads staged in TMPDIR=/app/api/data/tmp — usually from different nodes, and a ReadWriteOnce claim attaches to one node only. Use a ReadWriteMany storage class (NFS, CephFS / ODF, Azure Files, EFS …); with persistence.existingClaim, declare the claim's mode here. docs/15-SCALING-AND-HA.md" $what (toString $v.persistence.accessMode)) -}}
 {{- end -}}
 {{- end -}}
@@ -175,7 +185,9 @@ reports the real problem rather than a nil-pointer error further down.
 {{- /* ── extraEnv must not shadow what the chart owns ──────────────────── */ -}}
 {{- $owned := dict
       "AGENT_EXECUTOR" "always off, not configurable"
-      "WORKER_ROLE" "set from worker.enabled / jiraSync.enabled"
+      "WORKER_ROLE" "set from worker.enabled / jiraSync.enabled / automationWorker.enabled"
+      "AUTOMATION_RUNNER" "set from automationWorker.enabled"
+      "AUTOMATION_WORKER_PORT" "use automationWorker.port"
       "JIRA_SYNC_RUNNER" "set from jiraSync.enabled"
       "SYNC_WORKER_PORT" "use jiraSync.port"
       "MIGRATE_ON_BOOT" "set from migrations.enabled"
@@ -257,6 +269,23 @@ reports the real problem rather than a nil-pointer error further down.
 {{- end -}}
 {{- if or (lt (int $v.jiraSync.port) 1024) (gt (int $v.jiraSync.port) 65535) (eq (int $v.jiraSync.port) 3000) -}}
 {{- fail (printf "jiraSync.port must be between 1024 and 65535 and not 3000, the API's port (got %v)" $v.jiraSync.port) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* ── automation worker ───────────────────────────────────────────────── */ -}}
+{{- $aw := $v.automationWorker | default dict -}}
+{{- if $aw.enabled -}}
+{{- if not $v.persistence.enabled -}}
+{{- fail "automationWorker.enabled=true requires persistence.enabled=true: a rule that clones an issue or attaches a file writes it to the same data volume the API serves it from. Set automationWorker.enabled: false to keep the rules in the API process." -}}
+{{- end -}}
+{{- if eq (toString $v.persistence.accessMode) "ReadWriteOncePod" -}}
+{{- fail "automationWorker.enabled=true cannot run with persistence.accessMode=ReadWriteOncePod: only one pod may mount the data volume. Use ReadWriteOnce (the worker is then scheduled onto the API's node) or ReadWriteMany — or set automationWorker.enabled: false." -}}
+{{- end -}}
+{{- if or (lt (int $aw.port) 1024) (gt (int $aw.port) 65535) (eq (int $aw.port) 3000) (eq (int $aw.port) (int $v.jiraSync.port)) -}}
+{{- fail (printf "automationWorker.port must be between 1024 and 65535, and neither 3000 (the API) nor jiraSync.port (got %v)" $aw.port) -}}
+{{- end -}}
+{{- if lt (int $aw.replicas) 1 -}}
+{{- fail "automationWorker.replicas must be at least 1 while automationWorker.enabled is true" -}}
 {{- end -}}
 {{- end -}}
 

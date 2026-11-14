@@ -109,17 +109,25 @@ existingSecret: ""
 # docs/15-SCALING-AND-HA.md
 replicaCount: 1
 
-# How a `helm upgrade` replaces the pods.
-#   Recreate       (default) the old pods stop before the new ones start: a short
-#                  outage, and never two releases side by side.
-#   RollingUpdate  new pods start while the old ones serve. Needs Redis and a
-#                  ReadWriteMany volume, and only for a release whose notes mark
-#                  it rolling-safe (migrations backwards compatible, API and the
-#                  previous web build compatible both ways). The chart then sets
+# How a `helm upgrade` replaces the API pods.
+#   ""             (default) RollingUpdate wherever it can run — redis.* is
+#                  configured and the data volume is ReadWriteMany or
+#                  ReadWriteOnce — and Recreate otherwise. "auto" means the same.
+#   RollingUpdate  no outage: a new pod starts, becomes ready, and only then does
+#                  an old one stop (maxSurge 1, maxUnavailable 0). Two releases
+#                  serve side by side meanwhile, so the release must be
+#                  rolling-safe: migrations backwards compatible, API and the
+#                  previous web build compatible both ways — its notes say so.
+#                  Needs Redis. With ReadWriteOnce the new pod is scheduled onto
+#                  the node that holds the volume. The chart sets
 #                  WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets, so a page from
-#                  either release finds its scripts on any pod. docs/08-UPGRADE.md
+#                  either release finds its scripts on any pod.
+#   Recreate       the old pods stop before the new ones start: a short outage,
+#                  and never two releases side by side. For an upgrade to a
+#                  release that is not rolling-safe: --set strategy.type=Recreate.
+# docs/08-UPGRADE.md
 strategy:
-  type: Recreate
+  type: ""
   rollingUpdate:
     maxSurge: 1
     maxUnavailable: 0
@@ -255,6 +263,45 @@ jiraSync:
   podAnnotations: {}
   podLabels: {}
 
+automationWorker:
+  # The automation worker: a separate Deployment running
+  # `node dist/automation-worker.js` with WORKER_ROLE=automation, from the same
+  # image. When on, every other process runs with AUTOMATION_RUNNER=external:
+  # it only writes each event to the automation queue, and the worker runs the
+  # rules, the scheduled sweeps and the chains they start. A burst of rules then
+  # never shares the API's event loop or database pool, and a busy API never
+  # starves the rules. Manual and incoming-webhook rules still answer inside
+  # their request. With Redis configured the API wakes the worker at once;
+  # without it the worker polls every few seconds.
+  #
+  # Off by default: false keeps the rules in the API process, as before this pod
+  # existed. Turn it on for a busy installation (many people, many rules).
+  #
+  # Storage: like the sync worker, it mounts the API's data claim (a rule that
+  # clones an issue or attaches a file writes it there) — with ReadWriteMany
+  # anywhere, with ReadWriteOnce on the API's node.
+  enabled: false
+  # Queue items and each workspace's scheduler are leased, so replicas share
+  # the work.
+  replicas: 1
+  heapMb: 1536
+  # Health and metrics port (/live, /ready, /metrics). Cluster-internal only.
+  port: 3200
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 2Gi
+  terminationGracePeriodSeconds: 45
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  # Merged after the chart's own co-location rule (ReadWriteOnce only).
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
 # ── Redis (more than one API pod) ────────────────────────────────────────────
 #
 # Not bundled: your Redis (6 or newer recommended; Sentinel for availability).
@@ -373,7 +420,11 @@ config:
   # Ceilings that keep one huge (migrated) workspace from exhausting memory.
   stateTaskLimit: 5000            # STATE_TASK_LIMIT
   reportsMaxTasks: 150000         # REPORTS_MAX_TASKS
-  automationProcessingMinutesPer12h: 60   # AUTOMATION_PROCESSING_MINUTES_PER_12H (0 = unlimited)
+  # AUTOMATION_PROCESSING_MINUTES_PER_12H: automation processing minutes per
+  # workspace per 12 hours before every rule waits for the next window. 0 = no
+  # budget (the default on-premise: one installation, one tenant). Set e.g. 60
+  # to cap a runaway rule.
+  automationProcessingMinutesPer12h: 0
 
   # Extra CORS origins beyond appUrl's own (CORS_ALLOWED_ORIGINS). List or CSV.
   corsAllowedOrigins: []

@@ -18,12 +18,15 @@ rollback really works.
   backup taken just before the upgrade. `upgrade.sh` takes that backup, records
   it, and `rollback.sh` restores it by default.
 
-Expect a short outage: every API process of the old version stops before the
-new one starts — one process, or all of them with several. Typically a minute
-or two, plus migration time on a large database. Tell users, and use a change
-window. The one exception is Kubernetes with Redis and a release marked
-**rolling-safe**: it can roll pod by pod without an outage
-([Rolling updates](#rolling-updates-kubernetes)).
+On Docker Compose, and on Kubernetes without Redis, expect a short outage:
+every API process of the old version stops before the new one starts — one
+process, or all of them with several. Typically a minute or two, plus
+migration time on a large database. Tell users, and use a change window.
+
+On Kubernetes with Redis there is no outage by default: the chart rolls pod by
+pod, and each new API pod is ready before an old one stops
+([Rolling updates](#rolling-updates-kubernetes)). A release whose notes say it
+is not **rolling-safe** is upgraded with `Recreate` instead.
 
 ---
 
@@ -241,10 +244,10 @@ The chart version is the application version. What happens:
 
 1. **Pre-upgrade hook:** with backups enabled, `migrations.backupBeforeUpgrade`
    dumps the database to the backup PVC; then the migration Job runs.
-2. The Deployment is replaced with the **Recreate** strategy (the default) —
-   every old pod stops before the first new one starts. A short outage, by
-   design. With `strategy.type: RollingUpdate` the pods are replaced one at a
-   time instead — below.
+2. The API pods are replaced. With Redis the default is **RollingUpdate**:
+   each new pod starts and becomes ready before an old one stops, so there is
+   no outage — below. Without Redis it is **Recreate**: every old pod stops
+   before the first new one starts, a short outage.
 
 Check:
 
@@ -268,14 +271,22 @@ helm test tasksense -n tasksense --logs
 
 ### Rolling updates (Kubernetes)
 
-With Redis and a `ReadWriteMany` data volume, `strategy.type: RollingUpdate`
-replaces the API pods one at a time (`maxSurge: 1`, `maxUnavailable: 0`): the
-hook Jobs run first as above, then a new pod starts, becomes ready, and an old
-one goes, until none of the old release is left. For that time **two releases
-serve side by side** behind one round-robin Service.
+With Redis, `strategy.type` left empty (the default) means `RollingUpdate`,
+and the API pods are replaced one at a time (`maxSurge: 1`, `maxUnavailable:
+0`): the hook Jobs run first as above, then a new pod starts, becomes ready,
+and only then does an old one go, until none of the old release is left. One
+API pod works the same way: for a moment there are two. For that time **two
+releases serve side by side** behind one round-robin Service.
 
-That is safe only for a release whose release notes mark it **rolling-safe**,
-which means both of:
+It works on a `ReadWriteMany` volume and on a `ReadWriteOnce` one. On
+`ReadWriteOnce` the new pod is scheduled onto the node that holds the volume
+(beside the old pod and the workers), so that node needs room for one more
+API pod while the upgrade runs. If it has none, the new pod stays `Pending`
+and the old one keeps serving until you free the room or upgrade with
+`Recreate`. `ReadWriteOncePod` allows one pod only, so the default there is
+`Recreate`.
+
+That is safe for a release that is **rolling-safe**, which means both of:
 
 1. **Its migrations are backwards compatible.** The migration Job finishes
    before the first new pod starts, so the previous release runs against the
@@ -285,9 +296,10 @@ which means both of:
    ways.** A browser that loaded the previous interface calls new pods, and a
    browser that loaded the new interface calls old ones.
 
-Rolling-safe is a statement about the release immediately before it. Upgrading
-across several releases, or to a release the notes do not mark rolling-safe,
-uses `Recreate` for that upgrade:
+Rolling-safe is a statement about the release immediately before it. The
+release notes and the section for each version below say when a release is
+**not**. Upgrading across several releases, or to a release that is not
+rolling-safe, uses `Recreate` for that upgrade:
 
 ```bash
 helm upgrade tasksense oci://ghcr.io/yurdtech/charts/tasksense \
@@ -336,6 +348,36 @@ Turning it off later, and everything it needs:
 [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-jira-sync-worker),
 [01-INSTALL-COMPOSE](01-INSTALL-COMPOSE.md#the-jira-sync-worker-on-by-default),
 [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md#the-jira-sync-worker).
+
+---
+
+## The upgrade that brings the automation worker
+
+From 1.1.3 automation rules can run in a process of their own: the
+`<release>-automation` Deployment on Kubernetes and OpenShift. **It is off by
+default**, and the upgrade changes nothing about where rules run until you
+turn it on. Turn it on for a busy installation, where a burst of rules would
+otherwise share the API's event loop and database pool.
+
+| | Kubernetes / OpenShift |
+| --- | --- |
+| Turn it on | `automationWorker.enabled: true` in the values file, then `helm upgrade`. The chart creates the Deployment and its Service, and gives every other pod `AUTOMATION_RUNNER=external`. |
+| Check | `kubectl -n tasksense rollout status deploy/tasksense-automation`; `/ready` on port 3200 |
+| Extra resources | requests 250m / 768Mi, limit 2Gi per replica — mind the namespace quota |
+| Storage | as the sync worker: `ReadWriteOnce` is scheduled onto the API's node, `ReadWriteMany` anywhere; `ReadWriteOncePod` or `persistence.enabled: false` is refused |
+| Redis | recommended: the API wakes the worker through it at once. Without Redis the worker picks events up within its 5-second poll. |
+| Turning it off | `automationWorker.enabled: false` and `helm upgrade`. Events the worker had not run yet stay in the queue and the API runs them. |
+
+Three changes come with 1.1.3 whether or not the worker is on:
+
+| Change | What to do |
+| --- | --- |
+| **No automation budget on-premise by default** — `AUTOMATION_PROCESSING_MINUTES_PER_12H` (`config.automationProcessingMinutesPer12h`) now defaults to `0`. With 60, a busy day could spend the budget by midday, and every rule then waited for the next 12-hour window. | Nothing. To keep a budget, set the value explicitly. |
+| **Schema migration `014-backfill-tenant-ws`** — rows written before workspaces existed get the default workspace id, exactly how they were already read, so queries of the default workspace use their indexes. | Nothing. It runs in the `migrate` step and is idempotent; on a large database it takes a few minutes. Back up first, as for every upgrade with a migration. `./scripts/rollback.sh --app-only` / `helm rollback` to 1.1.2 is safe: 1.1.2 reads those rows the same way. |
+| **Upgrades without an outage on Kubernetes** — with Redis, `strategy.type` now defaults to `RollingUpdate`, also on a `ReadWriteOnce` volume: the new API pod is ready before the old one stops. The API, sync and automation pods are kept on the node of a `ReadWriteOnce` volume. | Nothing; a values file that sets `strategy.type: Recreate` keeps it. **1.1.3 is rolling-safe from 1.1.2**: its one migration is the backfill above, and 1.1.2's interface and API work with 1.1.3's both ways. Coming from an earlier release, upgrade with `--set strategy.type=Recreate`. The node of a `ReadWriteOnce` volume needs room for one more API pod during the upgrade. |
+
+More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-worker),
+[02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md).
 
 ---
 

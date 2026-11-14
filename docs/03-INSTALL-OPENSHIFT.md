@@ -226,10 +226,12 @@ it to the Redis project with `networkPolicy.redis.namespaceSelector`.
 ## Storage
 
 `ReadWriteOnce` (e.g. `ocs-storagecluster-ceph-rbd`, `thin-csi`) is right for
-one API pod alone. The import worker and more than one API pod need
-`ReadWriteMany` — `ocs-storagecluster-cephfs` with OpenShift Data Foundation, or
-an NFS class. The chart refuses `worker.enabled`, `replicaCount` above 1,
-autoscaling and `RollingUpdate` on anything else. The backups volume
+one API pod alone, and with Redis it still upgrades without an outage: the
+new pod of a rolling update is scheduled onto the node that holds the volume.
+The import worker and more than one API pod need `ReadWriteMany` —
+`ocs-storagecluster-cephfs` with OpenShift Data Foundation, or an NFS class.
+The chart refuses `worker.enabled`, `replicaCount` above 1 and autoscaling on
+anything else, and `RollingUpdate` on `ReadWriteOncePod`. The backups volume
 (`backup.persistence`) can stay ReadWriteOnce.
 
 The Jira sync worker (`<release>-sync`, on by default) shares the data

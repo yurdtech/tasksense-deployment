@@ -101,6 +101,23 @@ jobs:
           grep -q 'kind: HorizontalPodAutoscaler' <<<"$hpa"
           api="$(helm template t "$chart" -f "$chart/ci/autoscaling-sentinel-values.yaml" -s templates/deployment.yaml)"
           if grep -qE '^  replicas:' <<<"$api"; then echo "the API Deployment under an HPA still sets replicas"; exit 1; fi
+          # Upgrades: without Redis the API is stopped first (Recreate); with
+          # Redis the default rolls with no outage — a new pod ready before an
+          # old one stops — and on ReadWriteOnce the API is kept on the
+          # volume's node, beside the workers that mount it.
+          api="$(helm template t "$chart" -f "$base" -s templates/deployment.yaml)"
+          grep -q '^    type: Recreate' <<<"$api"
+          grep -q -- '- automation' <<<"$api"
+          rolling="$(helm template t "$chart" -f "$chart/ci/rolling-rwo-values.yaml" -s templates/deployment.yaml)"
+          grep -q '^    type: RollingUpdate' <<<"$rolling"
+          grep -q 'maxUnavailable: 0' <<<"$rolling"
+          grep -q 'command: \["sleep", "10"\]' <<<"$rolling"
+          grep -q 'name: WEB_ASSETS_SHARED_DIR' <<<"$rolling"
+          grep -q 'topologyKey: kubernetes.io/hostname' <<<"$rolling"
+          grep -q -- '- sync' <<<"$rolling"
+          grep -q '^    type: Recreate' <<<"$(helm template t "$chart" -f "$chart/ci/rolling-rwo-values.yaml" --set strategy.type=Recreate -s templates/deployment.yaml)"
+          rwx="$(helm template t "$chart" -f "$chart/ci/multi-replica-values.yaml" -s templates/deployment.yaml)"
+          if grep -q -- '- automation' <<<"$rwx"; then echo "the API is pinned to one node on ReadWriteMany"; exit 1; fi
           while IFS='|' read -r expect args; do
             [ -n "$expect" ] || continue
             # shellcheck disable=SC2086
@@ -125,6 +142,8 @@ jobs:
           these values come from an earlier chart (no redis block)|--set redis=null
           replicaCount=3 is not supported without Redis|--set replicaCount=3 --set persistence.accessMode=ReadWriteMany
           strategy.type=RollingUpdate is not supported without Redis|--set strategy.type=RollingUpdate
+          strategy.type=RollingUpdate cannot run with persistence.accessMode=ReadWriteOncePod|--set strategy.type=RollingUpdate --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteOncePod --set jiraSync.enabled=false
+          strategy.type must be empty (auto), Recreate or RollingUpdate|--set strategy.type=Blue
           replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce)|--set replicaCount=3 --set redis.url=redis://redis:6379
           replicaCount=21 is above the supported maximum of 20|--set replicaCount=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany
           autoscaling.maxReplicas=21 is above the supported maximum of 20|--set autoscaling.enabled=true --set autoscaling.maxReplicas=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany
@@ -137,7 +156,19 @@ jobs:
           must be at least preStopSleepSeconds + 20|--set replicaCount=2 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany --set terminationGracePeriodSeconds=20
           jiraSync.enabled=true (the default) cannot run with persistence.accessMode=ReadWriteOncePod|--set persistence.accessMode=ReadWriteOncePod
           jiraSync.enabled=true (the default) requires persistence.enabled=true|--set persistence.enabled=false
+          automationWorker.enabled=true cannot run with persistence.accessMode=ReadWriteOncePod|--set automationWorker.enabled=true --set jiraSync.enabled=false --set persistence.accessMode=ReadWriteOncePod
+          automationWorker.enabled=true requires persistence.enabled=true|--set automationWorker.enabled=true --set jiraSync.enabled=false --set persistence.enabled=false
+          automationWorker.port must be between 1024 and 65535|--set automationWorker.enabled=true --set automationWorker.port=3000
+          automationWorker.replicas must be at least 1|--set automationWorker.enabled=true --set automationWorker.replicas=0
+          these values come from an earlier chart (no automationWorker block)|--set automationWorker=null
           CASES
+          # The automation worker: off renders no Deployment and keeps the rules
+          # inline; on gives every pod AUTOMATION_RUNNER=external.
+          if grep -q 'tasksense-automation' <<<"$single"; then echo "the automation worker renders while off"; exit 1; fi
+          aw="$(helm template t "$chart" -f "$chart/ci/automation-worker-values.yaml")"
+          grep -q 'dist/automation-worker.js' <<<"$aw"
+          [ "$(grep -A1 'name: AUTOMATION_RUNNER' <<<"$aw" | grep -c '"external"')" -ge 3 ]
+          if grep -A1 'name: AUTOMATION_RUNNER' <<<"$aw" | grep -q '"inline"'; then echo "a pod keeps the rules inline while the automation worker is on"; exit 1; fi
           for s in scripts/helm-airgap-bundle.sh scripts/helm-airgap-load.sh scripts/wizard/platform-helm.sh; do bash -n "$s"; done
 
   tests:

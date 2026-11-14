@@ -26,8 +26,14 @@ optional import worker. Without
 Redis that is the only layout: sign-in tickets, lockout and rate-limit counters,
 cache invalidations and the live-update fan-out live in the process, so the
 chart refuses `replicaCount` above 1, autoscaling and a PodDisruptionBudget,
-and deploys with `strategy: Recreate`. Availability then comes from Kubernetes
-restarting the pod and from your MongoDB replica set.
+and upgrades with `strategy: Recreate`: the pod stops before its replacement
+starts, a short outage. Availability then comes from Kubernetes restarting the
+pod and from your MongoDB replica set.
+
+**With Redis** an upgrade has no outage, even with one API pod and a
+`ReadWriteOnce` volume. The default strategy is then `RollingUpdate`: the new
+pod starts, becomes ready, and only then does the old one stop
+([08-UPGRADE](08-UPGRADE.md#rolling-updates-kubernetes)).
 
 **With Redis** (`redis.*`) and a `ReadWriteMany` data volume, the API runs as
 2 to 20 pods behind the Service, with an optional HorizontalPodAutoscaler and
@@ -229,8 +235,9 @@ something broken, and names the value to change:
 | `replicaCount: 2` without `redis.*` | `replicaCount=2 is not supported without Redis: …` |
 | `autoscaling.enabled: true` without `redis.*` | `autoscaling.enabled=true is not supported without Redis: …` |
 | `podDisruptionBudget.enabled: true` without `redis.*` | `podDisruptionBudget.enabled=true is not supported without Redis: …` |
-| `strategy.type: RollingUpdate` without `redis.*` | `strategy.type=RollingUpdate is not supported without Redis: …` |
-| `replicaCount: 3` with Redis on ReadWriteOnce | `replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce): …` (the same for autoscaling, the PDB and `RollingUpdate`; `… needs persistence.enabled=true` with persistence off) |
+| `strategy.type: RollingUpdate` without `redis.*` | `strategy.type=RollingUpdate is not supported without Redis: …` (left empty, the strategy falls back to `Recreate` instead) |
+| `strategy.type: RollingUpdate` on `ReadWriteOncePod` | `strategy.type=RollingUpdate cannot run with persistence.accessMode=ReadWriteOncePod: …` |
+| `replicaCount: 3` with Redis on ReadWriteOnce | `replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce): …` (the same for autoscaling and the PDB; `… needs persistence.enabled=true` with persistence off) |
 | `replicaCount: 21` | `replicaCount=21 is above the supported maximum of 20` |
 | `autoscaling.maxReplicas: 21` | `autoscaling.maxReplicas=21 is above the supported maximum of 20` |
 | `redis.url` and `redis.sentinels` (or `clusterNodes`) together | `redis: set exactly one connection — …` |
@@ -604,16 +611,20 @@ curl -s https://tasksense.corp.internal/api/v1/version                 # the new
 ```
 
 The order inside `helm upgrade` is fixed by hook weights: hook copies of the
-configuration (-10) → pre-upgrade dump (-8) → migrations (-5) → the old pods are
-stopped and the new ones started (`Recreate`). The old version keeps serving
-while the dump and the migrations run; for a dump of exactly the last state,
-scale the API to 0 before upgrading. Expect a short interruption while the pods
-are replaced — live views reconnect on their own.
+configuration (-10) → pre-upgrade dump (-8) → migrations (-5) → the pods are
+replaced. The old version keeps serving while the dump and the migrations run;
+for a dump of exactly the last state, scale the API to 0 before upgrading.
 
-With Redis and `strategy.type: RollingUpdate` the pods are replaced one at a
-time instead, with no interruption — **only for a release whose notes mark it
-rolling-safe**; any other release is upgraded with
-`--set strategy.type=Recreate` ([08-UPGRADE](08-UPGRADE.md#rolling-updates-kubernetes)).
+How the pods are replaced follows `strategy.type`:
+
+- **With Redis (the default `RollingUpdate`):** no interruption. Each new pod
+  starts and becomes ready before an old one stops. On a `ReadWriteOnce`
+  volume the new pod is scheduled onto the node that holds the volume, so that
+  node needs room for one more API pod during the upgrade. A release whose
+  notes say it is **not** rolling-safe is upgraded with
+  `--set strategy.type=Recreate` ([08-UPGRADE](08-UPGRADE.md#rolling-updates-kubernetes)).
+- **Without Redis (`Recreate`):** the old pod stops before the new one starts.
+  Expect a short interruption; live views reconnect on their own.
 
 **Upgrading from an earlier 1.x chart.** This chart adds the top-level blocks
 `redis`, `autoscaling`, `podDisruptionBudget` and `strategy`. Values reused
@@ -732,6 +743,8 @@ leave `global.imageRegistry` empty and name the repositories instead:
 | `kubectl drain` hangs on the TaskSense pod | One pod: a PodDisruptionBudget someone added outside the chart. Several: the chart's budget is exhausted — another API pod is not ready yet (its replacement is starting), or, on Kubernetes 1.25–1.26, every pod is unready | One pod: remove it — one replica cannot satisfy `minAvailable: 1`. Several: find the unready pod (`kubectl get pods`); while Redis is down every pod is unready. From 1.27 the chart sets `unhealthyPodEvictionPolicy: AlwaysAllow`, so unready pods do not hold a drain |
 | Every API pod `0/1 Ready`, `/api/v1/health/ready` answers 503 with `"redis":"down"` | Redis unreachable: address, password, TLS, or the NetworkPolicy | `kubectl logs deploy/tasksense \| grep -i redis`; the connection settings in `redis.*`; with NetworkPolicy, `networkPolicy.redis.*` |
 | A blank page or the error screen during a rolling update | Chunk requests reaching a pod of the other release without shared web assets | Use `RollingUpdate` only through the chart (it sets `WEB_ASSETS_SHARED_DIR`) and only for rolling-safe releases; otherwise `Recreate` |
+| `helm upgrade` waits; the new API pod is `Pending` beside the old one, which keeps serving | `ReadWriteOnce`: the new pod must run on the node that holds the volume, and that node has no room for a second API pod | Free `resources.requests` worth of one API pod on that node, or upgrade with `--set strategy.type=Recreate` (a short outage) |
+| The new API pod waits in `ContainerCreating` with `Multi-Attach error` | A `ReadWriteOnce` volume held on another node — by an API or worker pod scheduled before this chart kept them together | `kubectl get pods -o wide`: delete the pod on the other node, or let the rollout finish; from this chart the API, sync and automation pods stay on the volume's node |
 | Many users get 429 at sign-in from the same moment | `TRUST_PROXY` too low: every client looks like the proxy, one bucket for everyone | `config.trustProxy` = the number of proxies that append to `X-Forwarded-For` ([15](15-SCALING-AND-HA.md#trust_proxy-how-many-proxies-to-believe)) |
 | Sign-in loops or CORS errors | `appUrl` differs from the URL in the browser | Set `appUrl` to exactly that URL; the ingress host follows it |
 | `pre-upgrade-backup` Job `Pending` | The backups claim cannot be bound | `kubectl describe pvc tasksense-backups`; storage class, quota |
@@ -757,7 +770,7 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `licenseKey` | `""` | `LICENSE_KEY` **(S)** |
 | `existingSecret` | `""` | Secret with the **(S)** keys |
 | `replicaCount` | `1` | API pods: 0 or 1 without Redis; up to 20 with `redis.*` and `ReadWriteMany` |
-| `strategy.type` | `Recreate` | `RollingUpdate` needs Redis and `ReadWriteMany`; then `WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets` |
+| `strategy.type` | `""` | Empty (or `auto`): `RollingUpdate` with `redis.*` and a `ReadWriteMany` or `ReadWriteOnce` volume, `Recreate` otherwise. `RollingUpdate` needs Redis, sets `WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets`, and on `ReadWriteOnce` keeps the API on the volume's node. `Recreate` for a release that is not rolling-safe |
 | `strategy.rollingUpdate.maxSurge` / `maxUnavailable` | `1` / `0` | With `RollingUpdate` |
 | `autoscaling.enabled` / `minReplicas` / `maxReplicas` | `false` / `2` / `10` | HorizontalPodAutoscaler (`autoscaling/v2`); needs Redis and `ReadWriteMany`; at most 20 |
 | `autoscaling.targetCPUUtilizationPercentage` / `targetMemoryUtilizationPercentage` | `70` / `""` | Of `resources.requests`; empty = that metric is not used |

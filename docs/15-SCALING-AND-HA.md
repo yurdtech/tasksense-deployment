@@ -15,9 +15,10 @@ The short version, stated plainly so it is not discovered during an audit:
   fails until Redis is back; the API never quietly drops to per-process memory.
 - Several API processes need **shared storage** — a `ReadWriteMany` data volume
   on Kubernetes — and should run beside the **import worker**.
-- **Upgrades** stop every API process first by default (`Recreate`). Rolling
-  updates are opt-in, Kubernetes only, and only for releases marked
-  rolling-safe.
+- **Upgrades** on Kubernetes with Redis roll by default: each new API pod is
+  ready before an old one stops, so there is no outage. Without Redis, and on
+  Compose, every API process stops first (`Recreate`). A release that is not
+  rolling-safe is upgraded with `Recreate`.
 
 ---
 
@@ -31,7 +32,7 @@ The short version, stated plainly so it is not discovered during an audit:
 | Recommended | | `worker.enabled: true` (Helm); Redis with Sentinel; pods spread over nodes |
 | Rate-limit counters | in memory | in Redis (`RATE_LIMIT_STORE` defaults to `redis`) |
 | MongoDB pool per process | 100 | 50 (Helm `config.mongodbMaxPoolSize`, Compose `MONGODB_MAX_POOL_SIZE`; an explicit value wins); see [the connection budget](11-SIZING.md#the-mongodb-connection-budget) |
-| Upgrade | stop, migrate, start | the same by default; `strategy.type: RollingUpdate` on Helm for rolling-safe releases |
+| Upgrade | stop, migrate, start | Helm: migrate, then roll pod by pod (`RollingUpdate`, the default with Redis); Compose: stop, migrate, start |
 
 Nothing changes for an installation that configures no Redis: one process,
 in-memory state, `Recreate` upgrades, and the chart and `preflight.sh` still
@@ -126,8 +127,8 @@ Every API process must see the same files:
 | `/app/api/data/tmp` (`TMPDIR`) | upload staging: a Jira backup is received by one process and landed by another |
 
 - **Kubernetes:** `persistence.accessMode: ReadWriteMany` — NFS, CephFS / ODF,
-  Azure Files, EFS. The chart refuses more than one API process, autoscaling,
-  a PodDisruptionBudget or `RollingUpdate` without it. Object storage for
+  Azure Files, EFS. The chart refuses more than one API process, autoscaling
+  or a PodDisruptionBudget without it. Object storage for
   attachments does not remove the requirement: the snapshots and the staging
   area stay on the volume.
 - **Compose:** the replicas run on one host and share the `tasksense-app-data`
@@ -210,8 +211,9 @@ What the chart enforces and adds:
   budget were sized for (20 × 50 = 1 000 connections). Beyond it, talk to us
   (info@yurdtech.az).
 - **Redis, and `ReadWriteMany`, or no second process.** `replicaCount > 1`,
-  `autoscaling.enabled`, `podDisruptionBudget.enabled` and
-  `strategy.type: RollingUpdate` are refused without both
+  `autoscaling.enabled` and `podDisruptionBudget.enabled` are refused without
+  both. `strategy.type: RollingUpdate` needs Redis, and runs on
+  `ReadWriteMany` or `ReadWriteOnce`
   ([the refusal table](02-INSTALL-KUBERNETES.md#step-4--render-it-first)).
 - **`REDIS_*` reach the API, the worker and the migration Job** — the worker
   publishes invalidations and live-update pings too, and the migration CLI
@@ -232,6 +234,14 @@ would have requests routed to it after it closed. So with more than one API proc
 `preStopSleepSeconds` (default 10): it keeps serving while the routes are
 withdrawn, then receives SIGTERM and finishes in-flight requests. Open
 live-update streams end and the browsers reconnect to another pod.
+
+From 1.1.3 the application drains its own connections as well. From SIGTERM
+on, every response closes its keep-alive connection, so a client that held
+one (a proxy, or anything calling the Service) opens its next request afresh
+and reaches a pod that is staying. Shutdown then waits up to 10 seconds for
+the requests in flight before it closes the sockets. Before 1.1.3 those
+sockets were cut at once, and a request caught half way failed with a
+connection reset.
 
 `terminationGracePeriodSeconds` (default 45) counts the sleep, so the chart
 refuses one below `preStopSleepSeconds + 20`. `preStopSleepSeconds: 0` turns
@@ -254,11 +264,23 @@ exhausted — for example while Redis is down and every API pod is unready.
 
 ### Upgrades: Recreate or RollingUpdate
 
-| | `strategy.type: Recreate` (default) | `strategy.type: RollingUpdate` (opt-in) |
+| | `strategy.type: Recreate` | `strategy.type: RollingUpdate` |
 | --- | --- | --- |
+| When | the default without Redis or on `ReadWriteOncePod`; set it for a release that is not rolling-safe | the default with Redis and a `ReadWriteMany` or `ReadWriteOnce` volume (`strategy.type` left empty) |
 | What happens | the dump and the migration Job run while the old pods still serve; then every old pod stops before the first new one starts | the dump and the migration Job run first, as with Recreate; then one new pod starts (`maxSurge: 1`), becomes ready, one old pod goes (`maxUnavailable: 0`), and so on |
 | Outage | a minute or two plus migrations | none, if the release is rolling-safe |
-| Requires | nothing | Redis, `ReadWriteMany`, and a release marked **rolling-safe** |
+| Requires | nothing | Redis, and a release that is **rolling-safe** |
+
+**On `ReadWriteOnce`.** The volume attaches to one node, and a new pod that
+started on another would wait on a `Multi-Attach error` while the old pod
+still holds it. So with `ReadWriteOnce` the API pods carry a required pod
+affinity to the pods of the release that mount the volume (API, sync and
+automation workers), by hostname: the new pod of a rolling update goes to the
+volume's node, and so does the new pod of a `Recreate` while the workers still
+hold the volume. That node needs room for one more API pod during an upgrade;
+without it the new pod stays `Pending`, the old one keeps serving, and
+`helm upgrade --wait` times out. All API pods then share one node, which is
+why more than one pod for good still needs `ReadWriteMany`.
 
 During a rolling update **two releases serve side by side** for as long as it
 lasts, behind one round-robin Service. A release is rolling-safe only when its

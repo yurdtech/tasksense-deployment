@@ -101,6 +101,23 @@ jobs:
           grep -q 'kind: HorizontalPodAutoscaler' <<<"$hpa"
           api="$(helm template t "$chart" -f "$chart/ci/autoscaling-sentinel-values.yaml" -s templates/deployment.yaml)"
           if grep -qE '^  replicas:' <<<"$api"; then echo "the API Deployment under an HPA still sets replicas"; exit 1; fi
+          # Upgrades: without Redis the API is stopped first (Recreate); with
+          # Redis the default rolls with no outage — a new pod ready before an
+          # old one stops — and on ReadWriteOnce the API is kept on the
+          # volume's node, beside the workers that mount it.
+          api="$(helm template t "$chart" -f "$base" -s templates/deployment.yaml)"
+          grep -q '^    type: Recreate' <<<"$api"
+          grep -q -- '- automation' <<<"$api"
+          rolling="$(helm template t "$chart" -f "$chart/ci/rolling-rwo-values.yaml" -s templates/deployment.yaml)"
+          grep -q '^    type: RollingUpdate' <<<"$rolling"
+          grep -q 'maxUnavailable: 0' <<<"$rolling"
+          grep -q 'command: \["sleep", "10"\]' <<<"$rolling"
+          grep -q 'name: WEB_ASSETS_SHARED_DIR' <<<"$rolling"
+          grep -q 'topologyKey: kubernetes.io/hostname' <<<"$rolling"
+          grep -q -- '- sync' <<<"$rolling"
+          grep -q '^    type: Recreate' <<<"$(helm template t "$chart" -f "$chart/ci/rolling-rwo-values.yaml" --set strategy.type=Recreate -s templates/deployment.yaml)"
+          rwx="$(helm template t "$chart" -f "$chart/ci/multi-replica-values.yaml" -s templates/deployment.yaml)"
+          if grep -q -- '- automation' <<<"$rwx"; then echo "the API is pinned to one node on ReadWriteMany"; exit 1; fi
           while IFS='|' read -r expect args; do
             [ -n "$expect" ] || continue
             # shellcheck disable=SC2086
@@ -125,6 +142,8 @@ jobs:
           these values come from an earlier chart (no redis block)|--set redis=null
           replicaCount=3 is not supported without Redis|--set replicaCount=3 --set persistence.accessMode=ReadWriteMany
           strategy.type=RollingUpdate is not supported without Redis|--set strategy.type=RollingUpdate
+          strategy.type=RollingUpdate cannot run with persistence.accessMode=ReadWriteOncePod|--set strategy.type=RollingUpdate --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteOncePod --set jiraSync.enabled=false
+          strategy.type must be empty (auto), Recreate or RollingUpdate|--set strategy.type=Blue
           replicaCount=3 needs persistence.accessMode=ReadWriteMany (it is ReadWriteOnce)|--set replicaCount=3 --set redis.url=redis://redis:6379
           replicaCount=21 is above the supported maximum of 20|--set replicaCount=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany
           autoscaling.maxReplicas=21 is above the supported maximum of 20|--set autoscaling.enabled=true --set autoscaling.maxReplicas=21 --set redis.url=redis://redis:6379 --set persistence.accessMode=ReadWriteMany

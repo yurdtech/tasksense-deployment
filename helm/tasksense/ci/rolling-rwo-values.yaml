@@ -1,0 +1,15 @@
+# CI: an upgrade without an outage on a ReadWriteOnce data volume — one API pod,
+# Redis through Sentinels, strategy left at its default. The chart picks
+# RollingUpdate (maxSurge 1, maxUnavailable 0) with the preStop drain and the
+# shared web assets, and keeps the API on the volume's node beside the sync
+# worker.
+appUrl: https://tasksense.corp.internal
+mongodbUri: mongodb://tasksense:0123456789abcdef@mongo-0.mongo:27017/?authSource=admin
+storageSecret: ci-storage-secret-0123456789abcdef0123456789
+firstAdminEmail: admin@corp.internal
+redis:
+  sentinels:
+    - redis-sentinel.redis:26379
+  sentinelName: mymaster
+persistence:
+  accessMode: ReadWriteOnce

@@ -38,10 +38,12 @@ reports the real problem rather than a nil-pointer error further down.
 {{- $pdb := index $v "podDisruptionBudget" | default (dict) -}}
 {{- $pdbOn := and (kindIs "map" $pdb) (eq (toString (index $pdb "enabled")) "true") -}}
 {{- $replicas := int ($v.replicaCount | default 0) -}}
-{{- $strategy := toString (dig "type" "Recreate" ($v.strategy | default (dict))) -}}
-{{- if not (has $strategy (list "Recreate" "RollingUpdate")) -}}
-{{- fail (printf "strategy.type must be Recreate or RollingUpdate (got %s)" $strategy) -}}
+{{- $strategyRaw := dig "type" "" ($v.strategy | default (dict)) -}}
+{{- if and $strategyRaw (not (has (toString $strategyRaw) (list "auto" "Recreate" "RollingUpdate"))) -}}
+{{- fail (printf "strategy.type must be empty (auto), Recreate or RollingUpdate (got %s)" (toString $strategyRaw)) -}}
 {{- end -}}
+{{- /* Resolved: empty picks RollingUpdate where it can run (tasksense.strategyType). */ -}}
+{{- $strategy := include "tasksense.strategyType" . -}}
 {{- if lt $replicas 0 -}}
 {{- fail (printf "replicaCount must be 0 or more (got %v; 0 stops the API)" (toString $v.replicaCount)) -}}
 {{- end -}}
@@ -134,7 +136,15 @@ reports the real problem rather than a nil-pointer error further down.
 {{- if not $v.persistence.enabled -}}
 {{- fail (printf "%s needs persistence.enabled=true: every API pod must see the same attachments, backups and staged uploads, and an emptyDir is one pod's own" $what) -}}
 {{- end -}}
-{{- if ne (toString $v.persistence.accessMode) "ReadWriteMany" -}}
+{{- /* A rolling update alone is two pods for the length of a rollout,
+       which a ReadWriteOnce volume serves when both are on its node — the
+       API's affinity sees to that. Every other way to more than one pod is
+       for good, and needs ReadWriteMany. */ -}}
+{{- $rollingOnly := eq $what "strategy.type=RollingUpdate" -}}
+{{- if and $rollingOnly (eq (toString $v.persistence.accessMode) "ReadWriteOncePod") -}}
+{{- fail "strategy.type=RollingUpdate cannot run with persistence.accessMode=ReadWriteOncePod: the new API pod has to mount the data volume while the old one still holds it, and only one pod may. Use ReadWriteOnce (the new pod is then scheduled onto the volume's node) or ReadWriteMany — or strategy.type: Recreate, which stops the old pod first. docs/08-UPGRADE.md" -}}
+{{- end -}}
+{{- if and (not $rollingOnly) (ne (toString $v.persistence.accessMode) "ReadWriteMany") -}}
 {{- fail (printf "%s needs persistence.accessMode=ReadWriteMany (it is %s): every API pod mounts the data volume — attachments, BACKUP_DIR and the uploads staged in TMPDIR=/app/api/data/tmp — usually from different nodes, and a ReadWriteOnce claim attaches to one node only. Use a ReadWriteMany storage class (NFS, CephFS / ODF, Azure Files, EFS …); with persistence.existingClaim, declare the claim's mode here. docs/15-SCALING-AND-HA.md" $what (toString $v.persistence.accessMode)) -}}
 {{- end -}}
 {{- end -}}

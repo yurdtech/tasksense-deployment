@@ -162,7 +162,7 @@ either way.
 | `REDIS_CPU_LIMIT` / `REDIS_MEMORY_LIMIT` *(Compose)* | — | `1` / `512m` | Ceilings of the bundled Redis (`bundled-redis`). | |
 | `NODE_OPTIONS` | — | set by the stack | Compose and Helm build it from the heap settings above (`--max-old-space-size=<MB>`). Set the heap variables, not this. | |
 | `SETTINGS_CACHE_TTL_MS` | — | `30000` with `WORKER_ROLE=all`, `0` otherwise; with Redis, at most `5000` (`min(5000, that default)`) | How long a cached workspace-settings document is trusted before it is re-checked; only matters when another process writes. With Redis the other processes' writes arrive as invalidations, and the TTL only bounds how late a lost one is noticed. | |
-| `WEB_ASSETS_SHARED_DIR` | — | unset; the chart sets `/app/api/data/web-assets` with `strategy.type: RollingUpdate` | A directory on the shared data volume. Each process copies its web build's content-hashed files there at boot and serves it after its own build, so a page from one release finds its chunks on a pod of the other during a rolling update. Only needed with rolling updates. | Leave it to the chart |
+| `WEB_ASSETS_SHARED_DIR` | — | unset; the chart sets `/app/api/data/web-assets` with `RollingUpdate` (the default with Redis) | A directory on the shared data volume. Each process copies its web build's content-hashed files there at boot and serves it after its own build, so a page from one release finds its chunks on a pod of the other during a rolling update. Only needed with rolling updates. | Leave it to the chart |
 
 ## 7. Trusting your certificate authority
 
@@ -267,7 +267,7 @@ Compose and Helm set these; a value in `.env` is overridden or rejected.
 | `PORT` | `3000` | The container port. Change `HTTP_PORT` instead. |
 | `MIGRATE_ON_BOOT` | `manual` | Migrations run once, in the `migrate` service (Compose) or the migration Job (Helm), before the application starts. `auto` (the application default) is for a bare single container. |
 | `TMPDIR`, `STORAGE_LOCAL_ROOT`, `BACKUP_DIR` | on the data volume | See section 9. With several API processes every one of them must see the same volume (`ReadWriteMany` on Kubernetes). |
-| `WEB_ASSETS_SHARED_DIR` *(Helm)* | `/app/api/data/web-assets` with `RollingUpdate` | See section 6. |
+| `WEB_ASSETS_SHARED_DIR` *(Helm)* | `/app/api/data/web-assets` with `RollingUpdate` (the default with Redis) | See section 6. |
 | `WEB_DIST_DIR`, `TASKSENSE_COMMIT`, `TASKSENSE_BUILD_DATE` | baked into the image | What `/api/v1/version` reports. |
 
 ## 15. Refused on-premise

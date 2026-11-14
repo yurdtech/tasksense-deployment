@@ -11,7 +11,7 @@
 TaskSense {{ include "tasksense.appVersion" . }} — chart {{ .Chart.Version }}, release {{ .Release.Name }} (revision {{ .Release.Revision }}) in {{ $ns }}.
 
   image        {{ include "tasksense.image" . }}
-  api          {{ if include "tasksense.autoscaling" . }}autoscaled {{ int $v.autoscaling.minReplicas }}–{{ int $v.autoscaling.maxReplicas }} replicas (HPA){{ else }}{{ $replicas }} replica{{ if ne $replicas 1 }}s{{ end }}{{ end }}, strategy {{ $v.strategy.type }}, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
+  api          {{ if include "tasksense.autoscaling" . }}autoscaled {{ int $v.autoscaling.minReplicas }}–{{ int $v.autoscaling.maxReplicas }} replicas (HPA){{ else }}{{ $replicas }} replica{{ if ne $replicas 1 }}s{{ end }}{{ end }}, strategy {{ include "tasksense.strategyType" . }}, WORKER_ROLE={{ ternary "api" "all" (eq (toString $v.worker.enabled) "true") }}, heap {{ $v.heapMb }} MB
   redis        {{ include "tasksense.redisSummary" . }}
   worker       {{ if $v.worker.enabled }}on — {{ $worker }}, heap {{ $v.worker.heapMb }} MB{{ else }}off (the API runs Jira landings itself; worker.enabled=true for a migration){{ end }}
   sync         {{ if $v.jiraSync.enabled }}on — {{ $sync }}, heap {{ $v.jiraSync.heapMb }} MB (Jira and Confluence sync; JIRA_SYNC_RUNNER=external){{ else }}off (the API runs the Jira sync itself; JIRA_SYNC_RUNNER=inline){{ end }}
@@ -95,9 +95,20 @@ WARNING: more than one API pod, and worker.enabled=false. Every pod runs
 {{- end }}
 {{- if include "tasksense.rollingUpdate" . }}
 
-NOTE: strategy RollingUpdate — two releases serve side by side during an
-  upgrade. Use it only for a release whose notes mark it rolling-safe;
-  otherwise upgrade with --set strategy.type=Recreate. docs/08-UPGRADE.md
+NOTE: strategy RollingUpdate — an upgrade starts each new API pod and stops an
+  old one only once it is ready, so there is no outage; two releases serve
+  side by side meanwhile. For a release whose notes say it is NOT rolling-safe,
+  upgrade with --set strategy.type=Recreate. docs/08-UPGRADE.md
+{{- if include "tasksense.dataNodeAffinityTerm" . }}
+  The data volume is ReadWriteOnce, so the new pod is scheduled onto the node
+  that holds it: that node needs room for one more API pod during an upgrade
+  (resources.requests), or the rollout waits with the old pod still serving.
+{{- end }}
+{{- else if not (include "tasksense.redisConfigured" .) }}
+
+NOTE: strategy Recreate — an upgrade stops the API before the new pod starts,
+  a short outage. Upgrades without an outage (RollingUpdate, the default with
+  Redis) need redis.* configured. docs/08-UPGRADE.md
 {{- end }}
 {{- if and $v.existingSecret (not $v.appUrl) }}
 

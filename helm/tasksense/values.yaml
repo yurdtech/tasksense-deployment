@@ -109,17 +109,25 @@ existingSecret: ""
 # docs/15-SCALING-AND-HA.md
 replicaCount: 1
 
-# How a `helm upgrade` replaces the pods.
-#   Recreate       (default) the old pods stop before the new ones start: a short
-#                  outage, and never two releases side by side.
-#   RollingUpdate  new pods start while the old ones serve. Needs Redis and a
-#                  ReadWriteMany volume, and only for a release whose notes mark
-#                  it rolling-safe (migrations backwards compatible, API and the
-#                  previous web build compatible both ways). The chart then sets
+# How a `helm upgrade` replaces the API pods.
+#   ""             (default) RollingUpdate wherever it can run — redis.* is
+#                  configured and the data volume is ReadWriteMany or
+#                  ReadWriteOnce — and Recreate otherwise. "auto" means the same.
+#   RollingUpdate  no outage: a new pod starts, becomes ready, and only then does
+#                  an old one stop (maxSurge 1, maxUnavailable 0). Two releases
+#                  serve side by side meanwhile, so the release must be
+#                  rolling-safe: migrations backwards compatible, API and the
+#                  previous web build compatible both ways — its notes say so.
+#                  Needs Redis. With ReadWriteOnce the new pod is scheduled onto
+#                  the node that holds the volume. The chart sets
 #                  WEB_ASSETS_SHARED_DIR=/app/api/data/web-assets, so a page from
-#                  either release finds its scripts on any pod. docs/08-UPGRADE.md
+#                  either release finds its scripts on any pod.
+#   Recreate       the old pods stop before the new ones start: a short outage,
+#                  and never two releases side by side. For an upgrade to a
+#                  release that is not rolling-safe: --set strategy.type=Recreate.
+# docs/08-UPGRADE.md
 strategy:
-  type: Recreate
+  type: ""
   rollingUpdate:
     maxSurge: 1
     maxUnavailable: 0

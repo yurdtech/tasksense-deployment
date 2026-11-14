@@ -39,6 +39,8 @@ PodDisruptionBudget; scheduled jobs still run once, under job leases in MongoDB.
 | Deployment `<release>` | The API (port 3000), `replicaCount` pods (1 by default), `WORKER_ROLE=all` (or `api` with the worker) |
 | Deployment `<release>-sync` *(on by default)* | The Jira sync worker, `node dist/sync-worker.js`, `WORKER_ROLE=sync` — Jira and Confluence migrations and the two-way sync. The API then runs with `JIRA_SYNC_RUNNER=external`. `jiraSync.enabled: false` turns it off |
 | Service `<release>-sync` *(with the sync worker)* | ClusterIP, port 3100: `/live`, `/ready`, `/metrics` — probes and Prometheus only |
+| Deployment `<release>-automation` *(off by default)* | The automation worker, `node dist/automation-worker.js`, `WORKER_ROLE=automation` — automation rules, their scheduled sweeps and chains. Every other pod then runs with `AUTOMATION_RUNNER=external`. `automationWorker.enabled: true` turns it on (TaskSense 1.1.3 and later) |
+| Service `<release>-automation` *(with the automation worker)* | ClusterIP, port 3200: `/live`, `/ready`, `/metrics` — probes and Prometheus only |
 | HorizontalPodAutoscaler `<release>` *(opt-in, needs Redis)* | `autoscaling.*`, `autoscaling/v2` |
 | PodDisruptionBudget `<release>` *(opt-in, needs Redis)* | `maxUnavailable: 1` for the API pods |
 | Deployment `<release>-worker` *(opt-in)* | The import worker, `node dist/worker.js`, `WORKER_ROLE=worker` — lands Jira site backups |
@@ -779,6 +781,10 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `jiraSync.enabled` | `true` | The sync worker Deployment and Service; API gets `JIRA_SYNC_RUNNER=external` (`inline` when `false`) |
 | `jiraSync.heapMb` | `2048` | Sync worker `NODE_OPTIONS` |
 | `jiraSync.port` | `3100` | `SYNC_WORKER_PORT`: `/live`, `/ready`, `/metrics` |
+| `automationWorker.enabled` | `false` | The automation worker Deployment and Service; every pod gets `AUTOMATION_RUNNER=external` (`inline` when `false`) |
+| `automationWorker.replicas` | `1` | Automation worker pods; queue items and each workspace's scheduler are leased, so they share the work |
+| `automationWorker.heapMb` | `1536` | Automation worker `NODE_OPTIONS` |
+| `automationWorker.port` | `3200` | `AUTOMATION_WORKER_PORT`: `/live`, `/ready`, `/metrics` |
 | `jiraSync.resources` | req 250m / 1Gi, limit 1 CPU / 3Gi | Sync worker pod |
 | `jiraSync.terminationGracePeriodSeconds` | `45` | Time to hand a run back at its checkpoint |
 | `jiraSync.nodeSelector` / `tolerations` / `affinity` / `priorityClassName` / `podAnnotations` / `podLabels` | empty | Sync worker pod; `affinity` is merged after the chart's own co-location rule (ReadWriteOnce) |
@@ -801,7 +807,7 @@ Environment variables are documented one by one in [17-ENVIRONMENT](17-ENVIRONME
 | `config.jiraBackupRetentionDays` | `7` | `JIRA_BACKUP_RETENTION_DAYS` |
 | `config.stateTaskLimit` | `5000` | `STATE_TASK_LIMIT` |
 | `config.reportsMaxTasks` | `150000` | `REPORTS_MAX_TASKS` |
-| `config.automationProcessingMinutesPer12h` | `60` | `AUTOMATION_PROCESSING_MINUTES_PER_12H` |
+| `config.automationProcessingMinutesPer12h` | `0` | `AUTOMATION_PROCESSING_MINUTES_PER_12H` (0 = no budget) |
 | `config.corsAllowedOrigins` | `[]` | Extra `CORS_ALLOWED_ORIGINS` |
 | `config.oidc.issuer` / `clientId` / `redirectUri` / `label` | `""` | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_REDIRECT_URI` / `OIDC_LABEL` |
 | `config.oidc.clientSecret` | `""` | `OIDC_CLIENT_SECRET` **(S)** |

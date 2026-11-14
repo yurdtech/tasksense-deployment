@@ -554,7 +554,18 @@ Call with (dict "root" $ "role" "api|worker|migrate" "heapMb" <n>).
   value: sync
 - name: SYNC_WORKER_PORT
   value: {{ int $root.Values.jiraSync.port | quote }}
+{{- else if eq .role "automation" }}
+- name: WORKER_ROLE
+  value: automation
+- name: AUTOMATION_WORKER_PORT
+  value: {{ int $root.Values.automationWorker.port | quote }}
 {{- end }}
+{{- /* Every process that publishes events agrees on where the rules run: with
+       the automation worker on, they only queue (the worker's own role makes
+       it run them whatever this says). */}}
+{{- $aw := $root.Values.automationWorker | default dict }}
+- name: AUTOMATION_RUNNER
+  value: {{ ternary "external" "inline" (eq (toString $aw.enabled) "true") | quote }}
 {{- /* Redis from a Secret the operator manages: for every role, the migration
        Job included. It validates the same configuration, the rest of which
        (REDIS_USERNAME, REDIS_SENTINELS …) reaches it through the ConfigMap —

@@ -339,6 +339,35 @@ Turning it off later, and everything it needs:
 
 ---
 
+## The upgrade that brings the automation worker
+
+From 1.1.3 automation rules can run in a process of their own: the
+`<release>-automation` Deployment on Kubernetes and OpenShift. **It is off by
+default**, and the upgrade changes nothing about where rules run until you
+turn it on. Turn it on for a busy installation, where a burst of rules would
+otherwise share the API's event loop and database pool.
+
+| | Kubernetes / OpenShift |
+| --- | --- |
+| Turn it on | `automationWorker.enabled: true` in the values file, then `helm upgrade`. The chart creates the Deployment and its Service, and gives every other pod `AUTOMATION_RUNNER=external`. |
+| Check | `kubectl -n tasksense rollout status deploy/tasksense-automation`; `/ready` on port 3200 |
+| Extra resources | requests 250m / 768Mi, limit 2Gi per replica — mind the namespace quota |
+| Storage | as the sync worker: `ReadWriteOnce` is scheduled onto the API's node, `ReadWriteMany` anywhere; `ReadWriteOncePod` or `persistence.enabled: false` is refused |
+| Redis | recommended: the API wakes the worker through it at once. Without Redis the worker picks events up within its 5-second poll. |
+| Turning it off | `automationWorker.enabled: false` and `helm upgrade`. Events the worker had not run yet stay in the queue and the API runs them. |
+
+Two changes come with 1.1.3 whether or not the worker is on:
+
+| Change | What to do |
+| --- | --- |
+| **No automation budget on-premise by default** — `AUTOMATION_PROCESSING_MINUTES_PER_12H` (`config.automationProcessingMinutesPer12h`) now defaults to `0`. With 60, a busy day could spend the budget by midday, and every rule then waited for the next 12-hour window. | Nothing. To keep a budget, set the value explicitly. |
+| **Schema migration `014-backfill-tenant-ws`** — rows written before workspaces existed get the default workspace id, exactly how they were already read, so queries of the default workspace use their indexes. | Nothing. It runs in the `migrate` step and is idempotent; on a large database it takes a few minutes. Back up first, as for every upgrade with a migration. `./scripts/rollback.sh --app-only` / `helm rollback` to 1.1.2 is safe: 1.1.2 reads those rows the same way. |
+
+More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-worker),
+[02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md).
+
+---
+
 ## Upgrading from 1.1.1 to 1.1.2
 
 The procedure above, with nothing to edit first. 1.1.2 adds **no schema

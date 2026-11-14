@@ -17,7 +17,7 @@ reports the real problem rather than a nil-pointer error further down.
 
 {{- /* The same, from a chart before the blocks below existed (1.1.0). */ -}}
 {{- $missing := list -}}
-{{- range $k := list "redis" "autoscaling" "podDisruptionBudget" "strategy" "jiraSync" -}}
+{{- range $k := list "redis" "autoscaling" "podDisruptionBudget" "strategy" "jiraSync" "automationWorker" -}}
 {{- if not (hasKey $v $k) -}}{{- $missing = append $missing $k -}}{{- end -}}
 {{- end -}}
 {{- if $missing -}}
@@ -175,7 +175,9 @@ reports the real problem rather than a nil-pointer error further down.
 {{- /* ── extraEnv must not shadow what the chart owns ──────────────────── */ -}}
 {{- $owned := dict
       "AGENT_EXECUTOR" "always off, not configurable"
-      "WORKER_ROLE" "set from worker.enabled / jiraSync.enabled"
+      "WORKER_ROLE" "set from worker.enabled / jiraSync.enabled / automationWorker.enabled"
+      "AUTOMATION_RUNNER" "set from automationWorker.enabled"
+      "AUTOMATION_WORKER_PORT" "use automationWorker.port"
       "JIRA_SYNC_RUNNER" "set from jiraSync.enabled"
       "SYNC_WORKER_PORT" "use jiraSync.port"
       "MIGRATE_ON_BOOT" "set from migrations.enabled"
@@ -257,6 +259,23 @@ reports the real problem rather than a nil-pointer error further down.
 {{- end -}}
 {{- if or (lt (int $v.jiraSync.port) 1024) (gt (int $v.jiraSync.port) 65535) (eq (int $v.jiraSync.port) 3000) -}}
 {{- fail (printf "jiraSync.port must be between 1024 and 65535 and not 3000, the API's port (got %v)" $v.jiraSync.port) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* ── automation worker ───────────────────────────────────────────────── */ -}}
+{{- $aw := $v.automationWorker | default dict -}}
+{{- if $aw.enabled -}}
+{{- if not $v.persistence.enabled -}}
+{{- fail "automationWorker.enabled=true requires persistence.enabled=true: a rule that clones an issue or attaches a file writes it to the same data volume the API serves it from. Set automationWorker.enabled: false to keep the rules in the API process." -}}
+{{- end -}}
+{{- if eq (toString $v.persistence.accessMode) "ReadWriteOncePod" -}}
+{{- fail "automationWorker.enabled=true cannot run with persistence.accessMode=ReadWriteOncePod: only one pod may mount the data volume. Use ReadWriteOnce (the worker is then scheduled onto the API's node) or ReadWriteMany — or set automationWorker.enabled: false." -}}
+{{- end -}}
+{{- if or (lt (int $aw.port) 1024) (gt (int $aw.port) 65535) (eq (int $aw.port) 3000) (eq (int $aw.port) (int $v.jiraSync.port)) -}}
+{{- fail (printf "automationWorker.port must be between 1024 and 65535, and neither 3000 (the API) nor jiraSync.port (got %v)" $aw.port) -}}
+{{- end -}}
+{{- if lt (int $aw.replicas) 1 -}}
+{{- fail "automationWorker.replicas must be at least 1 while automationWorker.enabled is true" -}}
 {{- end -}}
 {{- end -}}
 

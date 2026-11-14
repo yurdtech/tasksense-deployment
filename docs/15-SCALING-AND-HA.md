@@ -458,6 +458,37 @@ Deployment, and its API runs the Jira sync itself.
 
 ---
 
+## The automation worker
+
+TaskSense 1.1.3 and later. Automation rules normally run in the process whose
+write triggered them — on the API, beside the people using the product. On a
+busy installation the two compete: page loads hold the event loop and the
+database pool, the rules wait in their queue, and a burst of rules slows the
+pages down.
+
+The automation worker is a separate process from the **same image**
+(`node dist/automation-worker.js`, `WORKER_ROLE=automation`) that runs the
+rules and nothing else.
+
+| | API and the other workers (`AUTOMATION_RUNNER=external`) | Automation worker (`WORKER_ROLE=automation`) |
+| --- | --- | --- |
+| Serves users, HTTP, the live feed | the API | no |
+| An event a write triggers | written to the automation queue; with Redis the worker is woken at once | runs it |
+| Scheduled rules, the queue poll, retries and delayed steps | no | yes |
+| Manual and incoming-webhook rules | answered inside their request, as before | no |
+
+- **Helm:** `automationWorker.enabled: true`. Every pod then gets
+  `AUTOMATION_RUNNER=external`. `automationWorker.replicas` may be more than
+  one: queue items and each workspace's scheduler are leased, so replicas share
+  the work and a crash loses nothing.
+- **Redis** is recommended with it: the API wakes the worker over Redis the
+  moment an event is queued. Without Redis the worker polls every few seconds,
+  so a rule runs a few seconds later than it would inline.
+- **Storage:** like the sync worker it mounts the API's data volume (a rule that
+  clones an issue or attaches a file writes there): `ReadWriteMany`, or
+  `ReadWriteOnce` with the worker scheduled onto the API's node.
+- **Off by default.** A small installation gains nothing from another pod.
+
 ## High availability
 
 ### What fails, and what happens

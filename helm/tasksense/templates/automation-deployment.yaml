@@ -1,0 +1,141 @@
+{{- include "tasksense.validate" . -}}
+{{- if .Values.automationWorker.enabled }}
+{{- $rwo := ne (toString .Values.persistence.accessMode) "ReadWriteMany" }}
+# The automation worker: the same image, `node dist/automation-worker.js`,
+# WORKER_ROLE=automation. Automation rules run here and nowhere else: the API
+# and the other workers run with AUTOMATION_RUNNER=external and only queue each
+# event (with Redis they wake this pod at once; without it, it polls). Manual
+# and incoming-webhook rules still answer inside their request. It serves
+# nothing user-facing — its one port (automationWorker.port) answers /live,
+# /ready and /metrics. Queue items and the scheduler are leased, so a crash
+# loses nothing and several replicas share the work.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "automation") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "automation") | nindent 4 }}
+spec:
+  # Queue items and each workspace's scheduler are leased: replicas share the
+  # work, and an idle one costs a poll every few seconds.
+  replicas: {{ int .Values.automationWorker.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels: {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "automation") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "tasksense.componentPodLabels" (dict "root" $ "component" "automation") | nindent 8 }}
+        {{- with .Values.automationWorker.podLabels }}{{- toYaml . | nindent 8 }}{{- end }}
+      annotations:
+        checksum/config: {{ include "tasksense.configChecksum" . }}
+        {{- with .Values.automationWorker.podAnnotations }}{{- toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "tasksense.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ int .Values.automationWorker.terminationGracePeriodSeconds }}
+      {{- with .Values.automationWorker.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- include "tasksense.imagePullSecrets" (dict "root" $ "hook" false) | nindent 6 }}
+      {{- include "tasksense.appPodSecurityContext" . | nindent 6 }}
+      initContainers:
+        {{- include "tasksense.prepareDataInitContainer" . | nindent 8 }}
+      containers:
+        - name: automation
+          image: {{ include "tasksense.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # `args`, not `command`: keeps the image's tini as PID 1.
+          args: ["node", "dist/automation-worker.js"]
+          {{- include "tasksense.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: metrics
+              containerPort: {{ int .Values.automationWorker.port }}
+              protocol: TCP
+          env: {{- include "tasksense.processEnv" (dict "root" $ "role" "automation" "heapMb" .Values.automationWorker.heapMb) | nindent 12 }}
+          {{- include "tasksense.envFrom" (dict "root" $ "hook" false) | nindent 10 }}
+          resources: {{- toYaml .Values.automationWorker.resources | nindent 12 }}
+          startupProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            # The SAME claim as the API: a rule that clones an issue or attaches
+            # a file writes it where the API serves it from.
+            - name: data
+              mountPath: /app/api/data
+            - name: tmp
+              mountPath: /tmp
+            {{- include "tasksense.certsMount" . | nindent 12 }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        {{- include "tasksense.dataVolume" . | nindent 8 }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- include "tasksense.certsVolume" (dict "root" $ "hook" false) | nindent 8 }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.automationWorker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.automationWorker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or $rwo .Values.automationWorker.affinity }}
+      affinity:
+        {{- if $rwo }}
+        # ReadWriteOnce: the volume can be mounted by several pods of ONE node,
+        # so the worker goes where the API pod is.
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "tasksense.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: api
+              topologyKey: kubernetes.io/hostname
+        {{- end }}
+        {{- with .Values.automationWorker.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+---
+# Cluster-internal: probes go to the pod directly; this is for Prometheus.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "automation") }}
+  labels: {{- include "tasksense.labels" (dict "root" $ "component" "automation") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ int .Values.automationWorker.port }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "tasksense.componentSelectorLabels" (dict "root" $ "component" "automation") | nindent 4 }}
+{{- end }}

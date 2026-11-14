@@ -255,6 +255,45 @@ jiraSync:
   podAnnotations: {}
   podLabels: {}
 
+automationWorker:
+  # The automation worker: a separate Deployment running
+  # `node dist/automation-worker.js` with WORKER_ROLE=automation, from the same
+  # image. When on, every other process runs with AUTOMATION_RUNNER=external:
+  # it only writes each event to the automation queue, and the worker runs the
+  # rules, the scheduled sweeps and the chains they start. A burst of rules then
+  # never shares the API's event loop or database pool, and a busy API never
+  # starves the rules. Manual and incoming-webhook rules still answer inside
+  # their request. With Redis configured the API wakes the worker at once;
+  # without it the worker polls every few seconds.
+  #
+  # Off by default: false keeps the rules in the API process, as before this pod
+  # existed. Turn it on for a busy installation (many people, many rules).
+  #
+  # Storage: like the sync worker, it mounts the API's data claim (a rule that
+  # clones an issue or attaches a file writes it there) — with ReadWriteMany
+  # anywhere, with ReadWriteOnce on the API's node.
+  enabled: false
+  # Queue items and each workspace's scheduler are leased, so replicas share
+  # the work.
+  replicas: 1
+  heapMb: 1536
+  # Health and metrics port (/live, /ready, /metrics). Cluster-internal only.
+  port: 3200
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      memory: 2Gi
+  terminationGracePeriodSeconds: 45
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  # Merged after the chart's own co-location rule (ReadWriteOnce only).
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
 # ── Redis (more than one API pod) ────────────────────────────────────────────
 #
 # Not bundled: your Redis (6 or newer recommended; Sentinel for availability).
@@ -373,7 +412,11 @@ config:
   # Ceilings that keep one huge (migrated) workspace from exhausting memory.
   stateTaskLimit: 5000            # STATE_TASK_LIMIT
   reportsMaxTasks: 150000         # REPORTS_MAX_TASKS
-  automationProcessingMinutesPer12h: 60   # AUTOMATION_PROCESSING_MINUTES_PER_12H (0 = unlimited)
+  # AUTOMATION_PROCESSING_MINUTES_PER_12H: automation processing minutes per
+  # workspace per 12 hours before every rule waits for the next window. 0 = no
+  # budget (the default on-premise: one installation, one tenant). Set e.g. 60
+  # to cap a runaway rule.
+  automationProcessingMinutesPer12h: 0
 
   # Extra CORS origins beyond appUrl's own (CORS_ALLOWED_ORIGINS). List or CSV.
   corsAllowedOrigins: []

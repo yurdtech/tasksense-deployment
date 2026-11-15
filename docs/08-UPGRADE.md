@@ -381,6 +381,36 @@ More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-work
 
 ---
 
+## Upgrading from 1.1.2 to 1.1.3
+
+The procedure above, with nothing to edit first. 1.1.3 adds one schema
+migration, `014-backfill-tenant-ws`, and is **rolling-safe from 1.1.2**: on
+Kubernetes with Redis the chart rolls it pod by pod, without an outage
+([Rolling updates](#rolling-updates-kubernetes)). Coming from 1.1.1 or
+earlier, upgrade with `--set strategy.type=Recreate`, and read
+[1.1.1 to 1.1.2](#upgrading-from-111-to-112) first: its changes come with this
+upgrade too.
+
+The changes for operators — the migration, rolling updates by default, no
+automation budget on-premise and the optional automation worker — are in
+[The upgrade that brings the automation worker](#the-upgrade-that-brings-the-automation-worker).
+The rest of the release:
+
+| Change | What to do |
+| --- | --- |
+| **Large workspaces stay fast** — the Epics screen is paged by the server, with its counts from a separate request; a person's snapshot holds the newest tasks *they* can see rather than the workspace's; the people list is sent once per tab instead of with every snapshot | Nothing. New indexes back these reads and are built in the background when 1.1.3 first starts. Until they are done, `GET /api/v1/health` reports `"indexes":"building"` and those reads are slower; on a large database allow a few minutes. |
+| **A stopping API process finishes its requests** — on `SIGTERM` it answers `Connection: close`, closes idle connections and waits up to 10 s for the requests in flight | Nothing. Keep `terminationGracePeriodSeconds` at least `preStopSleepSeconds` + 20; the defaults (45 and 10) are. |
+| **Automation rules are safer to run twice** — a rule run again after its process stopped mid-run does not repeat its emails, web requests or created tasks; an incoming webhook accepts an `Idempotency-Key` header | Nothing. |
+| **Automation behaviour changes** — *Delete task* acts only with its actor's permission on the task it names; two administrators saving rules at once no longer undo each other's work (the later save is refused, `409`); a web request's `4xx` / `5xx` answer is named in the run log and can fail the rule (opt-in per action, off) | Check that the actor of a rule that deletes tasks may delete them. A script that writes `PUT /api/v1/automation` without `revision` behaves as before. |
+| **Fields, priorities and work types are set per space** — through field contexts and priority / work type schemes, as in Jira. *Fields by squad*, *Priorities by squad* and *Work types by squad* are gone, and lists saved there are no longer applied | Before the upgrade, note any per-squad lists in the Admin console; afterwards set them again as field contexts or schemes on the spaces concerned. |
+| **Access fixes** — someone with *Manage access* is never locked out of a space by its access rules, and a space's override still grants them what the scheme withholds; a dashboard's edit controls follow *Manage access*, as the server already did; a saved filter is changed only by its owner, and a private one is sent to no one else | Nothing changes on default settings. |
+| **Meeting invites** — the meeting email is an HTML invite with a calendar file, so mail clients add the meeting themselves; an update moves it and a cancellation removes it. Yes / Maybe / No links answer without signing in; they are signed and stay valid until 30 days after the meeting | Check that `APP_URL` (`config.appUrl`) is the address people reach TaskSense on: the links point at it. Admin → Notification schemes → Meeting invites switches the calendar file and the answers, and names an organizer mailbox whose replies (Accept / Tentative / Decline) are read back. |
+| **Sign-in codes for a list of people** — optional: Admin → Authentication → Sign-in verification → *Send codes only to the people listed* | Nothing changes until it is turned on. |
+| **Jira sync** — a board keeps its own filter, its new cards and its earlier work; Jira types above Epic land as their own types, on boards and under their parents | Nothing. |
+| **What's New** — after the upgrade, people see the 1.1.3 notes once in the app | Admin → Overview → Workspace: *Show What's New after updates* stops the pop-up, *What's New* turns the notes off altogether. |
+
+---
+
 ## Upgrading from 1.1.1 to 1.1.2
 
 The procedure above, with nothing to edit first. 1.1.2 adds **no schema

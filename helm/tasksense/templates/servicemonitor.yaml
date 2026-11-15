@@ -48,4 +48,30 @@ spec:
           name: {{ include "tasksense.secretName" . }}
           key: METRICS_TOKEN
 {{- end }}
+{{- if .Values.automationWorker.enabled }}
+---
+# The automation worker's own /metrics (its heap and event loop, the queue it
+# drains). Behind the same METRICS_TOKEN as the API's.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "tasksense.suffixedName" (dict "root" $ "suffix" "automation") }}
+  labels:
+    {{- include "tasksense.labels" (dict "root" $ "component" "automation") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}{{- toYaml . | nindent 4 }}{{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tasksense.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: automation
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "tasksense.secretName" . }}
+          key: METRICS_TOKEN
+{{- end }}
 {{- end }}

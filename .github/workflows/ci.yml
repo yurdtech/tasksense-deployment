@@ -169,6 +169,10 @@ jobs:
           grep -q 'dist/automation-worker.js' <<<"$aw"
           [ "$(grep -A1 'name: AUTOMATION_RUNNER' <<<"$aw" | grep -c '"external"')" -ge 3 ]
           if grep -A1 'name: AUTOMATION_RUNNER' <<<"$aw" | grep -q '"inline"'; then echo "a pod keeps the rules inline while the automation worker is on"; exit 1; fi
+          # With metrics on, the worker is scraped beside the API and the sync worker.
+          mon="$(helm template t "$chart" -f "$chart/ci/automation-worker-values.yaml" --set metrics.enabled=true --set metrics.token=ci-metrics-token-0123456789abcdef --set metrics.serviceMonitor.enabled=true -s templates/servicemonitor.yaml)"
+          [ "$(grep -c '^kind: ServiceMonitor' <<<"$mon")" -eq 3 ]
+          grep -q 'name: t-tasksense-automation' <<<"$mon"
           for s in scripts/helm-airgap-bundle.sh scripts/helm-airgap-load.sh scripts/wizard/platform-helm.sh; do bash -n "$s"; done
 
   tests:

@@ -182,6 +182,14 @@ On Kubernetes, `metrics.serviceMonitor.enabled` adds a second ServiceMonitor,
 `<release>-sync`, for the worker's Service. On Compose, scrape `sync:3100/metrics` from a
 Prometheus on the compose network; nothing publishes it on the host.
 
+The automation worker (`automationWorker.enabled`, TaskSense 1.1.3 and later)
+answers the same three paths on port 3200, with
+`tasksense_automation_queue_pending` and `tasksense_automation_queue_running`
+in place of the sync queue. A pending count that keeps growing means the
+rules are arriving faster than the worker runs them. With
+`metrics.serviceMonitor.enabled` the chart adds a third ServiceMonitor,
+`<release>-automation`, for its Service.
+
 How far a migration has got is in the application, not in Prometheus: the
 Sync page shows every run's phase, counts, pace and failures, and whether the
 worker is **online**.

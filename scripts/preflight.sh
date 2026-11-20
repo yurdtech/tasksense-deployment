@@ -228,7 +228,8 @@ check_enum WORKER_ROLE all api
 # refuses for most of these, and which for SESSION_TTL_HOURS means "never".
 for key in SMTP_PORT MONGODB_TIMEOUT_MS MONGODB_MAX_POOL_SIZE STORAGE_MAX_FILE_MB \
            STORAGE_MAX_VIDEO_FILE_MB JIRA_BACKUP_RETENTION_DAYS STATE_TASK_LIMIT \
-           REPORTS_MAX_TASKS HTTP_PORT APP_HEAP_MB WORKER_HEAP_MB APP_REPLICAS; do
+           REPORTS_MAX_TASKS HTTP_PORT APP_HEAP_MB WORKER_HEAP_MB APP_REPLICAS \
+           STATE_BUILD_MAX_WAIT_MS; do
   env_has_key "${key}" || continue
   value="$(env_value "${key}")"
   if ! is_uint "${value}" || [ "${value}" -eq 0 ]; then
@@ -236,7 +237,8 @@ for key in SMTP_PORT MONGODB_TIMEOUT_MS MONGODB_MAX_POOL_SIZE STORAGE_MAX_FILE_M
     [ -z "${value}" ] && detail "Comment the line out to take the default."
   fi
 done
-for key in MONGODB_OP_TIMEOUT_MS MONGODB_MIN_POOL_SIZE AUTOMATION_PROCESSING_MINUTES_PER_12H SESSION_TTL_HOURS; do
+for key in MONGODB_OP_TIMEOUT_MS MONGODB_MIN_POOL_SIZE AUTOMATION_PROCESSING_MINUTES_PER_12H SESSION_TTL_HOURS \
+           STATE_BUILD_CONCURRENCY; do
   env_has_key "${key}" || continue
   value="$(env_value "${key}")"
   [ -z "${value}" ] && continue   # reported below where it matters

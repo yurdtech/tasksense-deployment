@@ -141,7 +141,7 @@ stop–backup–migrate–start window as one process.
 
 | From → to | |
 | --- | --- |
-| Patch (`1.1.0 → 1.1.3`) | Directly. |
+| Patch (`1.1.0 → 1.1.4`) | Directly. |
 | Minor, skipping some (`1.0.2 → 1.3.0`) | Directly. Every migration in between runs, in order, in the `migrate` step. Read every release note in between. |
 | Major (`1.x → 2.0`) | Asks for confirmation. Rehearse on a restored copy first; assume a longer window. |
 | Older than what is installed | **Refused.** Use `rollback.sh` — going down is a restore, not an upgrade. |
@@ -378,6 +378,38 @@ Three changes come with 1.1.3 whether or not the worker is on:
 
 More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-worker),
 [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md).
+
+---
+
+## Upgrading from 1.1.3 to 1.1.4
+
+The procedure above, with nothing to edit first. 1.1.4 adds three schema
+migrations, run in order in the `migrate` step, each idempotent:
+`015-member-edits-own-tasks`, `016-one-epic-per-epic-issue` and
+`017-space-overrides-into-schemes`. It is **rolling-safe from 1.1.3**: 1.1.3
+reads the migrated rows the same way, so on Kubernetes with Redis the chart
+rolls it pod by pod, and `./scripts/rollback.sh --app-only` / `helm rollback`
+to 1.1.3 keeps working. Coming from 1.1.2 or earlier, upgrade with
+`--set strategy.type=Recreate`, and read
+[1.1.2 to 1.1.3](#upgrading-from-112-to-113) first: its changes come with this
+upgrade too.
+
+**Read this before you upgrade: members see and do less until an
+administrator allows it.** Plan the settings below with whoever runs the
+workspace, so people are not surprised the next morning.
+
+| Change | What to do |
+| --- | --- |
+| **Members edit their own tasks** — migration 015 moves every `member` role nobody changed from *Create & edit tasks* to *Edit own tasks*: members edit only the tasks they reported or are assigned to. They still create tasks, comment and log time. A member role an administrator changed is left as it is | If members should keep editing every task, give the member role *Create & edit tasks* again in the Admin console after the upgrade. The migrate log names each workspace it moved. |
+| **Members see less by default** — four things are now behind an Admin switch, and each starts **off**: teammates' e-mail addresses (only admins see them; everyone still sees their own), KPI numbers, current values and targets (only admins see them; members see the KPI names), launching agents (admins and leads always may) and Arena (off for everyone) | After the upgrade, turn on what your people should keep: *Members see teammates' e-mail*, *Members see KPI numbers*, *Members can launch agents* (Admin → Overview → Agents) and *Arena*. The Admin search finds each by name. |
+| **One epic per Jira epic issue** — migration 016 removes the duplicate epics that Jira-sync stories running at the same time created for one epic issue. The oldest is kept, and releases and KPI links are moved onto it. A new unique index keeps it from happening again | Nothing. The migrate log says how many it removed. |
+| **A space's own permission changes become a permission scheme** — migration 017 copies the scheme each such space used, writes the space's changes into the copy and points the space at it, as in Jira. The old changes stay on the space, unread, so a rollback still has them | Nothing; access stays as it was. The one case it cannot keep is a *Manage access* role that held a permission only as reporter, assignee or through a user field. The migrate log lists each one as `could not keep: <space>: <role> loses <permission>`; grant it again on the new scheme. |
+| **Faster first load in large workspaces** — the first load carries the start of each task's description, not all of it, and reads the epics separately; a task's whole text is read when it is opened. Each process builds at most 8 first loads at once, so a restart that reconnects every tab no longer piles them all onto one event loop | Nothing. New indexes are built in the background when 1.1.4 first starts; until they are done `GET /api/v1/health` reports `"indexes":"building"`. A load that waits longer than 30 s is answered `503` with `Retry-After`, and the tab asks again. `STATE_BUILD_CONCURRENCY` and `STATE_BUILD_MAX_WAIT_MS` change the two numbers ([17 › Large workspaces](17-ENVIRONMENT.md#10-limits-for-very-large-workspaces)); with Helm set them under `extraEnv`. |
+| **Epics live on the Timeline** — the Epics screen is gone; its links open the Timeline, which now creates, edits and opens epics | Nothing. |
+| **Access with groups** — a whole group can hold a role in a space, a space's *Permissions* page shows who can do what, people can ask for access from a link they cannot open, and an administrator can hide a sidebar tab or show it only to chosen teams and people | Nothing changes until someone uses it. |
+| **Workflows per work type** — bugs and stories can follow different statuses in one space, and a move can require something first or update fields for you | Nothing; existing workflows stay as they are. |
+| **Jira sync** — the migration screens were redesigned, and you can bring over only people from the e-mail domains you choose | Nothing. |
+| **What's New** — after the upgrade, people see the 1.1.4 notes once in the app | Admin → Overview → Workspace: *Show What's New after updates* stops the pop-up, *What's New* turns the notes off altogether. |
 
 ---
 

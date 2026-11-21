@@ -229,7 +229,7 @@ check_enum WORKER_ROLE all api
 for key in SMTP_PORT MONGODB_TIMEOUT_MS MONGODB_MAX_POOL_SIZE STORAGE_MAX_FILE_MB \
            STORAGE_MAX_VIDEO_FILE_MB JIRA_BACKUP_RETENTION_DAYS STATE_TASK_LIMIT \
            REPORTS_MAX_TASKS HTTP_PORT APP_HEAP_MB WORKER_HEAP_MB APP_REPLICAS \
-           STATE_BUILD_MAX_WAIT_MS; do
+           STATE_BUILD_MAX_WAIT_MS AUTOMATION_WORKSPACE_CONCURRENCY; do
   env_has_key "${key}" || continue
   value="$(env_value "${key}")"
   if ! is_uint "${value}" || [ "${value}" -eq 0 ]; then
@@ -244,6 +244,13 @@ for key in MONGODB_OP_TIMEOUT_MS MONGODB_MIN_POOL_SIZE AUTOMATION_PROCESSING_MIN
   [ -z "${value}" ] && continue   # reported below where it matters
   is_uint "${value}" || fail "${key}=${value} must be a whole number"
 done
+# The application refuses more than 50 and does not start.
+if env_has_key AUTOMATION_WORKSPACE_CONCURRENCY; then
+  value="$(env_value AUTOMATION_WORKSPACE_CONCURRENCY)"
+  if is_uint "${value}" && [ "${value}" -gt 50 ]; then
+    fail "AUTOMATION_WORKSPACE_CONCURRENCY=${value} must be between 1 and 50"
+  fi
+fi
 for key in JIRA_BACKUP_MAX_GB MONGO_CACHE_GB; do
   env_has_key "${key}" || continue
   value="$(env_value "${key}")"

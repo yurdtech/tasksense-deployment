@@ -510,6 +510,13 @@ rules and nothing else.
   clones an issue or attaches a file writes there): `ReadWriteMany`, or
   `ReadWriteOnce` with the worker scheduled onto the API's node.
 - **Off by default.** A small installation gains nothing from another pod.
+- **How much runs at once:** each workspace runs at most
+  `AUTOMATION_WORKSPACE_CONCURRENCY` queue items at a time (default 5;
+  TaskSense 1.1.5 and later). From 1.1.5 scheduled rules go through the same
+  queue, so a morning with hundreds of rules due at once is worked through
+  that many at a time instead of one after another. Raising it shortens the
+  wait and puts more rules on the database at once — raise it step by step and
+  watch the database ([17 › Limits](17-ENVIRONMENT.md#10-limits-for-very-large-workspaces)).
 
 ## High availability
 

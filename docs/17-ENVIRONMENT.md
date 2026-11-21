@@ -224,6 +224,7 @@ thousands of issues). Change them only on our advice.
 | `EXPORT_JSON_MAX_ROWS` | `100000` | Rows in a single-document JSON export; above it the streamed NDJSON archive is used. |
 | `REPORTS_MAX_TASKS` | `150000` | Rows one report reads; a report that hits it says so. |
 | `AUTOMATION_PROCESSING_MINUTES_PER_12H` | `0` on-premise from 1.1.3 (the chart's `config.automationProcessingMinutesPer12h` likewise); `60` before | Automation processing time per workspace per 12 h before every rule waits for the next window (Jira's own rule). `0` lifts it. On a busy installation 60 minutes can run out in the middle of a working day. |
+| `AUTOMATION_WORKSPACE_CONCURRENCY` | `5` | Automation work one workspace runs at once (TaskSense 1.1.5 and later): the events a change sets off, scheduled rules (which go through the same queue from 1.1.5), retries and delayed steps; 1–50. A bulk edit or a morning of scheduled rules waits in the queue this many at a time. Each slot is one more rule running against the database at once, so raise it step by step, best with the [automation worker](15-SCALING-AND-HA.md). With Helm set it under `extraEnv`. |
 
 ## 11. Logs and metrics
 

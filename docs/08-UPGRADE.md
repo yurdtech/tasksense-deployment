@@ -381,6 +381,27 @@ More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-work
 
 ---
 
+## Upgrading from 1.1.4 to 1.1.5
+
+The procedure above, with nothing to edit first. 1.1.5 adds no schema
+migration and is **rolling-safe from 1.1.4**: a 1.1.4 pod that takes a
+scheduled rule from the queue runs it as it runs a retry, and the fields and
+the collection 1.1.5 adds are ignored by 1.1.4. `./scripts/rollback.sh
+--app-only` / `helm rollback` to 1.1.4 keeps working; deliveries still waiting
+for a retry at that moment are then not retried (1.1.4 has no retries), as
+before.
+
+| Change | What to do |
+| --- | --- |
+| **Webhooks and Slack posts are retried** — a post the receiver did not take (no answer, a timeout, `429`, a `5xx`) or that a restart cut off is sent again after 1, 5, 15 and 60 minutes, for up to 24 hours, instead of being dropped after two attempts. A post is still sent at once; only failures wait. They are kept in a new collection, `deliveryOutbox`; one given up on stays there a week | Nothing. A receiver should expect a post it already has after a timeout or a restart, and recognise it by its `event`, `entityId` and `at`. Egress is unchanged: the same receivers, from the same pods. |
+| **A webhook can limit how many posts run at once** — Admin → Webhooks → *Deliveries at once* (1–50) | Nothing; a hook without it sends every post at once, as before. Set it for a receiver that cannot take a burst. |
+| **Notification e-mail is retried when the relay is down** — the same retries; a mail the relay refuses for good (a `5xx` other than an authentication failure) is not retried | Nothing. Test mails, invites, sign-in mail and an automation rule's e-mail action send as before. |
+| **Scheduled rules go through the automation queue** — a workspace's due rules now run side by side, `AUTOMATION_WORKSPACE_CONCURRENCY` at a time (default 5), instead of one after another in one pass | Nothing. With the automation worker on they run there, as before. The process that runs automation holds a few more rules in memory at the busiest minute; raise the variable only step by step ([17 › Limits](17-ENVIRONMENT.md#10-limits-for-very-large-workspaces)); with Helm set it under `extraEnv`. |
+| **Admin → Automation → *Keep skipped runs for*** — runs whose conditions did not match can be kept 30, 14, 7 or 1 day instead of 90 | Nothing; the default is 90 days, as before. |
+| **Indexes** — new ones back the automation queue, the run history, the delivery retries and a few lookups, and are built in the background when 1.1.5 first starts. Two indexes they replace are left in place on a large database | Nothing at the upgrade. Until the new indexes are done `GET /api/v1/health` reports `"indexes":"building"`. For each index left in place the API logs `Index <collection>.<name> is superseded and left in place on a large collection — once this release is accepted, drop it by hand: db.getCollection("<collection>").dropIndex("<name>")`. Once you keep 1.1.5, run those commands; the application's own account (`readWrite`) may drop them. |
+
+---
+
 ## Upgrading from 1.1.3 to 1.1.4
 
 The procedure above, with nothing to edit first. 1.1.4 adds three schema

@@ -45,7 +45,7 @@ blank, the default is the recommendation.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `TASKSENSE_VERSION` | yes | `1.1.4` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
+| `TASKSENSE_VERSION` | yes | `1.1.5` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
 | `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
@@ -224,6 +224,7 @@ thousands of issues). Change them only on our advice.
 | `EXPORT_JSON_MAX_ROWS` | `100000` | Rows in a single-document JSON export; above it the streamed NDJSON archive is used. |
 | `REPORTS_MAX_TASKS` | `150000` | Rows one report reads; a report that hits it says so. |
 | `AUTOMATION_PROCESSING_MINUTES_PER_12H` | `0` on-premise from 1.1.3 (the chart's `config.automationProcessingMinutesPer12h` likewise); `60` before | Automation processing time per workspace per 12 h before every rule waits for the next window (Jira's own rule). `0` lifts it. On a busy installation 60 minutes can run out in the middle of a working day. |
+| `AUTOMATION_WORKSPACE_CONCURRENCY` | `5` | Automation work one workspace runs at once (TaskSense 1.1.5 and later): the events a change sets off, scheduled rules (which go through the same queue from 1.1.5), retries and delayed steps; 1–50. A bulk edit or a morning of scheduled rules waits in the queue this many at a time. Each slot is one more rule running against the database at once, so raise it step by step, best with the [automation worker](15-SCALING-AND-HA.md). With Helm set it under `extraEnv`. |
 
 ## 11. Logs and metrics
 
@@ -296,7 +297,7 @@ What we would put in `compose/.env` for a regulated installation with its own
 MongoDB, before site-specific values:
 
 ```dotenv
-TASKSENSE_VERSION=1.1.4
+TASKSENSE_VERSION=1.1.5
 COMPOSE_PROFILES=jira-sync             # your own MongoDB; add import-worker for the Jira migration
 JIRA_SYNC_RUNNER=external
 APP_URL=https://tasksense.corp.internal

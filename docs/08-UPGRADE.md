@@ -141,7 +141,7 @@ stop–backup–migrate–start window as one process.
 
 | From → to | |
 | --- | --- |
-| Patch (`1.1.0 → 1.1.4`) | Directly. |
+| Patch (`1.1.0 → 1.1.5`) | Directly. |
 | Minor, skipping some (`1.0.2 → 1.3.0`) | Directly. Every migration in between runs, in order, in the `migrate` step. Read every release note in between. |
 | Major (`1.x → 2.0`) | Asks for confirmation. Rehearse on a restored copy first; assume a longer window. |
 | Older than what is installed | **Refused.** Use `rollback.sh` — going down is a restore, not an upgrade. |
@@ -378,6 +378,40 @@ Three changes come with 1.1.3 whether or not the worker is on:
 
 More on the worker: [15-SCALING-AND-HA](15-SCALING-AND-HA.md#the-automation-worker),
 [02-INSTALL-KUBERNETES](02-INSTALL-KUBERNETES.md).
+
+---
+
+## Upgrading from 1.1.4 to 1.1.5
+
+The procedure above, with nothing to edit first. 1.1.5 adds two schema
+migrations, run in order in the `migrate` step, each idempotent:
+`018-space-access-into-roles` and `019-jira-epics-into-their-space`. Both keep
+the fields 1.1.4 reads, so the upgrade rolls pod by pod as before, and
+`./scripts/rollback.sh --app-only` / `helm rollback` to 1.1.4 keeps working.
+A 1.1.4 pod that takes a scheduled rule from the queue runs it as it runs a
+retry, and the other fields and collections 1.1.5 adds are ignored by 1.1.4.
+Deliveries still waiting for a retry at a rollback are then not retried
+(1.1.4 has no retries), as before.
+
+**Read this before you upgrade: who sees a space now works as in Jira.**
+Check the first row below with whoever runs the workspace.
+
+| Change | What to do |
+| --- | --- |
+| **Space access works like Jira** — who sees a space now comes only from its permission scheme's *Browse Space*: its roles, groups and people. Squad rosters, tribe grants (`tribeAccess`) and the workspace's access mode no longer decide it, and whoever sees a space sees all of its boards. Migration 018 puts everyone who sees a space today into its *Members* role and gives the space a permission scheme of its own, so nobody sees less. Someone who saw only some of a space's boards, or only its work on another space's board, now sees the whole space; the migrate log lists each such person under `now see a whole space:`. **Spaces bound to a Jira project are left to the Jira sync**, which brings their real scheme, roles and the groups in those roles | Before the upgrade, note who is limited by tribe or by board today. After it, read the migrate log. For a space bound to Jira, its Jira permission scheme now decides who sees it: let the sync's structure step run (or wait for its next run) and check the space's *Permissions* page. The old fields (`tribeAccess`, the rosters) stay on their documents, unread, for a rollback to 1.1.4. |
+| **Webhooks and Slack posts are retried** — a post the receiver did not take (no answer, a timeout, `429`, a `5xx`) or that a restart cut off is sent again after 1, 5, 15 and 60 minutes, for up to 24 hours, instead of being dropped after two attempts. A post is still sent at once; only failures wait. They are kept in a new collection, `deliveryOutbox`; one given up on stays there a week | Nothing. A receiver should expect a post it already has after a timeout or a restart, and recognise it by its `event`, `entityId` and `at`. Egress is unchanged: the same receivers, from the same pods. |
+| **A webhook can limit how many posts run at once** — Admin → Webhooks → *Deliveries at once* (1–50) | Nothing; a hook without it sends every post at once, as before. Set it for a receiver that cannot take a burst. |
+| **Notification e-mail is retried when the relay is down** — the same retries; a mail the relay refuses for good (a `5xx` other than an authentication failure) is not retried | Nothing. Test mails, invites, sign-in mail and an automation rule's e-mail action send as before. |
+| **Scheduled rules go through the automation queue** — a workspace's due rules now run side by side, `AUTOMATION_WORKSPACE_CONCURRENCY` at a time (default 5), instead of one after another in one pass | Nothing. With the automation worker on they run there, as before. The process that runs automation holds a few more rules in memory at the busiest minute; raise the variable only step by step ([17 › Limits](17-ENVIRONMENT.md#10-limits-for-very-large-workspaces)); with Helm set it under `extraEnv`. |
+| **Admin → Automation → *Keep skipped runs for*** — runs whose conditions did not match can be kept 30, 14, 7 or 1 day instead of 90 | Nothing; the default is 90 days, as before. |
+| **Indexes** — new ones back the automation queue, the run history, the delivery retries and a few lookups, and are built in the background when 1.1.5 first starts. Two indexes they replace are left in place on a large database | Nothing at the upgrade. Until the new indexes are done `GET /api/v1/health` reports `"indexes":"building"`. For each index left in place the API logs `Index <collection>.<name> is superseded and left in place on a large collection — once this release is accepted, drop it by hand: db.getCollection("<collection>").dropIndex("<name>")`. Once you keep 1.1.5, run those commands; the application's own account (`readWrite`) may drop them. |
+| **A Jira epic belongs to its issue's space** — migration 019 gives every Jira epic without a space the space of its epic issue, so other spaces' boards and timelines no longer offer it | Nothing. The migrate log says how many it moved. |
+| **Text limits** — Admin → Text limits sets the longest task description and comment (1 to 32,767 characters). The default for both is now 32,767, Jira's cap; it was 2,000 for a comment and 32,000 for a description. A lowered limit applies only to text that changes | Nothing. Set a lower limit there if your workspace had relied on the old ones. |
+| **Task e-mail** — one subject per task, the whole description with what changed marked, and a close or reopen now also reaches the task's reporter | Nothing. Reporters receive these mails under their usual notification settings. |
+| **The Epics screen is back** — 1.1.4 moved epics onto the Timeline; they have their own screen again, and an epic's name on the Timeline opens it there | Nothing. |
+| **Knowledge Base diagrams** — canvas, BPMN and database diagrams are stored in two new collections, `diagrams` and `diagramRevisions`; an Admin switch per diagram kind | Nothing. Backups dump them with the rest of the database. The editor's formula, chart and diagram libraries are bundled in the image; nothing is fetched from outside. |
+| **API tokens** — a token's scope now also limits what the services behind a route do (a read-only token can still search); a token made with another token is tied to it; an unknown token id answers `404`. The Jira-compatible API (`/rest/api/2`, `/rest/api/3`, `latest`) answers more of Jira's calls and refuses what a field cannot take; *Admin → Security → Jira-compatible API* can refuse unknown fields too (off by default) | Check a script or integration whose token has a narrower scope than the calls it makes: a call outside the scope is now refused. The app, the MCP server with a full-scope token and the Jira sync are not affected. |
+| **What's New** — after the upgrade, people see the 1.1.5 notes once in the app | Admin → Overview → Workspace: *Show What's New after updates* stops the pop-up, *What's New* turns the notes off altogether. |
 
 ---
 

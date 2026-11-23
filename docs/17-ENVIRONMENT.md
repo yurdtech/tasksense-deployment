@@ -45,7 +45,7 @@ blank, the default is the recommendation.
 
 | Variable | Required | Default | What it does | Recommended |
 | --- | --- | --- | --- | --- |
-| `TASKSENSE_VERSION` | yes | `1.1.4` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
+| `TASKSENSE_VERSION` | yes | `1.1.5` in `.env.example` | The release to run. Pin it; never `latest` — a restart could move you to another version. The release stamps the real version into `.env.example`. | The version approved by change control |
 | `TASKSENSE_IMAGE` | — | `ghcr.io/yurdtech/tasksense` | Image repository. Set it when you mirror into your own registry. | `harbor.corp.internal/tasksense/tasksense` if mirrored |
 | `MONGO_IMAGE` | — | `mongo` | Repository of the bundled MongoDB, and of the throwaway container `backup.sh` runs `mongodump` in for an external database. Mirror it even if you use your own MongoDB. | Your mirror, if you set `TASKSENSE_IMAGE` |
 | `MONGO_VERSION` | — | `7` | Bundled MongoDB tag. A major upgrade is a deliberate step — [08-UPGRADE](08-UPGRADE.md). | Pin a patch (`7.0.14`) for reproducible images |
@@ -297,7 +297,7 @@ What we would put in `compose/.env` for a regulated installation with its own
 MongoDB, before site-specific values:
 
 ```dotenv
-TASKSENSE_VERSION=1.1.4
+TASKSENSE_VERSION=1.1.5
 COMPOSE_PROFILES=jira-sync             # your own MongoDB; add import-worker for the Jira migration
 JIRA_SYNC_RUNNER=external
 APP_URL=https://tasksense.corp.internal
